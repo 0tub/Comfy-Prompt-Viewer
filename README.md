@@ -7,7 +7,7 @@ A local-first desktop app (.NET 9 + Avalonia 12) for browsing ComfyUI output ima
 ## Features
 
 - **Virtualized Gallery**: Smooth, low-latency scrolling through folders with thousands of images.
-- **Metadata Viewer**: Parses positive prompts, negative prompts, models, samplers, seed, steps, CFG, and schedulers from PNG, JPEG, and WebP metadata.
+- **Metadata Viewer**: Parses positive prompts, negative prompts, models, samplers, seed, steps, CFG, and schedulers from PNG metadata (displays image dimensions for JPEG and WebP).
 - **Directory Watcher**: Monitors the active folder and automatically refreshes when new images are generated.
 - **Zoomable Preview**: Double-click any image to open a full-window overlay with mouse-wheel zoom and drag-to-pan.
 - **Performance Optimized**: Implements a disk cache for resized thumbnails and an in-memory LRU cache to keep RAM usage low.
