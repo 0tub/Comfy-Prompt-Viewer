@@ -2,6 +2,8 @@
 
 A local-first desktop app (.NET 9 + Avalonia 12) for browsing ComfyUI output images and viewing generation metadata (prompts, sampler settings, and models) without loading them back into the ComfyUI web interface.
 
+![ComfyPromptViewer Grid Preview](imgs/grid.png)
+
 ## Features
 
 - **Virtualized Gallery**: Smooth, low-latency scrolling through folders with thousands of images.
