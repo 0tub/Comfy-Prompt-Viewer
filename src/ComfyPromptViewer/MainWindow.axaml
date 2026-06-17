@@ -1,0 +1,1269 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ir="clr-namespace:Avalonia.Controls;assembly=Avalonia.Controls.ItemsRepeater"
+        xmlns:layout="clr-namespace:Avalonia.Layout;assembly=Avalonia.Controls.ItemsRepeater"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:ComfyPromptViewer"
+        mc:Ignorable="d" d:DesignWidth="1180" d:DesignHeight="780"
+        x:Class="ComfyPromptViewer.MainWindow"
+        x:DataType="local:GalleryViewModel"
+        Icon="/Assets/app.ico"
+        Title="Comfy Prompt Viewer"
+        Width="1180"
+        Height="780"
+        MinWidth="860"
+        MinHeight="560"
+        FontFamily="{DynamicResource FontUI}"
+        Background="{DynamicResource BackgroundBase}">
+    <Window.Styles>
+        <Style Selector="Button">
+            <Setter Property="CornerRadius" Value="2" />
+            <Setter Property="Padding" Value="14,9" />
+            <Setter Property="FontFamily" Value="{DynamicResource FontUI}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="Normal" />
+        </Style>
+        <Style Selector="Button.secondary-action">
+            <Setter Property="Background" Value="{DynamicResource SurfaceElevated}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtle}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
+            <Setter Property="CornerRadius" Value="3" />
+            <Setter Property="Padding" Value="12,8" />
+        </Style>
+        <Style Selector="Button.secondary-action:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource SurfaceInput}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtle}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
+        </Style>
+        <Style Selector="Button.zoom-btn">
+            <Setter Property="Width" Value="30" />
+            <Setter Property="Height" Value="30" />
+            <Setter Property="CornerRadius" Value="2" />
+            <Setter Property="Padding" Value="0" />
+             <Setter Property="Background" Value="{DynamicResource SurfaceElevated}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtle}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Foreground" Value="{DynamicResource TextMuted}" />
+            <Setter Property="FontSize" Value="16" />
+            <Setter Property="FontWeight" Value="Normal" />
+        </Style>
+        <Style Selector="Button.zoom-btn /template/ ContentPresenter">
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Background" Duration="0:0:0.12" Easing="CubicEaseOut" />
+                    <BrushTransition Property="BorderBrush" Duration="0:0:0.12" Easing="CubicEaseOut" />
+                    <BrushTransition Property="Foreground" Duration="0:0:0.12" Easing="CubicEaseOut" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Button.zoom-btn:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource SurfaceInput}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtle}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+        </Style>
+        <Style Selector="Button.zoom-btn:pressed /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource SurfaceInput}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
+        </Style>
+
+        <Style Selector="Border.card">
+            <Setter Property="Background" Value="{DynamicResource SurfaceCard}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtle}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="3" />
+            <Setter Property="RenderTransform" Value="none" />
+            <Setter Property="BoxShadow" Value="0 0 0 0 #00000000" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="BorderBrush" Duration="0:0:0.18" Easing="CubicEaseOut" />
+                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.18" Easing="CubicEaseOut" />
+                    <BoxShadowsTransition Property="BoxShadow" Duration="0:0:0.18" Easing="CubicEaseOut" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Border.card:pointerover">
+            <Setter Property="BorderBrush" Value="{DynamicResource CardHoverBorder}" />
+            <Setter Property="RenderTransform" Value="scale(1.03)" />
+            <Setter Property="BoxShadow" Value="0 4 10 0 #40000000" />
+        </Style>
+        <Style Selector="Border.card.selected">
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderAccent}" />
+            <Setter Property="BorderThickness" Value="2" />
+        </Style>
+        <Style Selector="Border.card.selected:pointerover">
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderAccent}" />
+        </Style>
+
+        <Style Selector="TextBlock.muted">
+            <Setter Property="Foreground" Value="{DynamicResource TextMuted}" />
+            <Setter Property="FontFamily" Value="{DynamicResource FontUI}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="Normal" />
+        </Style>
+
+        <Style Selector="TextBlock.emoji-icon">
+            <Setter Property="FontFamily" Value="Segoe UI Emoji, Apple Color Emoji, Noto Color Emoji, sans-serif" />
+        </Style>
+        
+        <Style Selector="Button.close-btn">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Width" Value="32" />
+            <Setter Property="Height" Value="32" />
+            <Setter Property="CornerRadius" Value="2" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Foreground" Value="{DynamicResource TextMuted}" />
+            <Setter Property="FontSize" Value="16" />
+        </Style>
+        <Style Selector="Button.close-btn /template/ ContentPresenter">
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Background" Duration="0:0:0.12" Easing="CubicEaseOut" />
+                    <BrushTransition Property="Foreground" Duration="0:0:0.12" Easing="CubicEaseOut" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Button.close-btn:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource SurfaceInput}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+        </Style>
+
+        <Style Selector="Button.clear-search-btn">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Width" Value="24" />
+            <Setter Property="Height" Value="24" />
+            <Setter Property="CornerRadius" Value="2" />
+            <Setter Property="Margin" Value="0,0,4,0" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Foreground" Value="{DynamicResource TextMuted}" />
+            <Setter Property="FontSize" Value="14" />
+        </Style>
+        <Style Selector="Button.clear-search-btn /template/ ContentPresenter">
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Background" Duration="0:0:0.12" Easing="CubicEaseOut" />
+                    <BrushTransition Property="Foreground" Duration="0:0:0.12" Easing="CubicEaseOut" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Button.clear-search-btn:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource SurfaceElevated}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
+        </Style>
+
+        <Style Selector="Button.search-help-btn">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Width" Value="24" />
+            <Setter Property="Height" Value="24" />
+            <Setter Property="CornerRadius" Value="2" />
+            <Setter Property="Margin" Value="0" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Foreground" Value="{DynamicResource TextMuted}" />
+            <Setter Property="FontSize" Value="12" />
+        </Style>
+        <Style Selector="Button.search-help-btn /template/ ContentPresenter">
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Background" Duration="0:0:0.12" Easing="CubicEaseOut" />
+                    <BrushTransition Property="Foreground" Duration="0:0:0.12" Easing="CubicEaseOut" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Button.search-help-btn:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource SurfaceElevated}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
+        </Style>
+
+        <Style Selector="Border.skeleton">
+            <Setter Property="Background" Value="{DynamicResource SurfaceElevated}" />
+            <Setter Property="Opacity" Value="0.45" />
+        </Style>
+        
+        <Style Selector="TextBox.search-box">
+            <Setter Property="CornerRadius" Value="3" />
+            <Setter Property="Padding" Value="10,6" />
+            <Setter Property="Background" Value="{DynamicResource SurfaceInput}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ToolbarBorderSubtle}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="FontFamily" Value="{DynamicResource FontUI}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="Normal" />
+            <Setter Property="WatermarkForeground" Value="{DynamicResource TextMuted}" />
+            <Setter Property="MinWidth" Value="240" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="BorderBrush" Duration="0:0:0.15" Easing="CubicEaseOut" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="TextBox.search-box:focus">
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderAccent}" />
+        </Style>
+        
+        <Style Selector="Slider">
+            <Setter Property="Foreground" Value="{DynamicResource BorderAccent}" />
+            <Setter Property="Background" Value="{DynamicResource BorderSubtle}" />
+        </Style>
+        <Style Selector="Slider /template/ Thumb">
+            <Setter Property="Width" Value="14" />
+            <Setter Property="Height" Value="14" />
+            <Setter Property="Background" Value="{DynamicResource BorderAccent}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderAccent}" />
+            <Setter Property="CornerRadius" Value="2" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Background" Duration="0:0:0.1" Easing="CubicEaseOut" />
+                    <BrushTransition Property="BorderBrush" Duration="0:0:0.1" Easing="CubicEaseOut" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Slider /template/ Thumb:pointerover">
+            <Setter Property="Background" Value="{DynamicResource TextAccent}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TextAccent}" />
+        </Style>
+        <Style Selector="Slider:pointerover /template/ Thumb">
+            <Setter Property="Background" Value="{DynamicResource TextAccent}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TextAccent}" />
+        </Style>
+        <Style Selector="Slider /template/ Thumb:pressed">
+            <Setter Property="Background" Value="{DynamicResource BorderAccent}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderAccent}" />
+        </Style>
+        <Style Selector="Slider:pressed /template/ Thumb">
+            <Setter Property="Background" Value="{DynamicResource BorderAccent}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderAccent}" />
+        </Style>
+        
+        <Style Selector="Slider /template/ RepeatButton#PART_DecreaseButton">
+            <Setter Property="Background" Value="{DynamicResource BorderAccent}" />
+        </Style>
+        <Style Selector="Slider /template/ RepeatButton#PART_DecreaseButton:pointerover">
+            <Setter Property="Background" Value="{DynamicResource BorderAccent}" />
+        </Style>
+        <Style Selector="Slider /template/ RepeatButton#PART_DecreaseButton:pressed">
+            <Setter Property="Background" Value="{DynamicResource BorderAccent}" />
+        </Style>
+        <Style Selector="Slider /template/ RepeatButton#PART_IncreaseButton">
+            <Setter Property="Background" Value="{DynamicResource BorderSubtle}" />
+        </Style>
+        <Style Selector="Slider /template/ RepeatButton#PART_IncreaseButton:pointerover">
+            <Setter Property="Background" Value="{DynamicResource BorderSubtle}" />
+        </Style>
+        <Style Selector="Slider /template/ RepeatButton#PART_IncreaseButton:pressed">
+            <Setter Property="Background" Value="{DynamicResource BorderSubtle}" />
+        </Style>
+        
+        <Style Selector="Border.toolbar-group">
+            <Setter Property="Background" Value="{DynamicResource SurfaceElevated}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtle}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="2" />
+            <Setter Property="Padding" Value="6,4" />
+        </Style>
+        
+        <Style Selector="Border.count-pill">
+            <Setter Property="Background" Value="{DynamicResource SurfaceElevated}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtle}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="12,4" />
+            <Setter Property="CornerRadius" Value="2" />
+        </Style>
+        <Style Selector="Border.count-pill TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
+            <Setter Property="FontFamily" Value="{DynamicResource FontMono}" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="FontWeight" Value="Medium" />
+        </Style>
+        
+        
+        <Style Selector="StackPanel#SidebarMetadataPanel">
+            <Setter Property="Transitions">
+                <Transitions>
+                    <DoubleTransition Property="Opacity" Duration="0:0:0.12" Easing="CubicEaseOut" />
+                </Transitions>
+            </Setter>
+        </Style>
+
+        <Style Selector="Border#MenuErrorBanner">
+            <Setter Property="Transitions">
+                <Transitions>
+                    <DoubleTransition Property="Opacity" Duration="0:0:0.12" Easing="CubicEaseOut" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="TextBlock#CountText">
+            <Setter Property="Transitions">
+                <Transitions>
+                    <DoubleTransition Property="Opacity" Duration="0:0:0.10" Easing="CubicEaseOut" />
+                </Transitions>
+            </Setter>
+        </Style>
+        
+        <Style Selector="ToggleButton.flat-toggle">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        </Style>
+        <Style Selector="ToggleButton.flat-toggle /template/ ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+        </Style>
+        <Style Selector="ToggleButton.flat-toggle:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+        </Style>
+        <Style Selector="ToggleButton.flat-toggle:checked /template/ ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+        </Style>
+        <Style Selector="ToggleButton.flat-toggle:checked:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+        </Style>
+        <Style Selector="ToggleButton.flat-toggle:pressed /template/ ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+        </Style>
+        <Style Selector="ToggleButton.flat-toggle TextBlock">
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Foreground" Duration="0:0:0.12" Easing="CubicEaseOut" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="ToggleButton.flat-toggle:pointerover TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+        </Style>
+
+        <Style Selector="ToggleButton.subfolder-toggle">
+            <Setter Property="Background" Value="{DynamicResource SurfaceElevated}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtle}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="3" />
+            <Setter Property="Padding" Value="10,7" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
+            <Setter Property="FontFamily" Value="{DynamicResource FontUI}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="Normal" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="ToggleButton.subfolder-toggle /template/ ContentPresenter">
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Background" Duration="0:0:0.12" Easing="CubicEaseOut" />
+                    <BrushTransition Property="BorderBrush" Duration="0:0:0.12" Easing="CubicEaseOut" />
+                    <BrushTransition Property="Foreground" Duration="0:0:0.12" Easing="CubicEaseOut" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="ToggleButton.subfolder-toggle:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource SurfaceInput}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtle}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+        </Style>
+        <Style Selector="ToggleButton.subfolder-toggle:checked /template/ ContentPresenter">
+            <Setter Property="Background" Value="#1F2E23" />
+            <Setter Property="BorderBrush" Value="#3A5E43" />
+            <Setter Property="Foreground" Value="#A3D9B1" />
+        </Style>
+        <Style Selector="ToggleButton.subfolder-toggle:checked:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="#293C2E" />
+            <Setter Property="BorderBrush" Value="#4B7A57" />
+            <Setter Property="Foreground" Value="#BAE8C6" />
+        </Style>
+        <Style Selector="ToggleButton.subfolder-toggle:checked:pressed /template/ ContentPresenter">
+            <Setter Property="Background" Value="#17221A" />
+            <Setter Property="BorderBrush" Value="#2F4C36" />
+            <Setter Property="Foreground" Value="#86B593" />
+        </Style>
+        <Style Selector="ToggleButton.subfolder-toggle:pressed /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource SurfaceInput}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderAccent}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
+        </Style>
+
+        <Style Selector="Button#BackButton">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Foreground" Value="{DynamicResource TextMuted}" />
+        </Style>
+        <Style Selector="Button#BackButton /template/ ContentPresenter">
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Foreground" Duration="0:0:0.12" Easing="CubicEaseOut" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Button#BackButton:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
+        </Style>
+        <Style Selector="Button#BackButton:pressed /template/ ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
+        </Style>
+
+        <Style Selector="Button.menu-action-btn">
+            <Setter Property="Background" Value="{DynamicResource SurfaceCard}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtle}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+            <Setter Property="Padding" Value="20,16" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+            <Setter Property="CornerRadius" Value="3" />
+        </Style>
+        <Style Selector="Button.menu-action-btn /template/ ContentPresenter">
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Background" Duration="0:0:0.15" Easing="CubicEaseOut" />
+                    <BrushTransition Property="BorderBrush" Duration="0:0:0.15" Easing="CubicEaseOut" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Button.menu-action-btn:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource SurfaceInput}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource CardHoverBorder}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+        </Style>
+        <Style Selector="Button.menu-action-btn:pressed /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource SurfaceInput}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
+        </Style>
+
+        <Style Selector="Border.recent-item">
+            <Setter Property="Background" Value="{DynamicResource SurfaceCard}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtle}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="3" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Background" Duration="0:0:0.15" Easing="CubicEaseOut" />
+                    <BrushTransition Property="BorderBrush" Duration="0:0:0.15" Easing="CubicEaseOut" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Border.recent-item:pointerover">
+            <Setter Property="Background" Value="{DynamicResource SurfaceInput}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource CardHoverBorder}" />
+        </Style>
+
+        <Style Selector="Button.menu-maintenance-btn">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtle}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
+            <Setter Property="Padding" Value="12,8" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+            <Setter Property="CornerRadius" Value="3" />
+        </Style>
+        <Style Selector="Button.menu-maintenance-btn:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource SurfaceInput}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource CardHoverBorder}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+        </Style>
+        <Style Selector="Button.menu-maintenance-btn:pressed /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource SurfaceInput}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
+        </Style>
+
+        <Style Selector="ToggleButton.advanced-toggle">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="HorizontalAlignment" Value="Left" />
+        </Style>
+        <Style Selector="ToggleButton.advanced-toggle /template/ ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+        </Style>
+        <Style Selector="ToggleButton.advanced-toggle:pointerover TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+        </Style>
+
+        <Style Selector="FlyoutPresenter.shortcuts-flyout">
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+        </Style>
+    </Window.Styles>
+
+    <Grid RowDefinitions="Auto,*">
+        <Border Name="HeaderBorder" Background="{DynamicResource SurfaceElevated}" BorderBrush="{DynamicResource ToolbarBorderSubtle}" BorderThickness="0,0,0,1" IsVisible="False">
+            <Grid RowDefinitions="Auto,Auto" Margin="16,8" RowSpacing="8">
+                <!-- Row 0: App Title & Info -->
+                <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+                    <Button Name="BackButton"
+                            Content="← Back"
+                            Click="BackButton_Click"
+                            AutomationProperties.Name="Back to Menu"
+                            ToolTip.Tip="Back to Menu"
+                            Height="30"
+                            CornerRadius="4"
+                            Padding="12,5"
+                            Background="{DynamicResource SurfaceCard}"
+                            BorderBrush="{DynamicResource BorderSubtle}"
+                            BorderThickness="1"
+                            Foreground="{DynamicResource TextPrimary}"
+                            FontSize="12"
+                            FontWeight="Normal"
+                            VerticalAlignment="Center" />
+
+                    <StackPanel Grid.Column="1" Spacing="0" VerticalAlignment="Center" Margin="6,0,0,0">
+                        <TextBlock Text="Comfy Prompt Viewer" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontHeading}" FontSize="20" FontWeight="SemiBold" FontStyle="Normal" />
+                        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                            <TextBlock Name="FolderText" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontMono}" FontSize="11" FontWeight="Normal" Text="Open a folder of ComfyUI images to start scrolling." TextTrimming="PrefixCharacterEllipsis" VerticalAlignment="Center" />
+                            <Button Name="CopyPathButton"
+                                    Content="copy"
+                                    Click="CopyPathButton_Click"
+                                    ToolTip.Tip="Copy full path"
+                                    AutomationProperties.Name="Copy full path"
+                                    Height="16"
+                                    Padding="5,0"
+                                    FontSize="9"
+                                    Background="{DynamicResource SurfaceElevated}"
+                                    BorderBrush="{DynamicResource BorderSubtle}"
+                                    BorderThickness="1"
+                                    CornerRadius="3"
+                                    Foreground="{DynamicResource TextMuted}"
+                                    VerticalAlignment="Center"
+                                    IsVisible="False"
+                                    Margin="4,0,0,0" />
+                        </StackPanel>
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                        <Border Classes="count-pill" Height="30" Padding="10,0" VerticalAlignment="Center">
+                            <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                <TextBlock Text="🖼" FontSize="11" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center" />
+                                <TextBlock Name="CountText" Text="0 images" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Border>
+                        <Button Name="ShortcutsButton"
+                                Classes="zoom-btn"
+                                Width="30"
+                                Height="30"
+                                VerticalAlignment="Center"
+                                ToolTip.Tip="Keyboard Shortcuts"
+                                AutomationProperties.Name="Keyboard Shortcuts">
+                            <TextBlock Text="⌨" Classes="emoji-icon" FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            <Button.Flyout>
+                                <Flyout Placement="BottomEdgeAlignedRight" FlyoutPresenterClasses="shortcuts-flyout">
+                                    <Border Padding="16" Background="{DynamicResource SurfaceCard}" BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="1" CornerRadius="3">
+                                        <StackPanel Spacing="10" MinWidth="260">
+                                            <TextBlock Text="Keyboard Shortcuts" FontWeight="SemiBold" FontSize="14" Foreground="{DynamicResource TextPrimary}" />
+                                            <Separator Background="{DynamicResource BorderSubtle}" Height="1" Margin="0,2" />
+                                            
+                                            <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto" RowSpacing="6">
+                                                <!-- Row 0: Navigation -->
+                                                <TextBlock Grid.Row="0" Grid.Column="0" Text="Navigate gallery" Foreground="{DynamicResource TextSecondary}" FontSize="12" VerticalAlignment="Center" />
+                                                <TextBlock Grid.Row="0" Grid.Column="1" Text="← ↑ ↓ → / Home / End" Foreground="{DynamicResource TextPrimary}" FontWeight="Medium" FontFamily="{DynamicResource FontMono}" FontSize="11" VerticalAlignment="Center" />
+                                                
+                                                <!-- Row 1: Space / Enter -->
+                                                <TextBlock Grid.Row="1" Grid.Column="0" Text="Open preview" Foreground="{DynamicResource TextSecondary}" FontSize="12" VerticalAlignment="Center" />
+                                                <TextBlock Grid.Row="1" Grid.Column="1" Text="Space / Enter / Double-click" Foreground="{DynamicResource TextPrimary}" FontWeight="Medium" FontFamily="{DynamicResource FontMono}" FontSize="11" VerticalAlignment="Center" />
+                                                
+                                                <!-- Row 2: Escape / Space / Enter -->
+                                                <TextBlock Grid.Row="2" Grid.Column="0" Text="Close preview" Foreground="{DynamicResource TextSecondary}" FontSize="12" VerticalAlignment="Center" />
+                                                <TextBlock Grid.Row="2" Grid.Column="1" Text="Esc / Space / Enter" Foreground="{DynamicResource TextPrimary}" FontWeight="Medium" FontFamily="{DynamicResource FontMono}" FontSize="11" VerticalAlignment="Center" />
+                                                
+                                                <!-- Row 3: F5 / Ctrl+R -->
+                                                <TextBlock Grid.Row="3" Grid.Column="0" Text="Reload folder" Foreground="{DynamicResource TextSecondary}" FontSize="12" VerticalAlignment="Center" />
+                                                <TextBlock Grid.Row="3" Grid.Column="1" Text="F5 / Ctrl+R" Foreground="{DynamicResource TextPrimary}" FontWeight="Medium" FontFamily="{DynamicResource FontMono}" FontSize="11" VerticalAlignment="Center" />
+
+                                                <!-- Row 4: Mouse Scroll (zooming) -->
+                                                <TextBlock Grid.Row="4" Grid.Column="0" Text="Zoom / Pan preview" Foreground="{DynamicResource TextSecondary}" FontSize="12" VerticalAlignment="Center" />
+                                                <TextBlock Grid.Row="4" Grid.Column="1" Text="Wheel / Drag" Foreground="{DynamicResource TextPrimary}" FontWeight="Medium" FontFamily="{DynamicResource FontMono}" FontSize="11" VerticalAlignment="Center" />
+                                            </Grid>
+                                        </StackPanel>
+                                    </Border>
+                                </Flyout>
+                            </Button.Flyout>
+                        </Button>
+                    </StackPanel>
+                </Grid>
+
+                <!-- Row 1: Sort, search, and tile density -->
+                <Grid Grid.Row="1" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="16">
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                        <TextBlock Text="Sort by"
+                                   Classes="muted"
+                                   FontSize="12"
+                                   FontWeight="Normal"
+                                   VerticalAlignment="Center" />
+                        <ComboBox Name="SortComboBox"
+                                  Width="130"
+                                  Height="30"
+                                  FontSize="12"
+                                  VerticalAlignment="Center"
+                                  SelectionChanged="SortComboBox_SelectionChanged">
+                            <ComboBoxItem Content="Newest First" />
+                            <ComboBoxItem Content="Oldest First" />
+                            <ComboBoxItem Content="Name" />
+                        </ComboBox>
+                        
+                        <Rectangle Width="1" Fill="{DynamicResource BorderSubtle}" Margin="4,4" Height="16" VerticalAlignment="Center" />
+                        
+                        <ToggleButton Name="IncludeSubfoldersToggle"
+                                      Classes="subfolder-toggle"
+                                      Height="30"
+                                      Padding="10,0"
+                                      VerticalContentAlignment="Center"
+                                      HorizontalContentAlignment="Center"
+                                      AutomationProperties.Name="Include subfolders"
+                                      ToolTip.Tip="Include images from nested folders"
+                                      Click="IncludeSubfoldersToggle_Click">
+                            <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                <TextBlock Text="📁" Classes="emoji-icon" FontSize="11" VerticalAlignment="Center" />
+                                <TextBlock Text="Subfolders" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </ToggleButton>
+                    </StackPanel>
+
+                    <Grid Grid.Column="1" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="16" VerticalAlignment="Center">
+                        <Rectangle Grid.Column="0" Width="1" Fill="{DynamicResource BorderSubtle}" Height="16" VerticalAlignment="Center" />
+                        <TextBox Grid.Column="1"
+                                 Name="SearchTextBox"
+                                 PlaceholderText="Search prompts (use - to exclude, &quot;&quot; for exact)..."
+                                 VerticalAlignment="Center"
+                                 HorizontalAlignment="Stretch"
+                                 Classes="search-box"
+                                 Height="30"
+                                 AutomationProperties.Name="Search prompts"
+                                 ToolTip.Tip="Search prompts. Use -term to exclude, &quot;term&quot; for exact. Hover '?' for info."
+                                 TextChanged="SearchTextBox_TextChanged">
+                            <TextBox.InnerRightContent>
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,4,0">
+                                    <Button Name="ClearSearchButton"
+                                            Classes="clear-search-btn"
+                                            Content="×"
+                                            IsVisible="False"
+                                            Click="ClearSearchButton_Click"
+                                            Focusable="False"
+                                            ToolTip.Tip="Clear search" />
+                                    <Button Name="SearchHelpButton"
+                                            Classes="search-help-btn"
+                                            Content="?"
+                                            Focusable="False">
+                                        <ToolTip.Tip>
+                                            <StackPanel Spacing="6" Margin="4">
+                                                <TextBlock Text="Search Options" FontWeight="SemiBold" FontSize="12" Foreground="{DynamicResource TextPrimary}" />
+                                                <Separator Background="{DynamicResource BorderSubtle}" Height="1" Margin="0,2" />
+                                                <TextBlock Text="• Separate terms with spaces, commas, or semicolons" Foreground="{DynamicResource TextSecondary}" FontSize="11" />
+                                                <TextBlock Text="• Use -term to exclude (e.g., -watermark)" Foreground="{DynamicResource TextSecondary}" FontSize="11" />
+                                                <TextBlock Text="• Use &quot;term&quot; for exact word/phrase (e.g., &quot;ass&quot; won't match &quot;grass&quot;)" Foreground="{DynamicResource TextSecondary}" FontSize="11" />
+                                            </StackPanel>
+                                        </ToolTip.Tip>
+                                    </Button>
+                                </StackPanel>
+                            </TextBox.InnerRightContent>
+                        </TextBox>
+                        <Rectangle Grid.Column="2" Width="1" Fill="{DynamicResource BorderSubtle}" Height="16" VerticalAlignment="Center" />
+                    </Grid>
+
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                        <TextBlock Text="⛶"
+                                   Foreground="{DynamicResource TextMuted}"
+                                   FontSize="12"
+                                   VerticalAlignment="Center" />
+                        <Slider Name="TileSizeSlider"
+                                Width="120"
+                                Minimum="80"
+                                Maximum="320"
+                                Value="120"
+                                TickFrequency="10"
+                                IsSnapToTickEnabled="True"
+                                AutomationProperties.Name="Tile size"
+                                VerticalAlignment="Center"
+                                ValueChanged="TileSizeSlider_ValueChanged" />
+                        <TextBlock Name="TileSizeText"
+                                   Text="120"
+                                   Foreground="{DynamicResource TextSecondary}"
+                                   FontFamily="{DynamicResource FontMono}"
+                                   FontSize="11"
+                                   FontWeight="Normal"
+                                   VerticalAlignment="Center"
+                                   Width="24"
+                                   HorizontalAlignment="Right" />
+                    </StackPanel>
+                </Grid>
+            </Grid>
+        </Border>
+
+        <Grid Name="MainGrid" Grid.Row="1" ColumnDefinitions="*,380">
+            <Panel Grid.Column="0">
+                <ScrollViewer Name="GalleryScrollViewer"
+                              VerticalScrollBarVisibility="Visible"
+                              ScrollChanged="GalleryScrollViewer_ScrollChanged">
+                    <ir:ItemsRepeater Name="GalleryItems" ItemsSource="{Binding Items}" Margin="10">
+                        <ir:ItemsRepeater.Layout>
+                            <layout:UniformGridLayout MinItemWidth="212"
+                                                       MinItemHeight="212"
+                                                       MinColumnSpacing="0"
+                                                       MinRowSpacing="0" />
+                        </ir:ItemsRepeater.Layout>
+                        <ir:ItemsRepeater.ItemTemplate>
+                            <DataTemplate x:DataType="local:ImageItem">
+                                <Border Classes="card"
+                                        Classes.selected="{Binding IsSelected}"
+                                        Width="{Binding TileSize}"
+                                        Height="{Binding CardHeight}"
+                                        Padding="6"
+                                        Margin="8"
+                                        AttachedToVisualTree="GalleryItem_AttachedToVisualTree"
+                                         DetachedFromVisualTree="GalleryItem_DetachedFromVisualTree"
+                                         DataContextChanged="GalleryItem_DataContextChanged"
+                                         PointerPressed="GalleryItem_PointerPressed"
+                                         KeyDown="GalleryItem_KeyDown"
+                                         AutomationProperties.Name="{Binding FileName}"
+                                         Focusable="True">
+                                    <Border.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem Header="Open in File Explorer" Click="MenuOpenInExplorer_Click" />
+                                            <MenuItem Header="Copy Prompt" Click="MenuCardCopyPrompt_Click" IsEnabled="{Binding HasPrompt}" />
+                                        </ContextMenu>
+                                    </Border.ContextMenu>
+                                    <Panel>
+                                        <Border Classes="skeleton"
+                                                CornerRadius="2"
+                                                IsVisible="{Binding IsLoading}" />
+
+                                         <Border Background="Transparent"
+                                                 CornerRadius="2"
+                                                 ClipToBounds="True"
+                                                 Opacity="{Binding ThumbnailOpacity}">
+                                             <Border.Transitions>
+                                                 <Transitions>
+                                                     <DoubleTransition Property="Opacity" Duration="0:0:0.10" Easing="CubicEaseOut" />
+                                                 </Transitions>
+                                             </Border.Transitions>
+                                             <Image Source="{Binding Preview}"
+                                                    Stretch="Uniform"
+                                                    HorizontalAlignment="Center"
+                                                   VerticalAlignment="Center" />
+                                        </Border>
+                                    </Panel>
+                                </Border>
+                            </DataTemplate>
+                        </ir:ItemsRepeater.ItemTemplate>
+                    </ir:ItemsRepeater>
+                </ScrollViewer>
+
+                <!-- Gallery Empty State (Search Results) -->
+                <StackPanel Name="GalleryEmptyState"
+                            VerticalAlignment="Center"
+                            HorizontalAlignment="Center"
+                            Spacing="12"
+                            IsVisible="False"
+                            Opacity="0">
+                    <StackPanel.Transitions>
+                        <Transitions>
+                            <DoubleTransition Property="Opacity" Duration="0:0:0.12" Easing="CubicEaseOut" />
+                        </Transitions>
+                    </StackPanel.Transitions>
+                    <TextBlock Text="No matching images"
+                               Foreground="{DynamicResource TextPrimary}"
+                               FontFamily="{DynamicResource FontHeading}"
+                               FontSize="18"
+                               HorizontalAlignment="Center"
+                               FontWeight="Medium" />
+                    <TextBlock Text="Try adjusting your search terms or exclusions."
+                               Foreground="{DynamicResource TextMuted}"
+                               FontSize="13"
+                               HorizontalAlignment="Center" />
+                </StackPanel>
+            </Panel>
+
+            <Border Grid.Column="1" Background="{DynamicResource SurfaceSidebar}" BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="1,0,0,0">
+                <Grid RowDefinitions="Auto,*" Margin="16">
+                    <StackPanel>
+                        <TextBlock Name="SidebarHeaderTitle" Text="Metadata" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontHeading}" FontSize="16" FontWeight="Normal" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Name="SidebarHeaderDesc" Text="Select an image to inspect its size and prompt." Foreground="{DynamicResource TextSecondary}" FontSize="12" TextWrapping="Wrap" />
+                    </StackPanel>
+
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,12,0,0">
+                        <Panel>
+                            <StackPanel Name="SidebarEmpty" VerticalAlignment="Top" Spacing="0" Margin="0,16,0,0">
+                                <TextBlock Name="SidebarEmptyTitle"
+                                           Text="No image selected"
+                                           Foreground="{DynamicResource TextMuted}"
+                                           FontFamily="{DynamicResource FontHeading}"
+                                           FontSize="16"
+                                           FontWeight="Normal" />
+                                <TextBlock Name="SidebarEmptyDesc"
+                                           Text="Pick a tile from the grid."
+                                           Foreground="{DynamicResource EmptyStateSubtext}"
+                                           FontFamily="{DynamicResource FontUI}"
+                                           FontSize="11"
+                                           Margin="0,4,0,0" />
+                            </StackPanel>
+
+                             <Grid Name="SidebarContent" RowDefinitions="350,*" IsVisible="False">
+                                 <Border Grid.Row="0"
+                                         Background="Transparent"
+                                         CornerRadius="2"
+                                         ClipToBounds="True"
+                                         Margin="0,16,0,0"
+                                         AutomationProperties.Name="Open selected image preview"
+                                         ToolTip.Tip="Open larger preview"
+                                         PointerPressed="SidebarImage_PointerPressed">
+                                     <Image Name="SidebarImage"
+                                            Stretch="Uniform"
+                                            HorizontalAlignment="Center"
+                                            VerticalAlignment="Center" />
+                                 </Border>
+
+                                 <StackPanel Grid.Row="1" Name="SidebarMetadataPanel">
+                                     <Border BorderBrush="{DynamicResource BorderSubtle}"
+                                             BorderThickness="0,1,0,0"
+                                             Margin="0,10,0,6"
+                                             Padding="0,8,0,0">
+                                         <Grid ColumnDefinitions="*,Auto">
+                                         <TextBlock Grid.Column="0"
+                                                    Name="SidebarPromptLabel"
+                                                    Text="PROMPT"
+                                                    Foreground="{DynamicResource TextMuted}"
+                                                    FontFamily="{DynamicResource FontUI}"
+                                                    FontSize="9"
+                                                    FontWeight="Medium"
+                                                    LetterSpacing="1.5"
+                                                    VerticalAlignment="Center" />
+                                         <!-- "Copied!" Toast Badge for Positive Prompt -->
+                                         <Border Grid.Column="1"
+                                                 Name="PositiveCopiedBadge"
+                                                 Background="{DynamicResource BorderAccent}"
+                                                 CornerRadius="3"
+                                                 Padding="6,2"
+                                                 Opacity="0"
+                                                 IsHitTestVisible="False"
+                                                 VerticalAlignment="Center">
+                                             <Border.Transitions>
+                                                 <Transitions>
+                                                     <DoubleTransition Property="Opacity" Duration="0:0:0.18" Easing="CubicEaseOut" />
+                                                 </Transitions>
+                                             </Border.Transitions>
+                                             <TextBlock Text="Copied!"
+                                                        Foreground="#FFFFFF"
+                                                        FontSize="10"
+                                                        FontWeight="SemiBold"
+                                                        FontFamily="{DynamicResource FontUI}" />
+                                         </Border>
+                                     </Grid>
+                                 </Border>
+                                                
+                                     <TextBox Name="SidebarPrompt"
+                                              IsReadOnly="True"
+                                              AcceptsReturn="True"
+                                              TextWrapping="Wrap"
+                                              Background="{DynamicResource SurfaceInput}"
+                                              Foreground="{DynamicResource PromptText}"
+                                              BorderBrush="{DynamicResource BorderAccent}"
+                                              BorderThickness="3,0,0,0"
+                                              CornerRadius="2"
+                                              Padding="10,8"
+                                              FontFamily="{DynamicResource FontUI}"
+                                              FontSize="12"
+                                              FontWeight="Normal"
+                                              LineHeight="20.4"
+                                              FocusAdorner="{x:Null}"
+                                              AutomationProperties.Name="Positive prompt"
+                                              MinHeight="80"
+                                              PlaceholderText="No prompt found">
+                                         <TextBox.ContextMenu>
+                                             <ContextMenu Opened="ContextMenu_Opened">
+                                                 <MenuItem Header="Copy Selected Text" Name="MenuCopySelection" Click="MenuCopySelection_Click" InputGesture="Ctrl+C" />
+                                                 <MenuItem Header="Copy Full Prompt" Name="MenuCopyFullPrompt" Click="MenuCopyFullPrompt_Click" />
+                                                 <Separator />
+                                                 <MenuItem Header="Select All" Name="MenuSelectAll" Click="MenuSelectAll_Click" InputGesture="Ctrl+A" />
+                                             </ContextMenu>
+                                         </TextBox.ContextMenu>
+                                     </TextBox>
+
+                                     <!-- Collapsible Negative Prompt -->
+                                      <StackPanel Name="SidebarNegativePromptContainer"
+                                                  Margin="0,14,0,0"
+                                                  IsVisible="False">
+                                          <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,8">
+                                              <ToggleButton Grid.Column="0"
+                                                            Name="SidebarNegativePromptHeader"
+                                                            Classes="flat-toggle"
+                                                            Cursor="Hand"
+                                                            Margin="0"
+                                                            AutomationProperties.Name="Toggle negative prompt"
+                                                            ToolTip.Tip="Show or hide negative prompt"
+                                                            Click="SidebarNegativePromptHeader_Click"
+                                                            HorizontalAlignment="Left">
+                                                  <StackPanel Orientation="Horizontal" Spacing="8">
+                                                      <TextBlock Name="SidebarNegativePromptLabel"
+                                                                 Text="NEGATIVE PROMPT"
+                                                                 Foreground="{DynamicResource TextMuted}"
+                                                                 FontFamily="{DynamicResource FontUI}"
+                                                                 FontSize="9"
+                                                                 FontWeight="Medium"
+                                                                 LetterSpacing="1.5"
+                                                                 VerticalAlignment="Center" />
+                                                      <TextBlock Name="SidebarNegativePromptArrow"
+                                                                 Text="▸"
+                                                                 Foreground="{DynamicResource TextMuted}"
+                                                                 FontSize="10"
+                                                                 VerticalAlignment="Center" />
+                                                  </StackPanel>
+                                              </ToggleButton>
+                                              <!-- "Copied!" Toast Badge for Negative Prompt -->
+                                              <Border Grid.Column="1"
+                                                      Name="NegativeCopiedBadge"
+                                                      Background="{DynamicResource BorderAccent}"
+                                                      CornerRadius="3"
+                                                      Padding="6,2"
+                                                      Opacity="0"
+                                                      IsHitTestVisible="False"
+                                                      VerticalAlignment="Center">
+                                                  <Border.Transitions>
+                                                      <Transitions>
+                                                          <DoubleTransition Property="Opacity" Duration="0:0:0.18" Easing="CubicEaseOut" />
+                                                      </Transitions>
+                                                  </Border.Transitions>
+                                                  <TextBlock Text="Copied!"
+                                                             Foreground="#FFFFFF"
+                                                             FontSize="10"
+                                                             FontWeight="SemiBold"
+                                                             FontFamily="{DynamicResource FontUI}" />
+                                              </Border>
+                                          </Grid>
+
+                                          <TextBox Name="SidebarNegativePrompt"
+                                                   IsReadOnly="True"
+                                                   AcceptsReturn="True"
+                                                   TextWrapping="Wrap"
+                                                   Background="{DynamicResource SurfaceInput}"
+                                                   Foreground="{DynamicResource PromptText}"
+                                                   BorderBrush="{DynamicResource BorderAccent}"
+                                                   BorderThickness="3,0,0,0"
+                                                   CornerRadius="2"
+                                                   Padding="10,8"
+                                                   FontFamily="{DynamicResource FontUI}"
+                                                   FontSize="12"
+                                                   FontWeight="Normal"
+                                                   LineHeight="20.4"
+                                                   FocusAdorner="{x:Null}"
+                                                   AutomationProperties.Name="Negative prompt"
+                                                   MinHeight="80"
+                                                   IsVisible="False"
+                                                   PlaceholderText="No negative prompt found">
+                                              <TextBox.ContextMenu>
+                                                  <ContextMenu Opened="ContextMenu_Opened">
+                                                      <MenuItem Header="Copy Selected Text" Name="MenuCopyNegativeSelection" Click="MenuCopySelection_Click" InputGesture="Ctrl+C" />
+                                                      <MenuItem Header="Copy Full Prompt" Name="MenuCopyNegativeFullPrompt" Click="MenuCopyFullPrompt_Click" />
+                                                      <Separator />
+                                                      <MenuItem Header="Select All" Name="MenuSelectNegativeAll" Click="MenuSelectAll_Click" InputGesture="Ctrl+A" />
+                                                  </ContextMenu>
+                                              </TextBox.ContextMenu>
+                                          </TextBox>
+                                      </StackPanel>
+
+                                      <!-- Compact Settings Card -->
+                                      <Border Margin="0,18,0,0"
+                                              Background="{DynamicResource SurfaceCard}"
+                                              BorderBrush="{DynamicResource BorderSubtle}"
+                                              BorderThickness="1"
+                                              CornerRadius="2"
+                                              Padding="12">
+                                          <StackPanel Spacing="10">
+                                              <!-- Resolution Row -->
+                                              <Grid ColumnDefinitions="75,*" Name="SidebarDimensionsRow">
+                                                  <TextBlock Grid.Column="0" Name="SidebarDimensionsLabel" Text="RESOLUTION" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontUI}" VerticalAlignment="Center" FontSize="9" FontWeight="Medium" LetterSpacing="1.5" />
+                                                  <TextBlock Grid.Column="1" Name="SidebarDimensions" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontMono}" FontWeight="Normal" FontSize="11" VerticalAlignment="Center" />
+                                              </Grid>
+
+                                             <!-- Model Row -->
+                                             <Grid ColumnDefinitions="75,*" Name="SidebarModelRow">
+                                                 <TextBlock Grid.Column="0" Name="SidebarModelLabel" Text="MODEL" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontUI}" VerticalAlignment="Center" FontSize="9" FontWeight="Medium" LetterSpacing="1.5" />
+                                                 <TextBlock Grid.Column="1" Name="SidebarModel" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontMono}" TextWrapping="Wrap" FontSize="11" FontWeight="Normal" VerticalAlignment="Center" />
+                                             </Grid>
+
+                                             <!-- Sampler Row -->
+                                             <Grid ColumnDefinitions="75,*" Name="SidebarSamplerRow">
+                                                 <TextBlock Grid.Column="0" Name="SidebarSamplerLabel" Text="SAMPLER" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontUI}" VerticalAlignment="Center" FontSize="9" FontWeight="Medium" LetterSpacing="1.5" />
+                                                 <TextBlock Grid.Column="1" Name="SidebarSampler" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontMono}" TextWrapping="Wrap" FontSize="11" FontWeight="Normal" VerticalAlignment="Center" />
+                                             </Grid>
+
+                                             <!-- Seed Row -->
+                                             <Grid ColumnDefinitions="75,*" Name="SidebarSeedRow">
+                                                 <TextBlock Grid.Column="0" Name="SidebarSeedLabel" Text="SEED" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontUI}" VerticalAlignment="Center" FontSize="9" FontWeight="Medium" LetterSpacing="1.5" />
+                                                 <Grid Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="6" VerticalAlignment="Center">
+                                                     <TextBlock Grid.Column="0" Name="SidebarSeed" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontMono}" FontSize="11" FontWeight="Normal" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                                     <Button Grid.Column="1" Name="SidebarCopySeedButton" Content="Copy" Padding="6,3" FontSize="10" Background="{DynamicResource SurfaceElevated}" BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="1" Click="CopySeedButton_Click" VerticalAlignment="Center" AutomationProperties.Name="Copy seed" ToolTip.Tip="Copy seed">
+                                                         <Button.Styles>
+                                                             <Style Selector="Button">
+                                                                 <Setter Property="CornerRadius" Value="4" />
+                                                             </Style>
+                                                         </Button.Styles>
+                                                     </Button>
+                                                 </Grid>
+                                             </Grid>
+
+                                             <!-- Settings Row -->
+                                             <Grid ColumnDefinitions="75,*" Name="SidebarSettingsRow">
+                                                 <TextBlock Grid.Column="0" Name="SidebarSettingsLabel" Text="SETTINGS" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontUI}" VerticalAlignment="Center" FontSize="9" FontWeight="Medium" LetterSpacing="1.5" />
+                                                 <TextBlock Grid.Column="1" Name="SidebarSettings" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontMono}" TextWrapping="Wrap" FontSize="11" FontWeight="Normal" VerticalAlignment="Center" />
+                                             </Grid>
+
+                                             <!-- Lora Row -->
+                                             <Grid ColumnDefinitions="75,*" Name="SidebarLoraRow">
+                                                 <TextBlock Grid.Column="0" Name="SidebarLoraLabel" Text="LORA" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontUI}" VerticalAlignment="Center" FontSize="9" FontWeight="Medium" LetterSpacing="1.5" />
+                                                 <TextBlock Grid.Column="1" Name="SidebarLora" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontMono}" TextWrapping="Wrap" FontSize="11" FontWeight="Normal" VerticalAlignment="Center" />
+                                             </Grid>
+
+                                             <!-- Date Row -->
+                                             <Grid ColumnDefinitions="75,*" Name="SidebarDateRow">
+                                                 <TextBlock Grid.Column="0" Name="SidebarDateLabel" Text="DATE" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontUI}" VerticalAlignment="Center" FontSize="9" FontWeight="Medium" LetterSpacing="1.5" />
+                                                 <TextBlock Grid.Column="1" Name="SidebarDate" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontMono}" FontSize="11" FontWeight="Normal" VerticalAlignment="Center" />
+                                             </Grid>
+                                         </StackPanel>
+                                     </Border>
+                                 </StackPanel>
+                             </Grid>
+                        </Panel>
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+
+            <Border Name="MainMenu"
+                    Grid.ColumnSpan="2"
+                    Background="{DynamicResource SurfaceBase}"
+                    IsVisible="True">
+                <Grid ColumnDefinitions="320,*" MaxWidth="850" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="20,20,20,80">
+                    <!-- Left Column: Start -->
+                    <StackPanel Grid.Column="0" Spacing="36" Margin="0,0,40,0" VerticalAlignment="Top">
+                        <StackPanel Spacing="12">
+                            <Image Source="avares://ComfyPromptViewer/Assets/app.png"
+                                   Width="56"
+                                   Height="56"
+                                   HorizontalAlignment="Left"
+                                   Margin="0,0,0,8" />
+                            <TextBlock Text="Comfy Prompt Viewer"
+                                       Foreground="{DynamicResource TextPrimary}"
+                                       FontFamily="{DynamicResource FontHeading}"
+                                       FontSize="24"
+                                       FontWeight="SemiBold" />
+                            <TextBlock Text="A fast, local-first metadata browser and gallery for your ComfyUI generation outputs."
+                                       Foreground="{DynamicResource TextMuted}"
+                                       FontSize="14"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+
+                        <!-- Error Banner on Main Menu -->
+                        <Border Name="MenuErrorBanner" Background="{DynamicResource DangerSurface}" BorderBrush="{DynamicResource DangerBorder}" BorderThickness="1" CornerRadius="2" Padding="12,8" IsVisible="False">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                                <TextBlock Name="MenuErrorText" Text="Error details here..." Foreground="{DynamicResource DangerText}" FontSize="13" TextWrapping="Wrap" VerticalAlignment="Center" />
+                                <Button Grid.Column="1" Classes="close-btn" Content="✕" Click="CloseMenuError_Click" Width="20" Height="20" CornerRadius="2" FontSize="9" Padding="0" VerticalAlignment="Center" AutomationProperties.Name="Dismiss error" ToolTip.Tip="Dismiss error" />
+                            </Grid>
+                        </Border>
+
+                        <StackPanel Spacing="16">
+                            <TextBlock Text="Start"
+                                       Foreground="{DynamicResource TextPrimary}"
+                                       FontFamily="{DynamicResource FontHeading}"
+                                       FontSize="18"
+                                       FontWeight="Medium" />
+                            
+                            <StackPanel Spacing="8">
+                                <!-- Premium Open Folder Button -->
+                                <Button Classes="menu-action-btn" Click="OpenFolderButton_Click">
+                                    <StackPanel Orientation="Horizontal" Spacing="12">
+                                        <TextBlock Text="📁" Classes="emoji-icon" FontSize="18" VerticalAlignment="Center" />
+                                        <TextBlock Text="Open Folder..." FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Button>
+                                
+                                <CheckBox Name="MenuIncludeSubfoldersToggle"
+                                          Content="Include subfolders"
+                                          Click="IncludeSubfoldersToggle_Click"
+                                          Margin="12,2,0,0"
+                                          FontSize="13"
+                                          Foreground="{DynamicResource TextSecondary}"
+                                          AutomationProperties.Name="Include subfolders"
+                                          ToolTip.Tip="Include images from nested folders" />
+                            </StackPanel>
+
+                            <!-- Collapsible Advanced Section -->
+                            <StackPanel Spacing="6" Margin="0,12,0,0">
+                                <ToggleButton Name="AdvancedToggle"
+                                              Classes="advanced-toggle"
+                                              Click="AdvancedToggle_Click"
+                                              IsChecked="False">
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <TextBlock Text="⚙️" Classes="emoji-icon" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondary}" />
+                                        <TextBlock Text="Advanced Maintenance" FontSize="12.5" FontWeight="Medium" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </ToggleButton>
+                                
+                                <StackPanel Name="AdvancedPanel" Spacing="8" Margin="16,4,0,0" IsVisible="False">
+                                    <Button Classes="menu-maintenance-btn" Click="ClearCacheButton_Click" ToolTip.Tip="Clear local thumbnail cache">
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <TextBlock Text="🗑" Classes="emoji-icon" FontSize="13" VerticalAlignment="Center" Foreground="{DynamicResource TextMuted}" />
+                                            <TextBlock Text="Clear Thumbnail Cache" FontSize="13" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Classes="menu-maintenance-btn" Click="OpenAppDataButton_Click" ToolTip.Tip="Open application preferences and logs folder">
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <TextBlock Text="📂" Classes="emoji-icon" FontSize="13" VerticalAlignment="Center" Foreground="{DynamicResource TextMuted}" />
+                                            <TextBlock Text="Open App Data Folder" FontSize="13" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </Button>
+                                </StackPanel>
+                            </StackPanel>
+                        </StackPanel>
+                    </StackPanel>
+
+                    <!-- Right Column: Recent -->
+                    <Grid Grid.Column="1" RowDefinitions="Auto,*" Height="400" VerticalAlignment="Top">
+                        <TextBlock Grid.Row="0"
+                                   Text="Recent"
+                                   Foreground="{DynamicResource TextPrimary}"
+                                   FontFamily="{DynamicResource FontHeading}"
+                                   FontSize="18"
+                                   FontWeight="Medium"
+                                   Margin="0,0,0,16" />
+                        
+                        <!-- List of recent folders -->
+                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                            <StackPanel Name="RecentFoldersList" Spacing="8">
+                                <!-- Dynamic items will be added here -->
+                            </StackPanel>
+                        </ScrollViewer>
+                        
+                        <!-- Empty recent folders state -->
+                        <TextBlock Name="NoRecentFoldersText"
+                                   Grid.Row="1"
+                                   Text="No recent folders"
+                                   Foreground="{DynamicResource TextMuted}"
+                                   FontSize="14"
+                                   FontStyle="Italic"
+                                   VerticalAlignment="Top"
+                                   Margin="0,8,0,0"
+                                   IsVisible="False" />
+                    </Grid>
+                </Grid>
+            </Border>
+
+        <Border Name="LargePreviewOverlay"
+                Grid.Column="0"
+                IsVisible="False"
+                Background="#D917120D"
+                PointerPressed="LargePreviewOverlay_PointerPressed">
+            <Border Background="{DynamicResource SurfaceCard}"
+                    BorderBrush="{DynamicResource BorderSubtle}"
+                    BorderThickness="1"
+                    CornerRadius="3"
+                    ClipToBounds="True"
+                    HorizontalAlignment="Stretch"
+                    VerticalAlignment="Stretch"
+                    Margin="32"
+                    MinWidth="420"
+                    MinHeight="360"
+                    MaxWidth="900"
+                    MaxHeight="650">
+                <Grid RowDefinitions="Auto,*">
+                    <Border Grid.Row="0"
+                            Background="{DynamicResource SurfaceElevated}"
+                            BorderBrush="{DynamicResource BorderSubtle}"
+                            BorderThickness="0,0,0,1"
+                            Padding="16,12">
+                        <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="10">
+                            <StackPanel Grid.Column="0" Spacing="2">
+                                <TextBlock Name="LargePreviewTitle"
+                                           Foreground="{DynamicResource TextPrimary}"
+                                           FontFamily="{DynamicResource FontMono}"
+                                           FontSize="16"
+                                           FontWeight="Medium"
+                                           TextTrimming="CharacterEllipsis" />
+                                <DockPanel LastChildFill="True" VerticalAlignment="Center">
+                                    <TextBlock Name="LargePreviewMeta"
+                                               DockPanel.Dock="Left"
+                                               Classes="muted"
+                                               FontSize="12"
+                                               Margin="0,0,10,0"
+                                               TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Text="|"
+                                               DockPanel.Dock="Left"
+                                               Classes="muted"
+                                               Opacity="0.3"
+                                               FontSize="12"
+                                               Margin="0,0,10,0" />
+                                    <TextBlock Text="Arrows navigate  ·  Scroll to zoom  ·  Esc / Space / Enter close"
+                                               Classes="muted"
+                                               FontSize="12"
+                                               Opacity="0.6"
+                                               TextTrimming="CharacterEllipsis" />
+                                </DockPanel>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                 <Button Name="PreviewFitButton"
+                                         Classes="zoom-btn"
+                                         Content="Fit"
+                                         FontSize="12"
+                                         AutomationProperties.Name="Fit image to preview"
+                                         ToolTip.Tip="Fit image"
+                                         Click="PreviewFitButton_Click" />
+                                 <Button Name="PreviewActualSizeButton"
+                                         Classes="zoom-btn"
+                                         Content="1:1"
+                                         FontSize="12"
+                                         AutomationProperties.Name="Show image at actual size"
+                                         ToolTip.Tip="Actual size"
+                                         Click="PreviewActualSizeButton_Click" />
+                            </StackPanel>
+                            <Button Grid.Column="2"
+                                    Name="ClosePreviewButton"
+                                    Classes="close-btn"
+                                    Content="✕"
+                                     AutomationProperties.Name="Close preview"
+                                     ToolTip.Tip="Close preview"
+                                     Click="ClosePreviewButton_Click" />
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="1"
+                            Name="LargePreviewImageHost"
+                            Background="{DynamicResource SurfaceBase}"
+                            Padding="16"
+                            MinHeight="300"
+                            SizeChanged="LargePreviewImageHost_SizeChanged">
+                        <Canvas Name="LargePreviewCanvas"
+                                ClipToBounds="True"
+                                Background="Transparent"
+                                HorizontalAlignment="Stretch"
+                                VerticalAlignment="Stretch"
+                                PointerWheelChanged="LargePreviewCanvas_PointerWheelChanged"
+                                PointerPressed="LargePreviewCanvas_PointerPressed"
+                                PointerMoved="LargePreviewCanvas_PointerMoved"
+                                PointerReleased="LargePreviewCanvas_PointerReleased"
+                                PointerCaptureLost="LargePreviewCanvas_PointerCaptureLost">
+                            <Image Name="LargePreviewImage"
+                                   Stretch="Fill" />
+                        </Canvas>
+                    </Border>
+                </Grid>
+            </Border>
+        </Border>
+
+        </Grid>
+    </Grid>
+</Window>

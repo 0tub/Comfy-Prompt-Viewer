@@ -1,0 +1,89 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ main, master ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main, master ]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - target: win-x64
+            os: windows-latest
+            suffix: .exe
+          - target: linux-x64
+            os: ubuntu-latest
+            suffix: ''
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup .NET SDK
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '9.0.x'
+
+    - name: Publish Standalone Binary
+      shell: bash
+      run: |
+        dotnet publish src/ComfyPromptViewer/ComfyPromptViewer.csproj \
+          -c Release \
+          -r ${{ matrix.target }} \
+          --self-contained true \
+          -p:PublishSingleFile=true \
+          -p:IncludeNativeLibrariesForSelfExtract=true \
+          -p:PublishTrimmed=true \
+          -p:EnableCompressionInSingleFile=true \
+          -p:DebugType=none \
+          -p:DebugSymbols=false
+
+    # Clean native assets that might copy to publish folder, rename binary
+    - name: Prepare Artifact
+      shell: bash
+      run: |
+        cd src/ComfyPromptViewer/bin/Release/net9.0/${{ matrix.target }}/publish
+        rm -f *.pdb
+        rm -f *.so
+        mv ComfyPromptViewer${{ matrix.suffix }} ComfyPromptViewer-${{ matrix.target }}${{ matrix.suffix }}
+
+    # Upload compile-verified artifacts to the actions run (accessible for 90 days)
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ComfyPromptViewer-${{ matrix.target }}
+        path: src/ComfyPromptViewer/bin/Release/net9.0/${{ matrix.target }}/publish/ComfyPromptViewer-${{ matrix.target }}${{ matrix.suffix }}
+        retention-days: 14
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+    - name: Download all build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        merge-multiple: true
+
+    - name: Create Release and Upload Assets
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          ComfyPromptViewer-win-x64.exe
+          ComfyPromptViewer-linux-x64
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

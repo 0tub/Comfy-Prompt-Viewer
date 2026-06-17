@@ -1,0 +1,41 @@
+# User-specific files
+*.rsuser
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Build results
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Re]leasePublic/
+x64/
+x86/
+build/
+bin/
+obj/
+
+# Visual Studio 2015/2017/2019/2022 cache/options directory
+.vs/
+
+# Visual Studio Code
+.vscode/
+
+# Rider
+.idea/
+*.sln.iml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Log files
+*.log
+src/ComfyPromptViewer/bin/
+src/ComfyPromptViewer/obj/
+
+# Agent/Local Sandbox Directories
+scratch/
+.gemini/
+AGENTS.md
