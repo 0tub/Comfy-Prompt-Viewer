@@ -11,6 +11,8 @@ public sealed record ImageReadResult(int Width, int Height, Dictionary<string, s
 public static class ImageFileReader
 {
     private const int MaxTextChunkBytes = 16 * 1024 * 1024;
+    private const ushort ExifIfdPointerTag = 0x8769;
+    private const ushort UserCommentTag = 0x9286;
 
     public static bool IsSupportedImage(string path)
     {
@@ -166,6 +168,10 @@ public static class ImageFileReader
             throw new InvalidDataException("Invalid JPEG signature.");
         }
 
+        var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var width = 0;
+        var height = 0;
+
         while (stream.Position < stream.Length)
         {
             var markerStart = stream.ReadByte();
@@ -186,7 +192,12 @@ public static class ImageFileReader
                 break;
             }
 
-            if (marker is 0xD8 or 0xD9)
+            if (marker == 0xD9)
+            {
+                break;
+            }
+
+            if (JpegMarkerHasNoPayload(marker))
             {
                 continue;
             }
@@ -197,15 +208,39 @@ public static class ImageFileReader
                 throw new InvalidDataException("Invalid JPEG segment.");
             }
 
+            var dataLength = length - 2;
             if (marker is >= 0xC0 and <= 0xC3 or >= 0xC5 and <= 0xC7 or >= 0xC9 and <= 0xCB or >= 0xCD and <= 0xCF)
             {
-                stream.ReadByte();
-                var height = ReadUInt16BigEndian(stream);
-                var width = ReadUInt16BigEndian(stream);
-                return new ImageReadResult(width, height, []);
+                var data = ReadChunkData(stream, dataLength);
+                if (data.Length < 5)
+                {
+                    throw new InvalidDataException("Invalid JPEG frame segment.");
+                }
+
+                height = ReadUInt16BigEndian(data.AsSpan(1, 2));
+                width = ReadUInt16BigEndian(data.AsSpan(3, 2));
+                continue;
             }
 
-            stream.Position += length - 2;
+            if (marker == 0xE1)
+            {
+                var data = ReadChunkData(stream, dataLength);
+                ReadExifMetadata(data, metadata);
+                continue;
+            }
+
+            if (marker == 0xDA)
+            {
+                stream.Position += dataLength;
+                break;
+            }
+
+            stream.Position += dataLength;
+        }
+
+        if (width > 0 && height > 0)
+        {
+            return new ImageReadResult(width, height, metadata);
         }
 
         throw new InvalidDataException("JPEG dimensions not found.");
@@ -220,25 +255,59 @@ public static class ImageFileReader
             throw new InvalidDataException("Invalid WebP signature.");
         }
 
+        var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var width = 0;
+        var height = 0;
         Span<byte> chunkHeader = stackalloc byte[8];
-        ReadExactly(stream, chunkHeader);
-        var type = Encoding.ASCII.GetString(chunkHeader[..4]);
-        var dataLength = BitConverter.ToInt32(chunkHeader[4..8]);
-        if (dataLength < 0)
+
+        while (stream.Position + 8 <= stream.Length)
         {
-            throw new InvalidDataException("Invalid WebP chunk length.");
+            ReadExactly(stream, chunkHeader);
+            var type = Encoding.ASCII.GetString(chunkHeader[..4]);
+            var dataLength = ReadInt32LittleEndian(chunkHeader[4..8]);
+            if (dataLength < 0)
+            {
+                throw new InvalidDataException("Invalid WebP chunk length.");
+            }
+
+            switch (type)
+            {
+                case "VP8X":
+                    (width, height) = ReadWebPExtended(stream, dataLength);
+                    break;
+                case "VP8L":
+                    (width, height) = ReadWebPLossless(stream, dataLength);
+                    break;
+                case "VP8 ":
+                    (width, height) = ReadWebPLossy(stream, dataLength);
+                    break;
+                case "EXIF":
+                    if (dataLength <= MaxTextChunkBytes)
+                    {
+                        var data = ReadChunkData(stream, dataLength);
+                        ReadExifMetadata(data, metadata);
+                        SkipRiffChunkTail(stream, dataLength, data.Length);
+                    }
+                    else
+                    {
+                        SkipRiffChunk(stream, dataLength);
+                    }
+                    break;
+                default:
+                    SkipRiffChunk(stream, dataLength);
+                    break;
+            }
         }
 
-        return type switch
+        if (width > 0 && height > 0)
         {
-            "VP8X" => ReadWebPExtended(stream, dataLength),
-            "VP8L" => ReadWebPLossless(stream, dataLength),
-            "VP8 " => ReadWebPLossy(stream, dataLength),
-            _ => throw new InvalidDataException("Unsupported WebP variant.")
-        };
+            return new ImageReadResult(width, height, metadata);
+        }
+
+        throw new InvalidDataException("Unsupported WebP variant.");
     }
 
-    private static ImageReadResult ReadWebPExtended(Stream stream, int dataLength)
+    private static (int Width, int Height) ReadWebPExtended(Stream stream, int dataLength)
     {
         if (dataLength < 10)
         {
@@ -249,13 +318,12 @@ public static class ImageFileReader
         ReadExactly(stream, data);
         SkipRiffChunkTail(stream, dataLength, data.Length);
 
-        return new ImageReadResult(
+        return (
             ReadUInt24LittleEndian(data.Slice(4, 3)) + 1,
-            ReadUInt24LittleEndian(data.Slice(7, 3)) + 1,
-            []);
+            ReadUInt24LittleEndian(data.Slice(7, 3)) + 1);
     }
 
-    private static ImageReadResult ReadWebPLossless(Stream stream, int dataLength)
+    private static (int Width, int Height) ReadWebPLossless(Stream stream, int dataLength)
     {
         if (dataLength < 5)
         {
@@ -274,10 +342,10 @@ public static class ImageFileReader
         var bits = BitConverter.ToUInt32(data[1..]);
         var width = (int)(bits & 0x3FFF) + 1;
         var height = (int)((bits >> 14) & 0x3FFF) + 1;
-        return new ImageReadResult(width, height, []);
+        return (width, height);
     }
 
-    private static ImageReadResult ReadWebPLossy(Stream stream, int dataLength)
+    private static (int Width, int Height) ReadWebPLossy(Stream stream, int dataLength)
     {
         if (dataLength < 10)
         {
@@ -295,7 +363,7 @@ public static class ImageFileReader
 
         var width = BitConverter.ToUInt16(data.Slice(6, 2)) & 0x3FFF;
         var height = BitConverter.ToUInt16(data.Slice(8, 2)) & 0x3FFF;
-        return new ImageReadResult(width, height, []);
+        return (width, height);
     }
 
     private static void ReadTextChunk(byte[] data, Dictionary<string, string> metadata)
@@ -356,6 +424,259 @@ public static class ImageFileReader
         metadata[key] = Inflate(data, separator + 2, data.Length - separator - 2);
     }
 
+    private static void ReadExifMetadata(ReadOnlySpan<byte> data, Dictionary<string, string> metadata)
+    {
+        if (data.StartsWith("Exif\0\0"u8))
+        {
+            data = data[6..];
+        }
+
+        if (data.Length < 8)
+        {
+            return;
+        }
+
+        var littleEndian = data[0] == (byte)'I' && data[1] == (byte)'I';
+        var bigEndian = data[0] == (byte)'M' && data[1] == (byte)'M';
+        if (!littleEndian && !bigEndian)
+        {
+            return;
+        }
+
+        if (ReadUInt16(data.Slice(2, 2), littleEndian) != 42)
+        {
+            return;
+        }
+
+        var firstIfdOffset = ReadUInt32(data.Slice(4, 4), littleEndian);
+        uint exifIfdOffset = 0;
+        ReadExifIfd(data, firstIfdOffset, littleEndian, metadata, ref exifIfdOffset);
+
+        if (exifIfdOffset != 0)
+        {
+            ReadExifIfd(data, exifIfdOffset, littleEndian, metadata, ref exifIfdOffset);
+        }
+    }
+
+    private static void ReadExifIfd(
+        ReadOnlySpan<byte> tiff,
+        uint ifdOffset,
+        bool littleEndian,
+        Dictionary<string, string> metadata,
+        ref uint exifIfdOffset)
+    {
+        if (ifdOffset > tiff.Length - 2)
+        {
+            return;
+        }
+
+        var entryCount = ReadUInt16(tiff.Slice((int)ifdOffset, 2), littleEndian);
+        var entriesOffset = checked((int)ifdOffset + 2);
+        if (entryCount > (tiff.Length - entriesOffset) / 12)
+        {
+            return;
+        }
+
+        for (var index = 0; index < entryCount; index++)
+        {
+            var entryOffset = entriesOffset + index * 12;
+            var tag = ReadUInt16(tiff.Slice(entryOffset, 2), littleEndian);
+            var type = ReadUInt16(tiff.Slice(entryOffset + 2, 2), littleEndian);
+            var count = ReadUInt32(tiff.Slice(entryOffset + 4, 4), littleEndian);
+
+            if (tag == ExifIfdPointerTag && TryReadExifEntryUInt(tiff, entryOffset, type, count, littleEndian, out var pointer))
+            {
+                exifIfdOffset = pointer;
+                continue;
+            }
+
+            if (!TryGetExifEntryBytes(tiff, entryOffset, type, count, littleEndian, out var value))
+            {
+                continue;
+            }
+
+            if (tag == UserCommentTag)
+            {
+                StoreMetadataText(metadata, "UserComment", DecodeExifUserComment(value));
+            }
+        }
+    }
+
+    private static bool TryReadExifEntryUInt(
+        ReadOnlySpan<byte> tiff,
+        int entryOffset,
+        ushort type,
+        uint count,
+        bool littleEndian,
+        out uint value)
+    {
+        value = 0;
+        if (count != 1)
+        {
+            return false;
+        }
+
+        if (type == 3)
+        {
+            value = ReadUInt16(tiff.Slice(entryOffset + 8, 2), littleEndian);
+            return true;
+        }
+
+        if (type == 4)
+        {
+            value = ReadUInt32(tiff.Slice(entryOffset + 8, 4), littleEndian);
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryGetExifEntryBytes(
+        ReadOnlySpan<byte> tiff,
+        int entryOffset,
+        ushort type,
+        uint count,
+        bool littleEndian,
+        out ReadOnlySpan<byte> value)
+    {
+        value = default;
+        var unitSize = type switch
+        {
+            1 or 2 or 7 => 1,
+            3 => 2,
+            4 or 9 => 4,
+            5 or 10 => 8,
+            _ => 0
+        };
+
+        if (unitSize == 0 || count > int.MaxValue / unitSize)
+        {
+            return false;
+        }
+
+        var byteCount = checked((int)count * unitSize);
+        if (byteCount <= 4)
+        {
+            value = tiff.Slice(entryOffset + 8, byteCount);
+            return true;
+        }
+
+        var valueOffset = ReadUInt32(tiff.Slice(entryOffset + 8, 4), littleEndian);
+        if (valueOffset > tiff.Length || byteCount > tiff.Length - valueOffset)
+        {
+            return false;
+        }
+
+        value = tiff.Slice((int)valueOffset, byteCount);
+        return true;
+    }
+
+    private static string DecodeExifUserComment(ReadOnlySpan<byte> data)
+    {
+        if (data.Length >= 8)
+        {
+            var prefix = Encoding.ASCII.GetString(data[..8]);
+            var payload = data[8..];
+            if (prefix.StartsWith("ASCII", StringComparison.OrdinalIgnoreCase))
+            {
+                return DecodeUtf8OrLatin1(payload);
+            }
+
+            if (prefix.StartsWith("UNICODE", StringComparison.OrdinalIgnoreCase))
+            {
+                return DecodeUtf16Guess(payload);
+            }
+
+            if (prefix.StartsWith("JIS", StringComparison.OrdinalIgnoreCase))
+            {
+                return DecodeUtf8OrLatin1(payload);
+            }
+
+            if (data[..8].SequenceEqual(stackalloc byte[8]))
+            {
+                return DecodeUtf8OrLatin1(payload);
+            }
+        }
+
+        return DecodeUtf8OrLatin1(data);
+    }
+
+    private static string DecodeUtf16Guess(ReadOnlySpan<byte> data)
+    {
+        var evenZeros = 0;
+        var oddZeros = 0;
+        for (var index = 0; index + 1 < data.Length; index += 2)
+        {
+            if (data[index] == 0) evenZeros++;
+            if (data[index + 1] == 0) oddZeros++;
+        }
+
+        return DecodeUtf16(data, littleEndian: oddZeros >= evenZeros);
+    }
+
+    private static string DecodeUtf16(ReadOnlySpan<byte> data, bool littleEndian)
+    {
+        if ((data.Length & 1) == 1)
+        {
+            data = data[..^1];
+        }
+
+        var text = littleEndian
+            ? Encoding.Unicode.GetString(data)
+            : Encoding.BigEndianUnicode.GetString(data);
+        return TrimMetadataText(text);
+    }
+
+    private static string DecodeUtf8OrLatin1(ReadOnlySpan<byte> data)
+    {
+        var nullIndex = data.IndexOf((byte)0);
+        if (nullIndex >= 0)
+        {
+            data = data[..nullIndex];
+        }
+
+        try
+        {
+            return TrimMetadataText(new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true).GetString(data));
+        }
+        catch (DecoderFallbackException)
+        {
+            return TrimMetadataText(Encoding.Latin1.GetString(data));
+        }
+    }
+
+    private static void StoreMetadataText(Dictionary<string, string> metadata, string key, string value)
+    {
+        value = TrimMetadataText(value);
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return;
+        }
+
+        metadata[key] = value;
+        if (!metadata.ContainsKey("parameters") && LooksLikeGenerationParameters(value))
+        {
+            metadata["parameters"] = value;
+        }
+    }
+
+    private static string TrimMetadataText(string value)
+    {
+        return value
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n')
+            .Trim('\uFEFF', '\0', ' ', '\t', '\n');
+    }
+
+    private static bool LooksLikeGenerationParameters(string value)
+    {
+        return value.Contains("Steps:", StringComparison.OrdinalIgnoreCase) &&
+               (value.Contains("Sampler:", StringComparison.OrdinalIgnoreCase) ||
+                value.Contains("Seed:", StringComparison.OrdinalIgnoreCase) ||
+                value.Contains("CFG", StringComparison.OrdinalIgnoreCase) ||
+                value.Contains("Negative prompt:", StringComparison.OrdinalIgnoreCase));
+    }
+
     private static string Inflate(byte[] data, int offset, int count)
     {
         using var input = new MemoryStream(data, offset, count, writable: false);
@@ -388,6 +709,16 @@ public static class ImageFileReader
         stream.Position += paddedLength - bytesRead;
     }
 
+    private static void SkipRiffChunk(Stream stream, int chunkLength)
+    {
+        stream.Position += chunkLength + (chunkLength & 1);
+    }
+
+    private static bool JpegMarkerHasNoPayload(int marker)
+    {
+        return marker is 0x01 or >= 0xD0 and <= 0xD8;
+    }
+
     private static uint ReadUInt32BigEndian(Stream stream)
     {
         Span<byte> buffer = stackalloc byte[4];
@@ -400,11 +731,35 @@ public static class ImageFileReader
         return (bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3];
     }
 
+    private static int ReadInt32LittleEndian(ReadOnlySpan<byte> bytes)
+    {
+        return bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24);
+    }
+
     private static int ReadUInt16BigEndian(Stream stream)
     {
         Span<byte> buffer = stackalloc byte[2];
         ReadExactly(stream, buffer);
         return (buffer[0] << 8) | buffer[1];
+    }
+
+    private static ushort ReadUInt16BigEndian(ReadOnlySpan<byte> bytes)
+    {
+        return (ushort)((bytes[0] << 8) | bytes[1]);
+    }
+
+    private static ushort ReadUInt16(ReadOnlySpan<byte> bytes, bool littleEndian)
+    {
+        return littleEndian
+            ? (ushort)(bytes[0] | (bytes[1] << 8))
+            : (ushort)((bytes[0] << 8) | bytes[1]);
+    }
+
+    private static uint ReadUInt32(ReadOnlySpan<byte> bytes, bool littleEndian)
+    {
+        return littleEndian
+            ? (uint)(bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24))
+            : ((uint)bytes[0] << 24) | ((uint)bytes[1] << 16) | ((uint)bytes[2] << 8) | bytes[3];
     }
 
     private static int ReadUInt24LittleEndian(ReadOnlySpan<byte> bytes)

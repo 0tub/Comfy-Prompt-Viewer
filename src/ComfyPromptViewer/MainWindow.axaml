@@ -186,31 +186,59 @@
             <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
         </Style>
 
-        <Style Selector="Border.skeleton">
-            <Setter Property="Background" Value="{DynamicResource SurfaceElevated}" />
-            <Setter Property="Opacity" Value="0.45" />
+        <Style Selector="ComboBox.search-scope-combo">
+            <Setter Property="Width" Value="104" />
+            <Setter Property="Height" Value="28" />
+            <Setter Property="Padding" Value="10,0,6,0" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
-        
-        <Style Selector="TextBox.search-box">
-            <Setter Property="CornerRadius" Value="3" />
-            <Setter Property="Padding" Value="10,6" />
-            <Setter Property="Background" Value="{DynamicResource SurfaceInput}" />
+        <Style Selector="ComboBox.search-scope-combo:pointerover">
             <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+        </Style>
+
+        <Style Selector="Border.search-shell">
+            <Setter Property="Height" Value="30" />
+            <Setter Property="CornerRadius" Value="3" />
+            <Setter Property="Background" Value="{DynamicResource SurfaceInput}" />
             <Setter Property="BorderBrush" Value="{DynamicResource ToolbarBorderSubtle}" />
             <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="FontFamily" Value="{DynamicResource FontUI}" />
-            <Setter Property="FontSize" Value="12" />
-            <Setter Property="FontWeight" Value="Normal" />
-            <Setter Property="WatermarkForeground" Value="{DynamicResource TextMuted}" />
-            <Setter Property="MinWidth" Value="240" />
             <Setter Property="Transitions">
                 <Transitions>
                     <BrushTransition Property="BorderBrush" Duration="0:0:0.15" Easing="CubicEaseOut" />
                 </Transitions>
             </Setter>
         </Style>
-        <Style Selector="TextBox.search-box:focus">
+        <Style Selector="Border.search-shell:pointerover">
+            <Setter Property="BorderBrush" Value="{DynamicResource CardHoverBorder}" />
+        </Style>
+        <Style Selector="Border.search-shell:focus-within">
             <Setter Property="BorderBrush" Value="{DynamicResource BorderAccent}" />
+        </Style>
+
+        <Style Selector="Border.skeleton">
+            <Setter Property="Background" Value="{DynamicResource SurfaceElevated}" />
+            <Setter Property="Opacity" Value="0.45" />
+        </Style>
+
+        <Style Selector="TextBox.search-box">
+            <Setter Property="Padding" Value="6,5,8,5" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="FontFamily" Value="{DynamicResource FontUI}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="Normal" />
+            <Setter Property="WatermarkForeground" Value="{DynamicResource TextMuted}" />
+            <Setter Property="MinWidth" Value="240" />
+            <Setter Property="FocusAdorner" Value="{x:Null}" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
         </Style>
         
         <Style Selector="Slider">
@@ -638,16 +666,32 @@
 
                     <Grid Grid.Column="1" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="16" VerticalAlignment="Center">
                         <Rectangle Grid.Column="0" Width="1" Fill="{DynamicResource BorderSubtle}" Height="16" VerticalAlignment="Center" />
+                        <Border Grid.Column="1" Classes="search-shell">
+                            <Grid ColumnDefinitions="Auto,*" VerticalAlignment="Stretch">
                         <TextBox Grid.Column="1"
                                  Name="SearchTextBox"
-                                 PlaceholderText="Search prompts (use - to exclude, &quot;&quot; for exact)..."
+                                 PlaceholderText="Search (use - to exclude, &quot;&quot; for exact)..."
                                  VerticalAlignment="Center"
                                  HorizontalAlignment="Stretch"
                                  Classes="search-box"
-                                 Height="30"
-                                 AutomationProperties.Name="Search prompts"
-                                 ToolTip.Tip="Search prompts. Use -term to exclude, &quot;term&quot; for exact. Hover '?' for info."
+                                 Height="28"
+                                 AutomationProperties.Name="Search"
+                                 ToolTip.Tip="Search. Use -term to exclude, &quot;term&quot; for exact. Hover '?' for info."
                                  TextChanged="SearchTextBox_TextChanged">
+                            <TextBox.Resources>
+                                <SolidColorBrush x:Key="TextBoxBackground">Transparent</SolidColorBrush>
+                                <SolidColorBrush x:Key="TextBoxBackgroundPointerOver">Transparent</SolidColorBrush>
+                                <SolidColorBrush x:Key="TextBoxBackgroundFocused">Transparent</SolidColorBrush>
+                                <SolidColorBrush x:Key="TextBoxBorderBrush">Transparent</SolidColorBrush>
+                                <SolidColorBrush x:Key="TextBoxBorderBrushPointerOver">Transparent</SolidColorBrush>
+                                <SolidColorBrush x:Key="TextBoxBorderBrushFocused">Transparent</SolidColorBrush>
+                                <SolidColorBrush x:Key="TextControlBackground">Transparent</SolidColorBrush>
+                                <SolidColorBrush x:Key="TextControlBackgroundPointerOver">Transparent</SolidColorBrush>
+                                <SolidColorBrush x:Key="TextControlBackgroundFocused">Transparent</SolidColorBrush>
+                                <SolidColorBrush x:Key="TextControlBorderBrush">Transparent</SolidColorBrush>
+                                <SolidColorBrush x:Key="TextControlBorderBrushPointerOver">Transparent</SolidColorBrush>
+                                <SolidColorBrush x:Key="TextControlBorderBrushFocused">Transparent</SolidColorBrush>
+                            </TextBox.Resources>
                             <TextBox.InnerRightContent>
                                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,4,0">
                                     <Button Name="ClearSearchButton"
@@ -674,6 +718,30 @@
                                 </StackPanel>
                             </TextBox.InnerRightContent>
                         </TextBox>
+                        <StackPanel Grid.Column="0" Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="4,0,0,0">
+                            <ComboBox Name="SearchScopeComboBox"
+                                      Classes="search-scope-combo"
+                                      VerticalAlignment="Center"
+                                      AutomationProperties.Name="Search scope"
+                                      ToolTip.Tip="Choose whether search checks prompts, filenames, or both."
+                                      SelectionChanged="SearchScopeComboBox_SelectionChanged">
+                                <ComboBox.Resources>
+                                    <SolidColorBrush x:Key="ComboBoxBackground">Transparent</SolidColorBrush>
+                                    <SolidColorBrush x:Key="ComboBoxBackgroundPointerOver">Transparent</SolidColorBrush>
+                                    <SolidColorBrush x:Key="ComboBoxBackgroundPressed">Transparent</SolidColorBrush>
+                                    <SolidColorBrush x:Key="ComboBoxBorderBrush">Transparent</SolidColorBrush>
+                                    <SolidColorBrush x:Key="ComboBoxBorderBrushPointerOver">Transparent</SolidColorBrush>
+                                    <SolidColorBrush x:Key="ComboBoxBorderBrushPressed">Transparent</SolidColorBrush>
+                                    <Thickness x:Key="ComboBoxBorderThemeThickness">0</Thickness>
+                                </ComboBox.Resources>
+                                <ComboBoxItem Content="All" />
+                                <ComboBoxItem Content="Prompt" />
+                                <ComboBoxItem Content="Filename" />
+                            </ComboBox>
+                            <Rectangle Width="1" Fill="{DynamicResource BorderSubtle}" Height="18" VerticalAlignment="Center" Margin="2,0,0,0" />
+                        </StackPanel>
+                            </Grid>
+                        </Border>
                         <Rectangle Grid.Column="2" Width="1" Fill="{DynamicResource BorderSubtle}" Height="16" VerticalAlignment="Center" />
                     </Grid>
 

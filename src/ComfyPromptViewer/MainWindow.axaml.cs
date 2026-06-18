@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
@@ -15,7 +14,6 @@ using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Media;
-using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 
@@ -31,9 +29,6 @@ public partial class MainWindow : Window
     private const double WheelScrollRowsPerNotch = 1.7;
     private const double MinWheelScrollPixels = 180;
     private const double MaxWheelViewportRatio = 0.58;
-    private const double PreviewMinZoom = 0.10;
-    private const double PreviewMaxZoom = 4.0;
-    private const double PreviewWheelZoomFactor = 1.10;
     private readonly GalleryViewModel _viewModel = new();
     private readonly ThumbnailLoadCoordinator _thumbnailLoads = new();
     private readonly List<string> _allImagePaths = [];
@@ -41,7 +36,6 @@ public partial class MainWindow : Window
     private CancellationTokenSource? _loadCancellation;
     private CancellationTokenSource? _scannerCancellation;
     private CancellationTokenSource? _searchDebounceCancellation;
-    private int _largePreviewSessionId;
     private ImageItem? _selectedItem;
     private SortMode _sortMode = SortMode.NewestFirst;
     private string? _currentFolderPath;
@@ -57,34 +51,15 @@ public partial class MainWindow : Window
     // Row direction is enough for bounded prefetch; use velocity history if long fling prediction is needed.
     private int _lastPrefetchFirstVisibleRow = -1;
     private int _prefetchDirection = 1;
-    private double? _largePreviewZoom;
-    private double _largePreviewPanX;
-    private double _largePreviewPanY;
-    private bool _isLargePreviewPanning;
-    private Point _largePreviewPanStartPoint;
-    private double _largePreviewPanStartX;
-    private double _largePreviewPanStartY;
-    private IPointer? _largePreviewPanPointer;
     private volatile bool _hasSearchQueryActive;
-    private FileSystemWatcher? _folderWatcher;
     private TextBox? _activeContextMenuTextBox;
-    private readonly object _watcherLock = new();
-    private readonly HashSet<string> _pendingAddedFiles = new(StringComparer.OrdinalIgnoreCase);
-    private readonly HashSet<string> _pendingDeletedFiles = new(StringComparer.OrdinalIgnoreCase);
-    private DispatcherTimer? _watcherDebounceTimer;
 
-    private readonly record struct PreviewZoomAnchor(double XRatio, double YRatio, double ViewportX, double ViewportY);
-
-    private bool _isAutoScrolling;
-    private bool _hasDragged;
-    private Point _autoScrollAnchor;
-    private Point _currentPointerPosition;
-    private IPointer? _capturedPointer;
-    private TimeSpan _lastFrameTime;
-    private bool _isFirstFrame;
-    private double _smoothedVelocity;
-    private readonly double[] _dtHistory = new double[6];
-    private int _dtHistoryIndex;
+    private enum SearchScope
+    {
+        All,
+        Prompts,
+        Filename
+    }
 
     public MainWindow()
     {
@@ -109,6 +84,7 @@ public partial class MainWindow : Window
         SyncIncludeSubfoldersToggles();
         ApplyTileLayout();
         SortComboBox.SelectedIndex = (int)_sortMode;
+        SearchScopeComboBox.SelectedIndex = (int)SearchScope.All;
 
         _isInitializing = false;
         this.SizeChanged += Window_SizeChanged;
@@ -1059,622 +1035,6 @@ public partial class MainWindow : Window
         }
     }
 
-    private void SidebarImage_PointerPressed(object? sender, PointerPressedEventArgs e)
-    {
-        if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
-        {
-            ShowLargePreview();
-        }
-    }
-
-    private void ShowLargePreview()
-    {
-        if (_selectedItem is null)
-        {
-            return;
-        }
-
-        if (_loadCancellation?.Token is { } token)
-        {
-            _selectedItem.EnsureSelectedPreviewLoaded(token);
-        }
-
-        _largePreviewSessionId++;
-        LargePreviewOverlay.Opacity = 1;
-        LargePreviewOverlay.IsVisible = true;
-        UpdateLargePreview(resetZoom: true);
-    }
-
-    private void UpdateLargePreview(bool resetZoom)
-    {
-        if (_selectedItem is null)
-        {
-            return;
-        }
-
-        LargePreviewTitle.Text = _selectedItem.FileName;
-        LargePreviewMeta.Text = _selectedItem.DimensionsText;
-        LargePreviewImage.Source = _selectedItem.SelectedPreview ?? _selectedItem.Preview;
-
-        if (resetZoom)
-        {
-            _largePreviewZoom = null;
-        }
-
-        ApplyLargePreviewZoom(resetScroll: resetZoom);
-        Dispatcher.UIThread.Post(() => ApplyLargePreviewZoom(resetScroll: resetZoom), DispatcherPriority.Loaded);
-    }
-
-    private void LargePreviewOverlay_PointerPressed(object? sender, PointerPressedEventArgs e)
-    {
-        if (e.Source == LargePreviewOverlay)
-        {
-            HideLargePreview();
-        }
-    }
-
-    private void ClosePreviewButton_Click(object? sender, RoutedEventArgs e)
-    {
-        HideLargePreview();
-    }
-
-    private void HideLargePreview()
-    {
-        _largePreviewSessionId++;
-        StopLargePreviewPan(releaseCapture: true);
-        LargePreviewOverlay.IsVisible = false;
-        LargePreviewOverlay.Opacity = 0;
-        LargePreviewImage.Source = null;
-        _largePreviewZoom = null;
-        ResetLargePreviewPan();
-        ApplyLargePreviewZoom(resetScroll: true);
-
-        if (_selectedItem is not null)
-        {
-            var index = _viewModel.Items.IndexOf(_selectedItem);
-            if (index >= 0 && GalleryItems.TryGetElement(index) is Control control)
-            {
-                control.Focus();
-            }
-        }
-    }
-
-    private void PreviewFitButton_Click(object? sender, RoutedEventArgs e)
-    {
-        _largePreviewZoom = null;
-        ResetLargePreviewPan();
-        ApplyLargePreviewZoom(resetScroll: true);
-    }
-
-    private void PreviewActualSizeButton_Click(object? sender, RoutedEventArgs e)
-    {
-        SetLargePreviewZoom(1.0);
-    }
-
-    private void LargePreviewCanvas_PointerWheelChanged(object? sender, PointerWheelEventArgs e)
-    {
-        if (!LargePreviewOverlay.IsVisible ||
-            e.Delta.Y == 0 ||
-            !TryGetLargePreviewFitSize(out _))
-        {
-            e.Handled = true;
-            return;
-        }
-
-        ApplyLargePreviewWheelZoom(e.Delta.Y, e.GetPosition(LargePreviewCanvas));
-        e.Handled = true;
-    }
-
-    private void LargePreviewCanvas_PointerPressed(object? sender, PointerPressedEventArgs e)
-    {
-        if (!e.GetCurrentPoint(LargePreviewCanvas).Properties.IsLeftButtonPressed)
-        {
-            return;
-        }
-
-        _isLargePreviewPanning = true;
-        _largePreviewPanStartPoint = e.GetPosition(LargePreviewCanvas);
-        _largePreviewPanStartX = _largePreviewPanX;
-        _largePreviewPanStartY = _largePreviewPanY;
-        _largePreviewPanPointer = e.Pointer;
-        _largePreviewPanPointer.Capture(LargePreviewCanvas);
-        e.Handled = true;
-    }
-
-    private void LargePreviewCanvas_PointerMoved(object? sender, PointerEventArgs e)
-    {
-        if (!_isLargePreviewPanning)
-        {
-            return;
-        }
-
-        var currentPoint = e.GetPosition(LargePreviewCanvas);
-        _largePreviewPanX = _largePreviewPanStartX + currentPoint.X - _largePreviewPanStartPoint.X;
-        _largePreviewPanY = _largePreviewPanStartY + currentPoint.Y - _largePreviewPanStartPoint.Y;
-        ApplyLargePreviewPlacementFromCurrentState();
-        e.Handled = true;
-    }
-
-    private void LargePreviewCanvas_PointerReleased(object? sender, PointerReleasedEventArgs e)
-    {
-        if (e.Pointer == _largePreviewPanPointer)
-        {
-            StopLargePreviewPan(releaseCapture: true);
-            e.Handled = true;
-        }
-    }
-
-    private void LargePreviewCanvas_PointerCaptureLost(object? sender, PointerCaptureLostEventArgs e)
-    {
-        if (e.Pointer == _largePreviewPanPointer)
-        {
-            StopLargePreviewPan(releaseCapture: false);
-        }
-    }
-
-    private void LargePreviewImageHost_SizeChanged(object? sender, SizeChangedEventArgs e)
-    {
-        var contentWidth = e.NewSize.Width - LargePreviewImageHost.Padding.Left - LargePreviewImageHost.Padding.Right;
-        var contentHeight = e.NewSize.Height - LargePreviewImageHost.Padding.Top - LargePreviewImageHost.Padding.Bottom;
-        LargePreviewCanvas.Width = Math.Max(0, contentWidth);
-        LargePreviewCanvas.Height = Math.Max(0, contentHeight);
-
-        if (LargePreviewOverlay.IsVisible)
-        {
-            ApplyLargePreviewZoom(resetScroll: false);
-        }
-    }
-
-    private void ApplyLargePreviewWheelZoom(double wheelDelta, Point viewportPoint)
-    {
-        if (!TryGetCurrentLargePreviewZoom(out var currentZoom))
-        {
-            return;
-        }
-
-        var clampedDelta = Math.Clamp(wheelDelta, -3.0, 3.0);
-        var nextZoom = currentZoom * Math.Pow(PreviewWheelZoomFactor, clampedDelta);
-        SetLargePreviewZoom(nextZoom, viewportPoint);
-    }
-
-    private void SetLargePreviewZoom(double zoom, Point? viewportPoint = null)
-    {
-        var minimumZoom = GetLargePreviewMinimumZoom();
-        var clampedZoom = Math.Clamp(zoom, minimumZoom, PreviewMaxZoom);
-
-        if (LargePreviewImage.Source is Bitmap bitmap &&
-            TryGetLargePreviewFitScale(bitmap, out var fitScale) &&
-            fitScale <= 1.0 &&
-            clampedZoom <= fitScale + 0.001)
-        {
-            _largePreviewZoom = null;
-            ResetLargePreviewPan();
-            ApplyLargePreviewZoom(resetScroll: false);
-            return;
-        }
-
-        var anchor = CaptureLargePreviewZoomAnchor(viewportPoint);
-        _largePreviewZoom = clampedZoom;
-        ApplyLargePreviewZoom(resetScroll: false);
-        RestoreLargePreviewZoomAnchor(anchor);
-    }
-
-    private void ApplyLargePreviewZoom(bool resetScroll)
-    {
-        if (resetScroll)
-        {
-            ResetLargePreviewPan();
-        }
-
-        if (LargePreviewImage.Source is not Bitmap bitmap)
-        {
-            UpdateLargePreviewMeta();
-            return;
-        }
-
-        LargePreviewImage.Stretch = Stretch.Fill;
-        var contentSize = GetLargePreviewContentSize(bitmap);
-        LargePreviewImage.Width = Math.Max(1, contentSize.Width);
-        LargePreviewImage.Height = Math.Max(1, contentSize.Height);
-
-        if (TryGetLargePreviewFitSize(out var viewportSize))
-        {
-            ApplyLargePreviewPlacement(contentSize, viewportSize);
-        }
-
-        UpdateLargePreviewMeta();
-    }
-
-    private void UpdateLargePreviewMeta()
-    {
-        if (_selectedItem is null)
-        {
-            LargePreviewMeta.Text = "";
-            return;
-        }
-
-        string zoomText = "Fit";
-        if (LargePreviewImage.Source is Bitmap bitmap)
-        {
-            var scale = _largePreviewZoom ?? (TryGetLargePreviewFitScale(bitmap, out var fitScale) ? fitScale : 1.0);
-            
-            // Adjust the display scale relative to the actual image dimensions if available
-            double actualZoom = scale;
-            if (_selectedItem.Width > 0 && bitmap.PixelSize.Width > 0)
-            {
-                actualZoom = scale * (bitmap.PixelSize.Width / (double)_selectedItem.Width);
-            }
-
-            zoomText = _largePreviewZoom is null
-                ? $"Fit {FormatPreviewZoom(actualZoom)}"
-                : FormatPreviewZoom(actualZoom);
-        }
-
-        LargePreviewMeta.Text = $"{_selectedItem.DimensionsText} - {zoomText}";
-    }
-
-    private bool TryGetCurrentLargePreviewZoom(out double zoom)
-    {
-        if (_largePreviewZoom is { } explicitZoom)
-        {
-            zoom = explicitZoom;
-            return true;
-        }
-
-        if (LargePreviewImage.Source is Bitmap bitmap && TryGetLargePreviewFitScale(bitmap, out var fitScale))
-        {
-            zoom = fitScale;
-            return true;
-        }
-
-        zoom = 1.0;
-        return false;
-    }
-
-    private double GetLargePreviewMinimumZoom()
-    {
-        if (LargePreviewImage.Source is Bitmap bitmap &&
-            TryGetLargePreviewFitScale(bitmap, out var fitScale))
-        {
-            return Math.Clamp(Math.Min(fitScale, 1.0), PreviewMinZoom, PreviewMaxZoom);
-        }
-
-        return PreviewMinZoom;
-    }
-
-    private static string FormatPreviewZoom(double zoom)
-    {
-        return $"{Math.Round(zoom * 100):0}%";
-    }
-
-    private PreviewZoomAnchor? CaptureLargePreviewZoomAnchor(Point? viewportPoint = null)
-    {
-        if (!TryGetLargePreviewContentSize(out var contentSize) ||
-            !TryGetLargePreviewFitSize(out var viewportSize))
-        {
-            return null;
-        }
-
-        var point = viewportPoint ?? new Point(viewportSize.Width / 2, viewportSize.Height / 2);
-        var contentX = point.X - _largePreviewPanX;
-        var contentY = point.Y - _largePreviewPanY;
-        var xRatio = contentSize.Width <= 0 ? 0.5 : contentX / contentSize.Width;
-        var yRatio = contentSize.Height <= 0 ? 0.5 : contentY / contentSize.Height;
-        return new PreviewZoomAnchor(
-            Math.Clamp(xRatio, 0, 1),
-            Math.Clamp(yRatio, 0, 1),
-            Math.Clamp(point.X, 0, viewportSize.Width),
-            Math.Clamp(point.Y, 0, viewportSize.Height));
-    }
-
-    private void RestoreLargePreviewZoomAnchor(PreviewZoomAnchor? anchor)
-    {
-        if (anchor is null)
-        {
-            return;
-        }
-
-        if (!LargePreviewOverlay.IsVisible ||
-            !TryGetLargePreviewContentSize(out var contentSize) ||
-            !TryGetLargePreviewFitSize(out var viewportSize))
-        {
-            return;
-        }
-
-        _largePreviewPanX = anchor.Value.ViewportX - contentSize.Width * anchor.Value.XRatio;
-        _largePreviewPanY = anchor.Value.ViewportY - contentSize.Height * anchor.Value.YRatio;
-        ApplyLargePreviewPlacement(contentSize, viewportSize);
-    }
-
-    private bool TryGetLargePreviewContentSize(out Size contentSize)
-    {
-        if (LargePreviewImage.Source is not Bitmap bitmap)
-        {
-            contentSize = default;
-            return false;
-        }
-
-        contentSize = GetLargePreviewContentSize(bitmap);
-        return true;
-    }
-
-    private Size GetLargePreviewContentSize(Bitmap bitmap)
-    {
-        var scale = _largePreviewZoom ?? (TryGetLargePreviewFitScale(bitmap, out var fitScale) ? fitScale : 1.0);
-        return new Size(bitmap.PixelSize.Width * scale, bitmap.PixelSize.Height * scale);
-    }
-
-    private void ApplyLargePreviewPlacementFromCurrentState()
-    {
-        if (TryGetLargePreviewContentSize(out var contentSize) &&
-            TryGetLargePreviewFitSize(out var viewportSize))
-        {
-            ApplyLargePreviewPlacement(contentSize, viewportSize);
-        }
-    }
-
-    private void ApplyLargePreviewPlacement(Size contentSize, Size viewportSize)
-    {
-        ClampLargePreviewPan(contentSize, viewportSize);
-        Canvas.SetLeft(LargePreviewImage, Math.Round(_largePreviewPanX));
-        Canvas.SetTop(LargePreviewImage, Math.Round(_largePreviewPanY));
-    }
-
-    private void ClampLargePreviewPan(Size contentSize, Size viewportSize)
-    {
-        _largePreviewPanX = ClampPreviewAxis(_largePreviewPanX, contentSize.Width, viewportSize.Width);
-        _largePreviewPanY = ClampPreviewAxis(_largePreviewPanY, contentSize.Height, viewportSize.Height);
-    }
-
-    private static double ClampPreviewAxis(double pan, double contentLength, double viewportLength)
-    {
-        if (contentLength <= viewportLength)
-        {
-            return (viewportLength - contentLength) / 2;
-        }
-
-        return Math.Clamp(pan, viewportLength - contentLength, 0);
-    }
-
-    private void ResetLargePreviewPan()
-    {
-        _largePreviewPanX = 0;
-        _largePreviewPanY = 0;
-    }
-
-    private void StopLargePreviewPan(bool releaseCapture)
-    {
-        _isLargePreviewPanning = false;
-
-        if (releaseCapture)
-        {
-            _largePreviewPanPointer?.Capture(null);
-        }
-
-        _largePreviewPanPointer = null;
-    }
-
-    private bool TryGetLargePreviewFitScale(Bitmap bitmap, out double scale)
-    {
-        if (bitmap.PixelSize.Width <= 0 ||
-            bitmap.PixelSize.Height <= 0 ||
-            !TryGetLargePreviewFitSize(out var fitSize))
-        {
-            scale = 1.0;
-            return false;
-        }
-
-        scale = Math.Min(fitSize.Width / bitmap.PixelSize.Width, fitSize.Height / bitmap.PixelSize.Height);
-        return scale > 0 && !double.IsNaN(scale) && !double.IsInfinity(scale);
-    }
-
-    private bool TryGetLargePreviewFitSize(out Size fitSize)
-    {
-        var width = FirstUsableSize(
-            LargePreviewCanvas.Bounds.Width,
-            LargePreviewImageHost.Bounds.Width - LargePreviewImageHost.Padding.Left - LargePreviewImageHost.Padding.Right);
-
-        var height = FirstUsableSize(
-            LargePreviewCanvas.Bounds.Height,
-            LargePreviewImageHost.Bounds.Height - LargePreviewImageHost.Padding.Top - LargePreviewImageHost.Padding.Bottom);
-
-        if (width <= 0 || height <= 0)
-        {
-            fitSize = default;
-            return false;
-        }
-
-        fitSize = new Size(Math.Floor(width), Math.Floor(height));
-        return true;
-    }
-
-    private static double FirstUsableSize(params double[] values)
-    {
-        foreach (var value in values)
-        {
-            if (!double.IsNaN(value) && !double.IsInfinity(value) && value > 8)
-            {
-                return value;
-            }
-        }
-
-        return 0;
-    }
-
-    private void GalleryScrollViewer_PointerPressed(object? sender, PointerPressedEventArgs e)
-    {
-        var properties = e.GetCurrentPoint(this).Properties;
-
-        if (_isAutoScrolling)
-        {
-            StopAutoScroll();
-            e.Handled = true;
-            return;
-        }
-
-        if (properties.PointerUpdateKind == PointerUpdateKind.MiddleButtonPressed)
-        {
-            _isAutoScrolling = true;
-            _hasDragged = false;
-            _autoScrollAnchor = e.GetPosition(this);
-            _currentPointerPosition = _autoScrollAnchor;
-            _capturedPointer = e.Pointer;
-            _capturedPointer.Capture(GalleryScrollViewer);
-
-            // Change cursor to vertical scroll shape
-            this.Cursor = new Cursor(StandardCursorType.SizeNorthSouth);
-
-            // Start animation loop
-            _isFirstFrame = true;
-            RequestNextScrollFrame();
-
-            e.Handled = true;
-        }
-    }
-
-    private void RequestNextScrollFrame()
-    {
-        if (!_isAutoScrolling) return;
-
-        TopLevel.GetTopLevel(this)?.RequestAnimationFrame(time =>
-        {
-            if (!_isAutoScrolling) return;
-
-            ProcessAutoScrollFrame(time);
-            RequestNextScrollFrame();
-        });
-    }
-
-    private void ProcessAutoScrollFrame(TimeSpan time)
-    {
-        if (_isFirstFrame)
-        {
-            _lastFrameTime = time;
-            _isFirstFrame = false;
-            _smoothedVelocity = 0;
-            Array.Clear(_dtHistory, 0, _dtHistory.Length);
-            return;
-        }
-
-        double rawDt = (time - _lastFrameTime).TotalSeconds;
-        _lastFrameTime = time;
-
-        // Clamp rawDt to avoid frame jumps when the window is suspended/resized
-        if (rawDt <= 0 || rawDt > 0.1)
-        {
-            return;
-        }
-
-        double dt = GetSmoothedDt(rawDt);
-
-        double deltaY = _currentPointerPosition.Y - _autoScrollAnchor.Y;
-        double absDeltaY = Math.Abs(deltaY);
-
-        double targetVelocity = 0;
-        if (absDeltaY >= 12)
-        {
-            double distance = absDeltaY - 12;
-            // Windows-style non-linear momentum speed curve (distance ^ 1.5)
-            targetVelocity = Math.Sign(deltaY) * Math.Pow(distance, 1.5) * 4.0;
-        }
-
-        // Smoothly ease the velocity towards the target velocity using LERP with exponential decay.
-        // Easing factor of 12.0 gives a very responsive yet smooth momentum transition
-        double easeAmount = 1.0 - Math.Exp(-12.0 * dt);
-        _smoothedVelocity = Lerp(_smoothedVelocity, targetVelocity, easeAmount);
-
-        // If the velocity is extremely small and target is 0, clip to 0 to prevent micro-drifts
-        if (targetVelocity == 0 && Math.Abs(_smoothedVelocity) < 0.5)
-        {
-            _smoothedVelocity = 0;
-        }
-
-        if (_smoothedVelocity == 0)
-        {
-            return;
-        }
-
-        double currentOffset = GalleryScrollViewer.Offset.Y;
-        double maxOffset = Math.Max(0, GalleryScrollViewer.Extent.Height - GalleryScrollViewer.Viewport.Height);
-        double nextOffset = Math.Clamp(currentOffset + (_smoothedVelocity * dt), 0, maxOffset);
-
-        GalleryScrollViewer.Offset = new Vector(GalleryScrollViewer.Offset.X, nextOffset);
-    }
-
-    private double GetSmoothedDt(double dt)
-    {
-        _dtHistory[_dtHistoryIndex] = dt;
-        _dtHistoryIndex = (_dtHistoryIndex + 1) % _dtHistory.Length;
-
-        double sum = 0;
-        int count = 0;
-        foreach (var val in _dtHistory)
-        {
-            if (val > 0)
-            {
-                sum += val;
-                count++;
-            }
-        }
-        return count > 0 ? sum / count : dt;
-    }
-
-    private double Lerp(double start, double end, double amount)
-    {
-        return start + (end - start) * amount;
-    }
-
-    private void GalleryScrollViewer_PointerMoved(object? sender, PointerEventArgs e)
-    {
-        if (_isAutoScrolling)
-        {
-            _currentPointerPosition = e.GetPosition(this);
-            var delta = _currentPointerPosition - _autoScrollAnchor;
-            if (Math.Abs(delta.X) > 6 || Math.Abs(delta.Y) > 6)
-            {
-                _hasDragged = true;
-            }
-        }
-    }
-
-    private void GalleryScrollViewer_PointerReleased(object? sender, PointerReleasedEventArgs e)
-    {
-        if (_isAutoScrolling)
-        {
-            var properties = e.GetCurrentPoint(this).Properties;
-            if (properties.PointerUpdateKind == PointerUpdateKind.MiddleButtonReleased)
-            {
-                if (_hasDragged)
-                {
-                    StopAutoScroll();
-                }
-                e.Handled = true;
-            }
-        }
-    }
-
-    private void GalleryScrollViewer_PointerCaptureLost(object? sender, PointerCaptureLostEventArgs e)
-    {
-        StopAutoScroll();
-    }
-
-    private void StopAutoScroll()
-    {
-        if (_isAutoScrolling)
-        {
-            _isAutoScrolling = false;
-            _capturedPointer?.Capture(null);
-            _capturedPointer = null;
-
-            // Restore standard cursor
-            this.Cursor = null;
-
-            // Reset smoothing values
-            _smoothedVelocity = 0;
-            Array.Clear(_dtHistory, 0, _dtHistory.Length);
-        }
-    }
-
     private async Task<bool> CopyTextAsync(string text)
     {
         var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
@@ -2028,10 +1388,30 @@ public partial class MainWindow : Window
         }, TaskScheduler.FromCurrentSynchronizationContext());
     }
 
+    private void SearchScopeComboBox_SelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_isInitializing)
+        {
+            return;
+        }
+
+        ApplyFilter(resetScroll: true);
+    }
+
     private void ClearSearchButton_Click(object? sender, RoutedEventArgs e)
     {
         SearchTextBox.Text = string.Empty;
         SearchTextBox.Focus();
+    }
+
+    private SearchScope GetSearchScope()
+    {
+        return SearchScopeComboBox.SelectedIndex switch
+        {
+            (int)SearchScope.Prompts => SearchScope.Prompts,
+            (int)SearchScope.Filename => SearchScope.Filename,
+            _ => SearchScope.All
+        };
     }
 
     private void ApplyFilter(bool resetScroll = false)
@@ -2046,30 +1426,10 @@ public partial class MainWindow : Window
         else
         {
             SearchEngine.ParseQuery(query, out var positiveTerms, out var negativeTerms);
+            var searchScope = GetSearchScope();
 
             filtered = _allImageItems.Where(item =>
-            {
-                if (!item.HasLoadedMetadata)
-                {
-                    return true;
-                }
-
-                // positive terms: ALL must match
-                foreach (var term in positiveTerms)
-                {
-                    if (!SearchEngine.IsMatch(item.Prompt, item.NegativePrompt, term))
-                        return false;
-                }
-
-                // negative terms: NONE must match
-                foreach (var term in negativeTerms)
-                {
-                    if (SearchEngine.IsMatch(item.Prompt, item.NegativePrompt, term))
-                        return false;
-                }
-
-                return true;
-            }).ToList();
+                ItemMatchesSearch(item, positiveTerms, negativeTerms, searchScope)).ToList();
         }
 
         var hasChanges = _viewModel.Items.Count != filtered.Count;
@@ -2101,6 +1461,105 @@ public partial class MainWindow : Window
 
         bool showEmpty = filtered.Count == 0 && _allImageItems.Count > 0;
         ToggleGalleryEmptyState(showEmpty);
+    }
+
+    private static bool ItemMatchesSearch(
+        ImageItem item,
+        List<SearchTerm> positiveTerms,
+        List<SearchTerm> negativeTerms,
+        SearchScope searchScope)
+    {
+        return searchScope switch
+        {
+            SearchScope.Filename => TextMatchesTerms(item.FileName, positiveTerms, negativeTerms),
+            SearchScope.Prompts => item.HasLoadedMetadata &&
+                                   PromptMatchesTerms(item, positiveTerms, negativeTerms) ||
+                                   !item.HasLoadedMetadata,
+            _ => ItemMatchesAllSearch(item, positiveTerms, negativeTerms)
+        };
+    }
+
+    private static bool ItemMatchesAllSearch(
+        ImageItem item,
+        List<SearchTerm> positiveTerms,
+        List<SearchTerm> negativeTerms)
+    {
+        foreach (var term in negativeTerms)
+        {
+            if (SearchEngine.IsMatch(item.FileName, term) ||
+                item.HasLoadedMetadata && SearchEngine.IsMatch(item.Prompt, item.NegativePrompt, term))
+            {
+                return false;
+            }
+        }
+
+        foreach (var term in positiveTerms)
+        {
+            if (SearchEngine.IsMatch(item.FileName, term))
+            {
+                continue;
+            }
+
+            if (!item.HasLoadedMetadata)
+            {
+                return true;
+            }
+
+            if (!SearchEngine.IsMatch(item.Prompt, item.NegativePrompt, term))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool PromptMatchesTerms(
+        ImageItem item,
+        List<SearchTerm> positiveTerms,
+        List<SearchTerm> negativeTerms)
+    {
+        foreach (var term in positiveTerms)
+        {
+            if (!SearchEngine.IsMatch(item.Prompt, item.NegativePrompt, term))
+            {
+                return false;
+            }
+        }
+
+        foreach (var term in negativeTerms)
+        {
+            if (SearchEngine.IsMatch(item.Prompt, item.NegativePrompt, term))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool TextMatchesTerms(
+        string text,
+        List<SearchTerm> positiveTerms,
+        List<SearchTerm> negativeTerms)
+    {
+        foreach (var term in positiveTerms)
+        {
+            if (!SearchEngine.IsMatch(text, term))
+            {
+                return false;
+            }
+        }
+
+        foreach (var term in negativeTerms)
+        {
+            if (SearchEngine.IsMatch(text, term))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private async void ToggleGalleryEmptyState(bool show)
@@ -2506,240 +1965,5 @@ public partial class MainWindow : Window
         return utcTime.ToLocalTime().ToString("MMM d, yyyy");
     }
 
-    private void StartFolderWatcher(string folderPath, bool includeSubfolders)
-    {
-        StopFolderWatcher();
-        try
-        {
-            _folderWatcher = new FileSystemWatcher(folderPath)
-            {
-                NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite,
-                IncludeSubdirectories = includeSubfolders
-            };
 
-            _folderWatcher.Created += OnFileCreated;
-            _folderWatcher.Deleted += OnFileDeleted;
-            _folderWatcher.Renamed += OnFileRenamed;
-            _folderWatcher.EnableRaisingEvents = true;
-        }
-        catch
-        {
-        }
-    }
-
-    private void StopFolderWatcher()
-    {
-        if (_folderWatcher != null)
-        {
-            try
-            {
-                _folderWatcher.EnableRaisingEvents = false;
-                _folderWatcher.Created -= OnFileCreated;
-                _folderWatcher.Deleted -= OnFileDeleted;
-                _folderWatcher.Renamed -= OnFileRenamed;
-                _folderWatcher.Dispose();
-            }
-            catch
-            {
-            }
-            _folderWatcher = null;
-        }
-
-        if (_watcherDebounceTimer != null)
-        {
-            _watcherDebounceTimer.Stop();
-            _watcherDebounceTimer = null;
-        }
-
-        lock (_watcherLock)
-        {
-            _pendingAddedFiles.Clear();
-            _pendingDeletedFiles.Clear();
-        }
-    }
-
-    private void OnFileCreated(object sender, FileSystemEventArgs e)
-    {
-        if (!ImageFileReader.IsSupportedImage(e.FullPath)) return;
-
-        lock (_watcherLock)
-        {
-            _pendingDeletedFiles.Remove(e.FullPath);
-            _pendingAddedFiles.Add(e.FullPath);
-        }
-
-        Dispatcher.UIThread.Post(() => StartWatcherTimer());
-    }
-
-    private void OnFileDeleted(object sender, FileSystemEventArgs e)
-    {
-        lock (_watcherLock)
-        {
-            _pendingAddedFiles.Remove(e.FullPath);
-            _pendingDeletedFiles.Add(e.FullPath);
-        }
-
-        Dispatcher.UIThread.Post(() => StartWatcherTimer());
-    }
-
-    private void OnFileRenamed(object sender, RenamedEventArgs e)
-    {
-        if (ImageFileReader.IsSupportedImage(e.OldFullPath))
-        {
-            lock (_watcherLock)
-            {
-                _pendingAddedFiles.Remove(e.OldFullPath);
-                _pendingDeletedFiles.Add(e.OldFullPath);
-            }
-        }
-
-        if (ImageFileReader.IsSupportedImage(e.FullPath))
-        {
-            lock (_watcherLock)
-            {
-                _pendingDeletedFiles.Remove(e.FullPath);
-                _pendingAddedFiles.Add(e.FullPath);
-            }
-        }
-
-        Dispatcher.UIThread.Post(() => StartWatcherTimer());
-    }
-
-    private void StartWatcherTimer()
-    {
-        if (_watcherDebounceTimer == null)
-        {
-            _watcherDebounceTimer = new DispatcherTimer
-            {
-                Interval = TimeSpan.FromMilliseconds(300)
-            };
-            _watcherDebounceTimer.Tick += OnWatcherTimerTick;
-        }
-
-        _watcherDebounceTimer.Stop();
-        _watcherDebounceTimer.Start();
-    }
-
-    private void OnWatcherTimerTick(object? sender, EventArgs e)
-    {
-        _watcherDebounceTimer?.Stop();
-
-        List<string> added;
-        List<string> deleted;
-
-        lock (_watcherLock)
-        {
-            added = _pendingAddedFiles.ToList();
-            deleted = _pendingDeletedFiles.ToList();
-            _pendingAddedFiles.Clear();
-            _pendingDeletedFiles.Clear();
-        }
-
-        if (added.Count == 0 && deleted.Count == 0) return;
-
-        ProcessWatcherChanges(added, deleted);
-    }
-
-    private void ProcessWatcherChanges(List<string> addedPaths, List<string> deletedPaths)
-    {
-        bool changed = false;
-
-        // 1. Process deletions
-        if (deletedPaths.Count > 0)
-        {
-            var deletedSet = new HashSet<string>(deletedPaths, StringComparer.OrdinalIgnoreCase);
-            var pathCount = _allImagePaths.RemoveAll(path => deletedSet.Contains(path));
-            if (pathCount > 0)
-            {
-                changed = true;
-            }
-
-            for (var index = _allImageItems.Count - 1; index >= 0; index--)
-            {
-                var item = _allImageItems[index];
-                if (!deletedSet.Contains(item.Path))
-                {
-                    continue;
-                }
-
-                _allImageItems.RemoveAt(index);
-                item.MetadataLoaded -= ImageItem_MetadataLoaded;
-
-                if (_selectedItem == item)
-                {
-                    SelectItem(null);
-                }
-            }
-        }
-
-        // 2. Process additions
-        var newItems = new List<ImageItem>();
-        var existingPaths = new HashSet<string>(_allImagePaths, StringComparer.OrdinalIgnoreCase);
-        foreach (var path in addedPaths)
-        {
-            if (!File.Exists(path)) continue;
-            if (!existingPaths.Add(path)) continue;
-
-            _allImagePaths.Add(path);
-            var item = CreateImageItem(path);
-            _allImageItems.Add(item);
-            newItems.Add(item);
-            changed = true;
-        }
-
-        if (changed)
-        {
-            ApplySort();
-
-            if (newItems.Count > 0)
-            {
-                ScanNewItemsMetadata(newItems);
-            }
-
-            ApplyFilter(resetScroll: false);
-            QueueViewportThumbnailSchedule();
-        }
-    }
-
-    private void ScanNewItemsMetadata(List<ImageItem> newItems)
-    {
-        var token = _scannerCancellation?.Token ?? CancellationToken.None;
-        var scannerGeneration = _scannerGeneration;
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await Parallel.ForEachAsync(newItems, new ParallelOptions
-                {
-                    MaxDegreeOfParallelism = 2,
-                    CancellationToken = token
-                },
-                async (item, cancellationToken) =>
-                {
-                    try
-                    {
-                        await item.EnsureMetadataLoadedAsync(cancellationToken);
-                        if (HasSearchQueryActive())
-                        {
-                            Dispatcher.UIThread.Post(() =>
-                            {
-                                if (!token.IsCancellationRequested && scannerGeneration == _scannerGeneration)
-                                {
-                                    ApplyFilter(resetScroll: false);
-                                }
-                            });
-                        }
-                    }
-                    catch (OperationCanceledException) {}
-                    catch (Exception ex)
-                    {
-                        DebugLog.Write($"Failed to scan metadata for watcher-added file {item.Path}: {ex}");
-                    }
-                });
-            }
-            catch (OperationCanceledException)
-            {
-            }
-        });
-    }
 }
