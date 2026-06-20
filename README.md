@@ -16,6 +16,9 @@ A local-first desktop app (.NET 9 + Avalonia 12) for browsing ComfyUI, Forge, an
 
 ## Getting Started
 
+### Download a Release
+For normal use, download the latest packaged build from the project's GitHub Releases page.
+
 ### Prerequisites
 - [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0)
 
@@ -29,6 +32,13 @@ Runs native trimming, compression, and outputs a single-file application requiri
 
 - **Windows**: Run `.\publish.ps1` (outputs `src\ComfyPromptViewer\bin\Release\net9.0\win-x64\publish\ComfyPromptViewer.exe`)
 - **Linux**: Run `./publish.sh` (outputs `src/ComfyPromptViewer/bin/Release/net9.0/linux-x64/publish/ComfyPromptViewer`)
+
+### Checks
+After a Debug build, run the built-in self-check for parser, search, cache, and metadata-cache coverage:
+
+```powershell
+dotnet src\ComfyPromptViewer\bin\Debug\net9.0\ComfyPromptViewer.dll --self-check
+```
 
 ## File Structure
 
