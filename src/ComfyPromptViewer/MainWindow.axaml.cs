@@ -37,7 +37,7 @@ public partial class MainWindow : Window
     private readonly List<ImageItem> _allImageItems = [];
     private CancellationTokenSource? _loadCancellation;
     private CancellationTokenSource? _scannerCancellation;
-    private CancellationTokenSource? _searchDebounceCancellation;
+    private DispatcherTimer? _searchDebounceTimer;
     private ImageItem? _selectedItem;
     private SortMode _sortMode = SortMode.NewestFirst;
     private string? _currentFolderPath;
@@ -66,6 +66,8 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         DataContext = _viewModel;
+        _thumbnailLoads.VisibleWorkDrained = ImageItem.ResumeDeferredThumbnailCacheWrites;
+        ImageItem.SetDeferredThumbnailCacheWritePause(() => _thumbnailLoads.HasVisibleWork);
 
         GalleryScrollViewer.AddHandler(InputElement.PointerPressedEvent, GalleryScrollViewer_PointerPressed, RoutingStrategies.Bubble, true);
         GalleryScrollViewer.AddHandler(InputElement.PointerMovedEvent, GalleryScrollViewer_PointerMoved, RoutingStrategies.Bubble, true);
@@ -110,12 +112,14 @@ public partial class MainWindow : Window
         StopAutoScroll();
         StopLargePreviewPan(releaseCapture: true);
         StopFolderWatcher();
-        CancelAndDispose(ref _searchDebounceCancellation);
+        _searchDebounceTimer?.Stop();
         CancelAndDispose(ref _scannerCancellation);
         _scannerGeneration++;
         CancelAndDispose(ref _loadCancellation);
         _loadGeneration++;
         _thumbnailLoads.Clear();
+        ImageItem.ClearDeferredThumbnailCacheWrites();
+        ImageItem.SetDeferredThumbnailCacheWritePause(null);
         SelectItem(null);
         ClearImageItems();
         ImageCache.ClearAndReleaseAll();
@@ -194,6 +198,7 @@ public partial class MainWindow : Window
         CancelAndDispose(ref _scannerCancellation);
         _scannerGeneration++;
         _thumbnailLoads.Clear();
+        ImageItem.ClearDeferredThumbnailCacheWrites();
 
         ImageCache.ClearAndReleaseAll();
         SelectItem(null);
@@ -631,11 +636,6 @@ public partial class MainWindow : Window
     private static bool IsTextInputFocused(object? source)
     {
         return source is TextBox;
-    }
-
-    private static bool IsGalleryNavigationKey(Key key)
-    {
-        return key is Key.Left or Key.Right or Key.Up or Key.Down or Key.Home or Key.End or Key.PageUp or Key.PageDown;
     }
 
     private bool ShowLargePreviewIfSelected()
@@ -1388,7 +1388,6 @@ public partial class MainWindow : Window
                 return;
             }
 
-            QueueViewportThumbnailSchedule(force: true);
             Dispatcher.UIThread.Post(() =>
             {
                 if (!token.IsCancellationRequested && loadGeneration == _loadGeneration)
@@ -1403,6 +1402,14 @@ public partial class MainWindow : Window
     {
         try
         {
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (!token.IsCancellationRequested && loadGeneration == _loadGeneration)
+                {
+                    ScheduleViewportThumbnails();
+                }
+            }, DispatcherPriority.Background);
+
             for (var poll = 0; poll < InitialMetadataScannerMaxPolls; poll++)
             {
                 if (token.IsCancellationRequested || loadGeneration != _loadGeneration)
@@ -1459,17 +1466,22 @@ public partial class MainWindow : Window
         }
 
         _hasSearchQueryActive = !string.IsNullOrWhiteSpace(SearchTextBox.Text);
-        CancelAndDispose(ref _searchDebounceCancellation);
-        _searchDebounceCancellation = new CancellationTokenSource();
-        var token = _searchDebounceCancellation.Token;
 
-        Task.Delay(150, token).ContinueWith(t =>
+        if (_searchDebounceTimer == null)
         {
-            if (t.IsCompletedSuccessfully && !token.IsCancellationRequested)
+            _searchDebounceTimer = new DispatcherTimer(DispatcherPriority.Normal)
             {
-                Dispatcher.UIThread.Post(() => ApplyFilter(resetScroll: true));
-            }
-        }, TaskScheduler.FromCurrentSynchronizationContext());
+                Interval = TimeSpan.FromMilliseconds(150)
+            };
+            _searchDebounceTimer.Tick += (s, ev) =>
+            {
+                _searchDebounceTimer.Stop();
+                ApplyFilter(resetScroll: true);
+            };
+        }
+
+        _searchDebounceTimer.Stop();
+        _searchDebounceTimer.Start();
     }
 
     private void SearchScopeComboBox_SelectionChanged(object? sender, SelectionChangedEventArgs e)
@@ -1545,6 +1557,7 @@ public partial class MainWindow : Window
         {
             _viewModel.Items.Clear();
             _viewModel.Items.AddRange(filtered);
+            GalleryItems.InvalidateMeasure();
         }
 
         if (resetScroll)
@@ -1553,7 +1566,7 @@ public partial class MainWindow : Window
         }
 
         UpdateCountText();
-        QueueViewportThumbnailSchedule();
+        QueueViewportThumbnailSchedule(force: true);
 
         bool showEmpty = filtered.Count == 0 && _allImageItems.Count > 0;
         ToggleGalleryEmptyState(showEmpty);
@@ -1781,6 +1794,7 @@ public partial class MainWindow : Window
         try
         {
             _thumbnailLoads.Clear();
+            ImageItem.ClearDeferredThumbnailCacheWrites();
             ImageCache.ClearAndReleaseAll();
             if (Directory.Exists(ImageItem.ThumbnailCacheRootDir))
             {
@@ -1818,6 +1832,7 @@ public partial class MainWindow : Window
         CancelAndDispose(ref _loadCancellation);
         _loadGeneration++;
         _thumbnailLoads.Clear();
+        ImageItem.ClearDeferredThumbnailCacheWrites();
         ImageCache.ClearAndReleaseAll();
         SelectItem(null);
         ClearImageItems();

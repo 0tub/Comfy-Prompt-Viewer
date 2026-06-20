@@ -13,6 +13,10 @@ internal static class SelfCheck
         CheckSearchParsing();
         CheckPromptExtraction();
         CheckPngMetadataRead();
+        CheckThumbnailCacheWriteBackpressure();
+        CheckDeferredThumbnailCacheWriteQueue();
+        CheckDeferredThumbnailCacheWritePause();
+        CheckThumbnailCacheBudget();
     }
 
     private static void CheckSearchParsing()
@@ -63,6 +67,68 @@ internal static class SelfCheck
             {
             }
         }
+    }
+
+    private static void CheckThumbnailCacheWriteBackpressure()
+    {
+        var firstPath = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}-1.jpg");
+        var secondPath = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}-2.jpg");
+
+        Check(ImageItem.TryBeginThumbnailCacheWrite(firstPath), "Expected first thumbnail cache write slot.");
+        try
+        {
+            Check(!ImageItem.TryBeginThumbnailCacheWrite(secondPath), "Expected busy thumbnail cache writer to reject queued writes.");
+        }
+        finally
+        {
+            ImageItem.EndThumbnailCacheWrite(firstPath);
+        }
+    }
+
+    private static void CheckDeferredThumbnailCacheWriteQueue()
+    {
+        var activePath = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}-active.jpg");
+        var deferredPath = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}-deferred.jpg");
+        var item = new ImageItem(Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}-missing.png"), tileSize: 120);
+
+        Check(ImageItem.TryBeginThumbnailCacheWrite(activePath), "Expected active thumbnail cache write slot.");
+        try
+        {
+            Check(ImageItem.TryQueueDeferredThumbnailCacheWrite(item, deferredPath), "Expected deferred thumbnail cache write to queue.");
+            Check(!ImageItem.TryQueueDeferredThumbnailCacheWrite(item, deferredPath), "Expected duplicate deferred thumbnail cache write to be ignored.");
+            ImageItem.ClearDeferredThumbnailCacheWrites();
+        }
+        finally
+        {
+            ImageItem.EndThumbnailCacheWrite(activePath);
+        }
+    }
+
+    private static void CheckDeferredThumbnailCacheWritePause()
+    {
+        var activePath = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}-active.jpg");
+        var deferredPath = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}-deferred.jpg");
+        var item = new ImageItem(Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}-missing.png"), tileSize: 120);
+
+        ImageItem.SetDeferredThumbnailCacheWritePause(() => true);
+        try
+        {
+            Check(ImageItem.TryQueueDeferredThumbnailCacheWrite(item, deferredPath), "Expected paused deferred thumbnail cache write to queue.");
+            Check(ImageItem.TryBeginThumbnailCacheWrite(activePath), "Expected paused deferred thumbnail cache writer not to take active slot.");
+            ImageItem.EndThumbnailCacheWrite(activePath);
+            ImageItem.ClearDeferredThumbnailCacheWrites();
+        }
+        finally
+        {
+            ImageItem.SetDeferredThumbnailCacheWritePause(null);
+        }
+    }
+
+    private static void CheckThumbnailCacheBudget()
+    {
+        Check(!ImageCache.ExceedsBudget(ImageCache.MaxCapacity, ImageCache.MaxEstimatedBytes), "Expected exact thumbnail cache budget to fit.");
+        Check(ImageCache.ExceedsBudget(ImageCache.MaxCapacity + 1, 0), "Expected thumbnail count budget overflow.");
+        Check(ImageCache.ExceedsBudget(1, ImageCache.MaxEstimatedBytes + 1), "Expected thumbnail byte budget overflow.");
     }
 
     private static void WriteTinyPng(string path, string key, string value)

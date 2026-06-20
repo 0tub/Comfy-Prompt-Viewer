@@ -125,10 +125,12 @@ public sealed class ImageItem : INotifyPropertyChanged
     private const int ThumbnailJpegQuality = 82;
     private const int SelectedPreviewMaxWidth = 1200;
     private static readonly char[] InvalidFileNameChars = System.IO.Path.GetInvalidFileNameChars();
-    private static readonly SemaphoreSlim ThumbnailCacheWriteLimiter = new(1);
+    private static readonly SemaphoreSlim ThumbnailCacheWriteLimiter = new(1, 1);
     private static readonly SemaphoreSlim SelectedPreviewLoadLimiter = new(1);
     private static readonly object PendingThumbnailCacheWritesLock = new();
     private static readonly HashSet<string> PendingThumbnailCacheWrites = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Queue<DeferredThumbnailCacheWrite> DeferredThumbnailCacheWrites = new();
+    private static Func<bool>? DeferredThumbnailCacheWritesPaused;
 
     private Bitmap? _preview;
     private Bitmap? _selectedPreview;
@@ -189,8 +191,19 @@ public sealed class ImageItem : INotifyPropertyChanged
     }
 
     public System.Collections.Generic.LinkedListNode<ImageItem>? CacheNode { get; set; }
+    internal long CachedPreviewBytes { get; set; }
     public bool HasLoadedMetadata => _hasLoadedMetadata;
     public bool IsRealized => _realizedCount > 0;
+    internal long EstimatedPreviewBytes
+    {
+        get
+        {
+            var preview = Preview;
+            return preview is null
+                ? 0
+                : Math.Max(1, preview.PixelSize.Width) * (long)Math.Max(1, preview.PixelSize.Height) * 4;
+        }
+    }
 
     public Bitmap? Preview
     {
@@ -581,12 +594,10 @@ public sealed class ImageItem : INotifyPropertyChanged
             return;
         }
 
-        lock (PendingThumbnailCacheWritesLock)
+        if (!TryBeginThumbnailCacheWrite(cachePath))
         {
-            if (!PendingThumbnailCacheWrites.Add(cachePath))
-            {
-                return;
-            }
+            TryQueueDeferredThumbnailCacheWrite(item, cachePath);
+            return;
         }
 
         Interlocked.Increment(ref item._activeSavesCount);
@@ -595,22 +606,14 @@ public sealed class ImageItem : INotifyPropertyChanged
         {
             try
             {
-                await ThumbnailCacheWriteLimiter.WaitAsync();
-                try
+                if (File.Exists(cachePath))
                 {
-                    if (File.Exists(cachePath))
-                    {
-                        item.SetThumbnailCacheState(cachePath, exists: true);
-                        return;
-                    }
-
-                    thumbnail.Save(cachePath, ThumbnailJpegQuality);
                     item.SetThumbnailCacheState(cachePath, exists: true);
+                    return;
                 }
-                finally
-                {
-                    ThumbnailCacheWriteLimiter.Release();
-                }
+
+                thumbnail.Save(cachePath, ThumbnailJpegQuality);
+                item.SetThumbnailCacheState(cachePath, exists: true);
             }
             catch (Exception ex)
             {
@@ -618,10 +621,7 @@ public sealed class ImageItem : INotifyPropertyChanged
             }
             finally
             {
-                lock (PendingThumbnailCacheWritesLock)
-                {
-                    PendingThumbnailCacheWrites.Remove(cachePath);
-                }
+                EndThumbnailCacheWrite(cachePath);
 
                 await Dispatcher.UIThread.InvokeAsync(() =>
                 {
@@ -629,6 +629,156 @@ public sealed class ImageItem : INotifyPropertyChanged
                 });
             }
         });
+    }
+
+    internal static bool TryQueueDeferredThumbnailCacheWrite(ImageItem item, string cachePath)
+    {
+        if (string.IsNullOrEmpty(cachePath))
+        {
+            return false;
+        }
+
+        if (File.Exists(cachePath))
+        {
+            item.SetThumbnailCacheState(cachePath, exists: true);
+            return false;
+        }
+
+        lock (PendingThumbnailCacheWritesLock)
+        {
+            if (!PendingThumbnailCacheWrites.Add(cachePath))
+            {
+                return false;
+            }
+
+            DeferredThumbnailCacheWrites.Enqueue(new DeferredThumbnailCacheWrite(
+                item,
+                cachePath,
+                item.GetThumbnailDecodeWidth()));
+        }
+
+        StartDeferredThumbnailCacheWriter();
+        return true;
+    }
+
+    internal static void SetDeferredThumbnailCacheWritePause(Func<bool>? isPaused)
+    {
+        DeferredThumbnailCacheWritesPaused = isPaused;
+    }
+
+    internal static void ResumeDeferredThumbnailCacheWrites()
+    {
+        StartDeferredThumbnailCacheWriter();
+    }
+
+    internal static bool TryBeginThumbnailCacheWrite(string cachePath)
+    {
+        // Intentional simplification: only one writer runs at a time. Busy misses
+        // are deferred by path so decoded bitmaps are not retained while waiting.
+        if (!ThumbnailCacheWriteLimiter.Wait(0))
+        {
+            return false;
+        }
+
+        lock (PendingThumbnailCacheWritesLock)
+        {
+            if (PendingThumbnailCacheWrites.Add(cachePath))
+            {
+                return true;
+            }
+        }
+
+        ThumbnailCacheWriteLimiter.Release();
+        return false;
+    }
+
+    internal static void EndThumbnailCacheWrite(string cachePath)
+    {
+        lock (PendingThumbnailCacheWritesLock)
+        {
+            PendingThumbnailCacheWrites.Remove(cachePath);
+        }
+
+        ThumbnailCacheWriteLimiter.Release();
+        StartDeferredThumbnailCacheWriter();
+    }
+
+    internal static void ClearDeferredThumbnailCacheWrites()
+    {
+        lock (PendingThumbnailCacheWritesLock)
+        {
+            while (DeferredThumbnailCacheWrites.TryDequeue(out var write))
+            {
+                PendingThumbnailCacheWrites.Remove(write.CachePath);
+            }
+        }
+    }
+
+    private static void StartDeferredThumbnailCacheWriter()
+    {
+        if (ShouldPauseDeferredThumbnailCacheWrites())
+        {
+            return;
+        }
+
+        if (!ThumbnailCacheWriteLimiter.Wait(0))
+        {
+            return;
+        }
+
+        if (!TryDequeueDeferredThumbnailCacheWrite(out var write))
+        {
+            ThumbnailCacheWriteLimiter.Release();
+            return;
+        }
+
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                if (File.Exists(write.CachePath))
+                {
+                    write.Item.SetThumbnailCacheState(write.CachePath, exists: true);
+                    return;
+                }
+
+                using var stream = File.OpenRead(write.Item.Path);
+                using var thumbnail = Bitmap.DecodeToWidth(
+                    stream,
+                    write.ThumbnailWidth,
+                    BitmapInterpolationMode.MediumQuality);
+                thumbnail.Save(write.CachePath, ThumbnailJpegQuality);
+                write.Item.SetThumbnailCacheState(write.CachePath, exists: true);
+            }
+            catch (Exception ex)
+            {
+                DebugLog.Write($"Failed to write deferred thumbnail cache for {write.Item.Path} to {write.CachePath}: {ex.Message}");
+            }
+            finally
+            {
+                EndThumbnailCacheWrite(write.CachePath);
+            }
+        });
+    }
+
+    private static bool ShouldPauseDeferredThumbnailCacheWrites()
+    {
+        try
+        {
+            return DeferredThumbnailCacheWritesPaused?.Invoke() == true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool TryDequeueDeferredThumbnailCacheWrite(out DeferredThumbnailCacheWrite write)
+    {
+        lock (PendingThumbnailCacheWritesLock)
+        {
+            return DeferredThumbnailCacheWrites.TryDequeue(out write);
+        }
     }
 
     private (string CachePath, bool Exists) GetThumbnailCacheState()
@@ -684,6 +834,11 @@ public sealed class ImageItem : INotifyPropertyChanged
             _hasThumbnailCacheState = true;
         }
     }
+
+    internal readonly record struct DeferredThumbnailCacheWrite(
+        ImageItem Item,
+        string CachePath,
+        int ThumbnailWidth);
 
 
     private bool SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)

@@ -21,6 +21,7 @@ public sealed class ThumbnailLoadCoordinator
     private int _generation;
     private int _viewportGeneration;
     private CancellationToken _currentToken;
+    public Action? VisibleWorkDrained { get; set; }
 
     public void Clear()
     {
@@ -146,7 +147,7 @@ public sealed class ThumbnailLoadCoordinator
             StartNextLocked(_visibleQueue, ThumbnailQueueKind.Visible);
         }
 
-        while (_visibleQueue.Count == 0 &&
+        while (!HasVisibleWorkLocked &&
                _aheadQueue.Count > 0 &&
                ActiveLoadCount < MaxActiveLoads &&
                _activeAheadLoads < MaxAheadLoads)
@@ -190,6 +191,7 @@ public sealed class ThumbnailLoadCoordinator
 
     private async Task RunLoadAsync(ImageItem item, ThumbnailQueueKind kind, CancellationToken token, int generation)
     {
+        Action? visibleWorkDrained = null;
         try
         {
             await item.LoadThumbnailAsync(token);
@@ -210,9 +212,15 @@ public sealed class ThumbnailLoadCoordinator
                     }
 
                     ProcessQueuesLocked();
+                    if (!HasVisibleWorkLocked)
+                    {
+                        visibleWorkDrained = VisibleWorkDrained;
+                    }
                 }
             }
         }
+
+        visibleWorkDrained?.Invoke();
     }
 
     private void RemoveQueuedItemsNotIn(LinkedList<ImageItem> queue, HashSet<ImageItem> retainedItems)
@@ -231,6 +239,7 @@ public sealed class ThumbnailLoadCoordinator
     }
 
     private int ActiveLoadCount => _activeVisibleLoads + _activeAheadLoads;
+    private bool HasVisibleWorkLocked => _visibleQueue.Count > 0 || _activeVisibleLoads > 0;
 
     private enum ThumbnailQueueKind
     {
