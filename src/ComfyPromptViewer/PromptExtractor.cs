@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using System.Xml.Linq;
 
@@ -9,6 +10,7 @@ namespace ComfyPromptViewer;
 public static class PromptExtractor
 {
     private static readonly string[] PositiveKeys = ["positive", "prompt", "text"];
+    private static readonly string[] ModelInputKeys = ["ckpt_name", "unet_name", "model_name", "checkpoint", "model"];
 
     public static ExtractedPromptMetadata ExtractAll(Dictionary<string, string> metadata)
     {
@@ -112,10 +114,11 @@ public static class PromptExtractor
                 return new ComfyPromptMetadata();
             }
 
-            var nodes = document.RootElement.EnumerateObject().ToDictionary(
-                property => property.Name,
-                property => property.Value.Clone(),
-                StringComparer.OrdinalIgnoreCase);
+            var nodes = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                nodes[property.Name] = property.Value;
+            }
 
             var prompt = "";
             var negativePrompt = "";
@@ -123,7 +126,7 @@ public static class PromptExtractor
 
             foreach (var node in nodes.Values)
             {
-                if (!HasClassType(node, "KSampler", "KSamplerAdvanced"))
+                if (!IsKSamplerNode(node))
                 {
                     continue;
                 }
@@ -161,9 +164,16 @@ public static class PromptExtractor
 
             if (string.IsNullOrWhiteSpace(negativePrompt))
             {
-                negativePrompt = LongestPromptLike(nodes.Values
-                    .Where(NodeLooksNegative)
-                    .Select(ExtractTextFromNode));
+                var bestNegativePrompt = "";
+                foreach (var node in nodes.Values)
+                {
+                    if (NodeLooksNegative(node))
+                    {
+                        KeepBestPromptLike(ref bestNegativePrompt, ExtractTextFromNode(node));
+                    }
+                }
+
+                negativePrompt = bestNegativePrompt;
             }
 
             return new ComfyPromptMetadata
@@ -199,12 +209,13 @@ public static class PromptExtractor
         ]);
 
         var loras = new List<string>();
-        foreach (var key in values.Keys)
+        foreach (var entry in values)
         {
+            var key = entry.Key;
             if (key.StartsWith("LoRA Model", StringComparison.OrdinalIgnoreCase))
             {
                 var suffix = key.Substring("LoRA Model".Length);
-                var modelName = values[key];
+                var modelName = entry.Value;
                 var weightKey = "LoRA Weight" + suffix;
                 if (values.TryGetValue(weightKey, out var weightVal))
                 {
@@ -298,9 +309,16 @@ public static class PromptExtractor
 
     private static string FindBestTextInput(IEnumerable<JsonElement> nodes)
     {
-        return LongestPromptLike(nodes
-            .Where(node => !NodeLooksNegative(node))
-            .Select(ExtractTextFromNode));
+        var best = "";
+        foreach (var node in nodes)
+        {
+            if (!NodeLooksNegative(node))
+            {
+                KeepBestPromptLike(ref best, ExtractTextFromNode(node));
+            }
+        }
+
+        return best;
     }
 
     private static string ExtractTextFromNode(JsonElement node)
@@ -318,9 +336,16 @@ public static class PromptExtractor
             }
         }
 
-        return LongestPromptLike(inputs.EnumerateObject()
-            .Where(property => property.Value.ValueKind == JsonValueKind.String)
-            .Select(property => property.Value.GetString() ?? ""));
+        var best = "";
+        foreach (var property in inputs.EnumerateObject())
+        {
+            if (property.Value.ValueKind == JsonValueKind.String)
+            {
+                KeepBestPromptLike(ref best, property.Value.GetString() ?? "");
+            }
+        }
+
+        return best;
     }
 
     private static void AddWorkflowCandidates(JsonElement node, List<string> candidates)
@@ -358,7 +383,23 @@ public static class PromptExtractor
 
     private static string BuildSettingsSummary(IEnumerable<string> settings)
     {
-        return string.Join(", ", settings.Where(setting => !string.IsNullOrWhiteSpace(setting)));
+        var builder = new StringBuilder();
+        foreach (var setting in settings)
+        {
+            if (string.IsNullOrWhiteSpace(setting))
+            {
+                continue;
+            }
+
+            if (builder.Length > 0)
+            {
+                builder.Append(", ");
+            }
+
+            builder.Append(setting);
+        }
+
+        return builder.ToString();
     }
 
     private static string FormatSetting(string label, string? value)
@@ -373,20 +414,28 @@ public static class PromptExtractor
         var lastLineStart = parameters.LastIndexOf('\n');
         var settingsLine = lastLineStart >= 0 ? parameters[(lastLineStart + 1)..] : parameters;
 
-        foreach (var part in settingsLine.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        var start = 0;
+        while (start < settingsLine.Length)
         {
-            var separator = part.IndexOf(':');
-            if (separator <= 0 || separator >= part.Length - 1)
+            var nextComma = settingsLine.IndexOf(',', start);
+            if (nextComma < 0)
             {
-                continue;
+                nextComma = settingsLine.Length;
             }
 
-            var key = part[..separator].Trim();
-            var value = part[(separator + 1)..].Trim();
-            if (!string.IsNullOrWhiteSpace(key) && !string.IsNullOrWhiteSpace(value))
+            var part = settingsLine.AsSpan(start, nextComma - start).Trim();
+            var separator = part.IndexOf(':');
+            if (separator > 0 && separator < part.Length - 1)
             {
-                values[key] = value;
+                var key = part[..separator].Trim();
+                var value = part[(separator + 1)..].Trim();
+                if (!key.IsEmpty && !value.IsEmpty)
+                {
+                    values[key.ToString()] = value.ToString();
+                }
             }
+
+            start = nextComma + 1;
         }
 
         return values;
@@ -412,7 +461,7 @@ public static class PromptExtractor
             return null;
         }
 
-        foreach (var key in new[] { "ckpt_name", "unet_name", "model_name", "checkpoint", "model" })
+        foreach (var key in ModelInputKeys)
         {
             if (inputs.TryGetProperty(key, out var value) && value.ValueKind == JsonValueKind.String)
             {
@@ -467,11 +516,17 @@ public static class PromptExtractor
         return !string.IsNullOrWhiteSpace(linkedNodeId);
     }
 
-    private static bool HasClassType(JsonElement node, params string[] classTypes)
+    private static bool IsKSamplerNode(JsonElement node)
     {
-        return node.TryGetProperty("class_type", out var classType) &&
-            classType.ValueKind == JsonValueKind.String &&
-            classTypes.Any(type => string.Equals(type, classType.GetString(), StringComparison.OrdinalIgnoreCase));
+        if (!node.TryGetProperty("class_type", out var classType) ||
+            classType.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        var value = classType.GetString();
+        return string.Equals(value, "KSampler", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(value, "KSamplerAdvanced", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool NodeLooksNegative(JsonElement node)
@@ -485,14 +540,19 @@ public static class PromptExtractor
         var best = "";
         foreach (var value in values)
         {
-            var cleaned = CleanCandidate(value);
-            if (cleaned.Length > best.Length && IsPromptLike(cleaned))
-            {
-                best = cleaned;
-            }
+            KeepBestPromptLike(ref best, value);
         }
 
         return best;
+    }
+
+    private static void KeepBestPromptLike(ref string best, string value)
+    {
+        var cleaned = CleanCandidate(value);
+        if (cleaned.Length > best.Length && IsPromptLike(cleaned))
+        {
+            best = cleaned;
+        }
     }
 
     private static string CleanCandidate(string value)

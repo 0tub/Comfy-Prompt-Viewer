@@ -1,9 +1,10 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
-using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
@@ -59,16 +60,63 @@ public sealed class ImageItem : INotifyPropertyChanged
 
     private static string HashText(string value)
     {
-        var hashBytes = System.Security.Cryptography.MD5.HashData(System.Text.Encoding.UTF8.GetBytes(value));
-        return Convert.ToHexString(hashBytes).ToLowerInvariant();
+        var byteCount = Encoding.UTF8.GetByteCount(value);
+        byte[]? rentedBytes = null;
+        Span<byte> bytes = byteCount <= 1024
+            ? stackalloc byte[byteCount]
+            : (rentedBytes = ArrayPool<byte>.Shared.Rent(byteCount));
+
+        bytes = bytes[..byteCount];
+        try
+        {
+            Encoding.UTF8.GetBytes(value, bytes);
+            Span<byte> hashBytes = stackalloc byte[16];
+            System.Security.Cryptography.MD5.HashData(bytes, hashBytes);
+
+            const string hex = "0123456789abcdef";
+            Span<char> chars = stackalloc char[32];
+            for (var index = 0; index < hashBytes.Length; index++)
+            {
+                var valueByte = hashBytes[index];
+                chars[index * 2] = hex[valueByte >> 4];
+                chars[(index * 2) + 1] = hex[valueByte & 0xF];
+            }
+
+            return new string(chars);
+        }
+        finally
+        {
+            if (rentedBytes is not null)
+            {
+                ArrayPool<byte>.Shared.Return(rentedBytes, clearArray: true);
+            }
+        }
     }
 
     private static string MakeSafePathSegment(string value)
     {
-        var invalidChars = System.IO.Path.GetInvalidFileNameChars();
-        var chars = value.Select(character => invalidChars.Contains(character) ? '_' : character).ToArray();
-        var safeValue = new string(chars).Trim();
-        return string.IsNullOrWhiteSpace(safeValue) ? "folder" : safeValue;
+        var safeValue = value.Trim();
+        if (safeValue.Length == 0)
+        {
+            return "folder";
+        }
+
+        var firstInvalidIndex = safeValue.IndexOfAny(InvalidFileNameChars);
+        if (firstInvalidIndex < 0)
+        {
+            return safeValue;
+        }
+
+        var chars = safeValue.ToCharArray();
+        for (var index = firstInvalidIndex; index < chars.Length; index++)
+        {
+            if (Array.IndexOf(InvalidFileNameChars, chars[index]) >= 0)
+            {
+                chars[index] = '_';
+            }
+        }
+
+        return new string(chars);
     }
 
     private const int SmallThumbnailWidth = 180;
@@ -76,6 +124,7 @@ public sealed class ImageItem : INotifyPropertyChanged
     private const int LargeThumbnailWidth = 320;
     private const int ThumbnailJpegQuality = 82;
     private const int SelectedPreviewMaxWidth = 1200;
+    private static readonly char[] InvalidFileNameChars = System.IO.Path.GetInvalidFileNameChars();
     private static readonly SemaphoreSlim ThumbnailCacheWriteLimiter = new(1);
     private static readonly SemaphoreSlim SelectedPreviewLoadLimiter = new(1);
     private static readonly object PendingThumbnailCacheWritesLock = new();
@@ -118,18 +167,6 @@ public sealed class ImageItem : INotifyPropertyChanged
 
     public string Path { get; }
     public string FileName { get; }
-
-    public static void ResolveThumbnailCacheStates(IEnumerable<ImageItem> items)
-    {
-        var seenItems = new HashSet<ImageItem>();
-        foreach (var item in items)
-        {
-            if (seenItems.Add(item))
-            {
-                item.RefreshThumbnailCacheState();
-            }
-        }
-    }
 
     public string CreationDateText
     {
@@ -374,10 +411,7 @@ public sealed class ImageItem : INotifyPropertyChanged
             return;
         }
 
-        if (!ImageCache.Remove(this))
-        {
-            return;
-        }
+        ImageCache.Remove(this);
 
         if (Preview is not null)
         {
@@ -512,7 +546,6 @@ public sealed class ImageItem : INotifyPropertyChanged
         }
         catch (OperationCanceledException)
         {
-            // Clean exit when folder loading or viewport work is cancelled.
         }
         catch (Exception ex)
         {

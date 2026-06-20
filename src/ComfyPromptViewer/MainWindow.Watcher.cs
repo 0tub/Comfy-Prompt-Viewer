@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Threading;
@@ -139,8 +138,8 @@ public partial class MainWindow
 
         lock (_watcherLock)
         {
-            added = _pendingAddedFiles.ToList();
-            deleted = _pendingDeletedFiles.ToList();
+            added = new List<string>(_pendingAddedFiles);
+            deleted = new List<string>(_pendingDeletedFiles);
             _pendingAddedFiles.Clear();
             _pendingDeletedFiles.Clear();
         }
@@ -154,7 +153,6 @@ public partial class MainWindow
     {
         bool changed = false;
 
-        // 1. Process deletions
         if (deletedPaths.Count > 0)
         {
             var deletedSet = new HashSet<string>(deletedPaths, StringComparer.OrdinalIgnoreCase);
@@ -182,26 +180,29 @@ public partial class MainWindow
             }
         }
 
-        // 2. Process additions
-        var newItems = new List<ImageItem>();
-        var existingPaths = new HashSet<string>(_allImagePaths, StringComparer.OrdinalIgnoreCase);
-        foreach (var path in addedPaths)
+        List<ImageItem>? newItems = null;
+        if (addedPaths.Count > 0)
         {
-            if (!File.Exists(path)) continue;
-            if (!existingPaths.Add(path)) continue;
+            newItems = new List<ImageItem>(addedPaths.Count);
+            var existingPaths = new HashSet<string>(_allImagePaths, StringComparer.OrdinalIgnoreCase);
+            foreach (var path in addedPaths)
+            {
+                if (!File.Exists(path)) continue;
+                if (!existingPaths.Add(path)) continue;
 
-            _allImagePaths.Add(path);
-            var item = CreateImageItem(path);
-            _allImageItems.Add(item);
-            newItems.Add(item);
-            changed = true;
+                _allImagePaths.Add(path);
+                var item = CreateImageItem(path);
+                _allImageItems.Add(item);
+                newItems.Add(item);
+                changed = true;
+            }
         }
 
         if (changed)
         {
             ApplySort();
 
-            if (newItems.Count > 0)
+            if (newItems is { Count: > 0 })
             {
                 ScanNewItemsMetadata(newItems);
             }
@@ -219,6 +220,9 @@ public partial class MainWindow
         {
             try
             {
+                var lastRefreshTime = DateTime.UtcNow;
+                var refreshLock = new object();
+
                 await Parallel.ForEachAsync(newItems, new ParallelOptions
                 {
                     MaxDegreeOfParallelism = 2,
@@ -231,13 +235,27 @@ public partial class MainWindow
                         await item.EnsureMetadataLoadedAsync(cancellationToken);
                         if (HasSearchQueryActive())
                         {
-                            Dispatcher.UIThread.Post(() =>
+                            var now = DateTime.UtcNow;
+                            var shouldRefresh = false;
+                            lock (refreshLock)
                             {
-                                if (!token.IsCancellationRequested && scannerGeneration == _scannerGeneration)
+                                if ((now - lastRefreshTime).TotalMilliseconds > 1000)
                                 {
-                                    ApplyFilter(resetScroll: false);
+                                    lastRefreshTime = now;
+                                    shouldRefresh = true;
                                 }
-                            });
+                            }
+
+                            if (shouldRefresh)
+                            {
+                                Dispatcher.UIThread.Post(() =>
+                                {
+                                    if (!token.IsCancellationRequested && scannerGeneration == _scannerGeneration)
+                                    {
+                                        ApplyFilter(resetScroll: false);
+                                    }
+                                });
+                            }
                         }
                     }
                     catch (OperationCanceledException) {}
@@ -246,6 +264,17 @@ public partial class MainWindow
                         DebugLog.Write($"Failed to scan metadata for watcher-added file {item.Path}: {ex}");
                     }
                 });
+
+                if (HasSearchQueryActive())
+                {
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        if (!token.IsCancellationRequested && scannerGeneration == _scannerGeneration)
+                        {
+                            ApplyFilter(resetScroll: false);
+                        }
+                    });
+                }
             }
             catch (OperationCanceledException)
             {

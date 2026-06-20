@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using System.Linq;
 using Avalonia.Threading;
 
 namespace ComfyPromptViewer;
@@ -53,7 +52,7 @@ public static class ImageCache
         }
     }
 
-    public static bool Remove(ImageItem item)
+    public static void Remove(ImageItem item)
     {
         lock (_lock)
         {
@@ -65,8 +64,6 @@ public static class ImageCache
                 }
                 item.CacheNode = null;
             }
-
-            return true;
         }
     }
 
@@ -75,9 +72,10 @@ public static class ImageCache
         List<ImageItem> itemsToRelease;
         lock (_lock)
         {
-            itemsToRelease = _lruList.ToList();
-            foreach (var item in itemsToRelease)
+            itemsToRelease = new List<ImageItem>(_lruList.Count);
+            foreach (var item in _lruList)
             {
+                itemsToRelease.Add(item);
                 item.CacheNode = null;
             }
             _lruList.Clear();

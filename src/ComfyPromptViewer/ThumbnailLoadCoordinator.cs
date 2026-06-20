@@ -42,9 +42,6 @@ public sealed class ThumbnailLoadCoordinator
         IReadOnlyList<ImageItem> aheadItems,
         CancellationToken token)
     {
-        var visibleSnapshot = new List<ImageItem>(visibleItems);
-        var aheadSnapshot = new List<ImageItem>(aheadItems);
-
         lock (_lock)
         {
             _currentToken = token;
@@ -54,8 +51,12 @@ public sealed class ThumbnailLoadCoordinator
                 return;
             }
 
-            var retainedItems = new HashSet<ImageItem>(visibleSnapshot);
-            foreach (var item in aheadSnapshot)
+            var retainedItems = new HashSet<ImageItem>(visibleItems.Count + aheadItems.Count);
+            foreach (var item in visibleItems)
+            {
+                retainedItems.Add(item);
+            }
+            foreach (var item in aheadItems)
             {
                 retainedItems.Add(item);
             }
@@ -63,12 +64,12 @@ public sealed class ThumbnailLoadCoordinator
             RemoveQueuedItemsNotIn(_visibleQueue, retainedItems);
             RemoveQueuedItemsNotIn(_aheadQueue, retainedItems);
 
-            foreach (var item in visibleSnapshot)
+            foreach (var item in visibleItems)
             {
                 EnqueueLocked(item, ThumbnailQueueKind.Visible);
             }
 
-            foreach (var item in aheadSnapshot)
+            foreach (var item in aheadItems)
             {
                 EnqueueLocked(item, ThumbnailQueueKind.Ahead);
             }
@@ -84,6 +85,17 @@ public sealed class ThumbnailLoadCoordinator
             _currentToken = token;
             EnqueueLocked(item, ThumbnailQueueKind.Visible);
             ProcessQueuesLocked();
+        }
+    }
+
+    public bool HasVisibleWork
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _visibleQueue.Count > 0 || _activeVisibleLoads > 0;
+            }
         }
     }
 

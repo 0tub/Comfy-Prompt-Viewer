@@ -262,7 +262,6 @@ public partial class MainWindow
         {
             var scale = _largePreviewZoom ?? (TryGetLargePreviewFitScale(bitmap, out var fitScale) ? fitScale : 1.0);
             
-            // Adjust the display scale relative to the actual image dimensions if available
             double actualZoom = scale;
             if (_selectedItem.Width > 0 && bitmap.PixelSize.Width > 0)
             {

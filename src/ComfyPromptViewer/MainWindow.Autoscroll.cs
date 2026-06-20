@@ -38,10 +38,8 @@ public partial class MainWindow
             _capturedPointer = e.Pointer;
             _capturedPointer.Capture(GalleryScrollViewer);
 
-            // Change cursor to vertical scroll shape
             this.Cursor = new Cursor(StandardCursorType.SizeNorthSouth);
 
-            // Start animation loop
             _isFirstFrame = true;
             RequestNextScrollFrame();
 
@@ -76,7 +74,6 @@ public partial class MainWindow
         double rawDt = (time - _lastFrameTime).TotalSeconds;
         _lastFrameTime = time;
 
-        // Clamp rawDt to avoid frame jumps when the window is suspended/resized
         if (rawDt <= 0 || rawDt > 0.1)
         {
             return;
@@ -91,16 +88,12 @@ public partial class MainWindow
         if (absDeltaY >= 12)
         {
             double distance = absDeltaY - 12;
-            // Windows-style non-linear momentum speed curve (distance ^ 1.5)
             targetVelocity = Math.Sign(deltaY) * Math.Pow(distance, 1.5) * 4.0;
         }
 
-        // Smoothly ease the velocity towards the target velocity using LERP with exponential decay.
-        // Easing factor of 12.0 gives a very responsive yet smooth momentum transition
         double easeAmount = 1.0 - Math.Exp(-12.0 * dt);
         _smoothedVelocity = Lerp(_smoothedVelocity, targetVelocity, easeAmount);
 
-        // If the velocity is extremely small and target is 0, clip to 0 to prevent micro-drifts
         if (targetVelocity == 0 && Math.Abs(_smoothedVelocity) < 0.5)
         {
             _smoothedVelocity = 0;
@@ -183,10 +176,8 @@ public partial class MainWindow
             _capturedPointer?.Capture(null);
             _capturedPointer = null;
 
-            // Restore standard cursor
             this.Cursor = null;
 
-            // Reset smoothing values
             _smoothedVelocity = 0;
             Array.Clear(_dtHistory, 0, _dtHistory.Length);
         }

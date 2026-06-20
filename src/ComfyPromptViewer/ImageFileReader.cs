@@ -13,6 +13,7 @@ public static class ImageFileReader
     private const int MaxTextChunkBytes = 16 * 1024 * 1024;
     private const ushort ExifIfdPointerTag = 0x8769;
     private const ushort UserCommentTag = 0x9286;
+    private static readonly Encoding StrictUtf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
     public static bool IsSupportedImage(string path)
     {
@@ -81,14 +82,13 @@ public static class ImageFileReader
         var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var width = 0;
         var height = 0;
+        Span<byte> typeBytes = stackalloc byte[4];
+        Span<byte> ihdrData = stackalloc byte[13];
 
         while (stream.Position < stream.Length)
         {
             var length = ReadUInt32BigEndian(stream);
-            var typeBuffer = new byte[4];
-            Span<byte> typeBytes = typeBuffer;
             ReadExactly(stream, typeBytes);
-            var type = Encoding.ASCII.GetString(typeBytes);
 
             if (length > int.MaxValue)
             {
@@ -97,64 +97,59 @@ public static class ImageFileReader
 
             var dataLength = checked((int)length);
 
-            switch (type)
+            if (typeBytes.SequenceEqual("IHDR"u8))
             {
-                case "IHDR":
+                if (dataLength != 13)
                 {
-                    if (dataLength != 13)
-                    {
-                        throw new InvalidDataException("Invalid PNG header chunk.");
-                    }
-
-                    Span<byte> data = stackalloc byte[13];
-                    ReadExactly(stream, data);
-                    SkipCrc(stream);
-                    width = ReadInt32BigEndian(data[..4]);
-                    height = ReadInt32BigEndian(data.Slice(4, 4));
-                    break;
+                    throw new InvalidDataException("Invalid PNG header chunk.");
                 }
-                case "tEXt":
+
+                ReadExactly(stream, ihdrData);
+                SkipCrc(stream);
+                width = ReadInt32BigEndian(ihdrData[..4]);
+                height = ReadInt32BigEndian(ihdrData.Slice(4, 4));
+            }
+            else if (typeBytes.SequenceEqual("tEXt"u8))
+            {
+                if (dataLength > MaxTextChunkBytes)
                 {
-                    if (dataLength > MaxTextChunkBytes)
-                    {
-                        throw new InvalidDataException("PNG text chunk is too large.");
-                    }
-
-                    var data = ReadChunkData(stream, dataLength);
-                    SkipCrc(stream);
-                    ReadTextChunk(data, metadata);
-                    break;
+                    throw new InvalidDataException("PNG text chunk is too large.");
                 }
-                case "iTXt":
+
+                var data = ReadChunkData(stream, dataLength);
+                SkipCrc(stream);
+                ReadTextChunk(data, metadata);
+            }
+            else if (typeBytes.SequenceEqual("iTXt"u8))
+            {
+                if (dataLength > MaxTextChunkBytes)
                 {
-                    if (dataLength > MaxTextChunkBytes)
-                    {
-                        throw new InvalidDataException("PNG text chunk is too large.");
-                    }
-
-                    var data = ReadChunkData(stream, dataLength);
-                    SkipCrc(stream);
-                    ReadInternationalTextChunk(data, metadata);
-                    break;
+                    throw new InvalidDataException("PNG text chunk is too large.");
                 }
-                case "zTXt":
+
+                var data = ReadChunkData(stream, dataLength);
+                SkipCrc(stream);
+                ReadInternationalTextChunk(data, metadata);
+            }
+            else if (typeBytes.SequenceEqual("zTXt"u8))
+            {
+                if (dataLength > MaxTextChunkBytes)
                 {
-                    if (dataLength > MaxTextChunkBytes)
-                    {
-                        throw new InvalidDataException("PNG text chunk is too large.");
-                    }
-
-                    var data = ReadChunkData(stream, dataLength);
-                    SkipCrc(stream);
-                    ReadCompressedTextChunk(data, metadata);
-                    break;
+                    throw new InvalidDataException("PNG text chunk is too large.");
                 }
-                case "IEND":
-                    SkipChunk(stream, dataLength);
-                    return new ImageReadResult(width, height, metadata);
-                default:
-                    SkipChunk(stream, dataLength);
-                    break;
+
+                var data = ReadChunkData(stream, dataLength);
+                SkipCrc(stream);
+                ReadCompressedTextChunk(data, metadata);
+            }
+            else if (typeBytes.SequenceEqual("IEND"u8))
+            {
+                SkipChunk(stream, dataLength);
+                return new ImageReadResult(width, height, metadata);
+            }
+            else
+            {
+                SkipChunk(stream, dataLength);
             }
         }
 
@@ -250,7 +245,7 @@ public static class ImageFileReader
     {
         Span<byte> header = stackalloc byte[12];
         ReadExactly(stream, header);
-        if (Encoding.ASCII.GetString(header[..4]) != "RIFF" || Encoding.ASCII.GetString(header[8..12]) != "WEBP")
+        if (!header[..4].SequenceEqual("RIFF"u8) || !header[8..12].SequenceEqual("WEBP"u8))
         {
             throw new InvalidDataException("Invalid WebP signature.");
         }
@@ -263,39 +258,41 @@ public static class ImageFileReader
         while (stream.Position + 8 <= stream.Length)
         {
             ReadExactly(stream, chunkHeader);
-            var type = Encoding.ASCII.GetString(chunkHeader[..4]);
+            var type = chunkHeader[..4];
             var dataLength = ReadInt32LittleEndian(chunkHeader[4..8]);
             if (dataLength < 0)
             {
                 throw new InvalidDataException("Invalid WebP chunk length.");
             }
 
-            switch (type)
+            if (type.SequenceEqual("VP8X"u8))
             {
-                case "VP8X":
-                    (width, height) = ReadWebPExtended(stream, dataLength);
-                    break;
-                case "VP8L":
-                    (width, height) = ReadWebPLossless(stream, dataLength);
-                    break;
-                case "VP8 ":
-                    (width, height) = ReadWebPLossy(stream, dataLength);
-                    break;
-                case "EXIF":
-                    if (dataLength <= MaxTextChunkBytes)
-                    {
-                        var data = ReadChunkData(stream, dataLength);
-                        ReadExifMetadata(data, metadata);
-                        SkipRiffChunkTail(stream, dataLength, data.Length);
-                    }
-                    else
-                    {
-                        SkipRiffChunk(stream, dataLength);
-                    }
-                    break;
-                default:
+                (width, height) = ReadWebPExtended(stream, dataLength);
+            }
+            else if (type.SequenceEqual("VP8L"u8))
+            {
+                (width, height) = ReadWebPLossless(stream, dataLength);
+            }
+            else if (type.SequenceEqual("VP8 "u8))
+            {
+                (width, height) = ReadWebPLossy(stream, dataLength);
+            }
+            else if (type.SequenceEqual("EXIF"u8))
+            {
+                if (dataLength <= MaxTextChunkBytes)
+                {
+                    var data = ReadChunkData(stream, dataLength);
+                    ReadExifMetadata(data, metadata);
+                    SkipRiffChunkTail(stream, dataLength, data.Length);
+                }
+                else
+                {
                     SkipRiffChunk(stream, dataLength);
-                    break;
+                }
+            }
+            else
+            {
+                SkipRiffChunk(stream, dataLength);
             }
         }
 
@@ -637,7 +634,7 @@ public static class ImageFileReader
 
         try
         {
-            return TrimMetadataText(new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true).GetString(data));
+            return TrimMetadataText(StrictUtf8.GetString(data));
         }
         catch (DecoderFallbackException)
         {

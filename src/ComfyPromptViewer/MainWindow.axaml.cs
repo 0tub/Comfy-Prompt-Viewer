@@ -29,6 +29,8 @@ public partial class MainWindow : Window
     private const double WheelScrollRowsPerNotch = 1.7;
     private const double MinWheelScrollPixels = 180;
     private const double MaxWheelViewportRatio = 0.58;
+    private static readonly TimeSpan InitialMetadataScannerPollInterval = TimeSpan.FromMilliseconds(100);
+    private const int InitialMetadataScannerMaxPolls = 15;
     private readonly GalleryViewModel _viewModel = new();
     private readonly ThumbnailLoadCoordinator _thumbnailLoads = new();
     private readonly List<string> _allImagePaths = [];
@@ -48,7 +50,6 @@ public partial class MainWindow : Window
     private double _tileItemExtent;
     private bool _isInitializing = true;
     private bool _isViewportThumbnailScheduleQueued;
-    // Row direction is enough for bounded prefetch; use velocity history if long fling prediction is needed.
     private int _lastPrefetchFirstVisibleRow = -1;
     private int _prefetchDirection = 1;
     private volatile bool _hasSearchQueryActive;
@@ -209,9 +210,6 @@ public partial class MainWindow : Window
         {
             var imagePaths = await Task.Run(() => EnumerateImagePaths(folderPath, includeSubfolders, token)
                 .Where(ImageFileReader.IsSupportedImage)
-                .Select(path => new FileInfo(path))
-                .OrderByDescending(info => info.LastWriteTimeUtc)
-                .Select(info => info.FullName)
                 .ToList(), token);
 
             if (token.IsCancellationRequested || loadGeneration != _loadGeneration)
@@ -240,7 +238,6 @@ public partial class MainWindow : Window
                 _allImageItems.Add(CreateImageItem(path));
             }
 
-            StartMetadataScanner(_allImageItems);
             ApplyFilter(resetScroll: true);
             QueueViewportThumbnailSchedule();
 
@@ -254,6 +251,7 @@ public partial class MainWindow : Window
             }
 
             StartFolderWatcher(folderPath, includeSubfolders);
+            QueueInitialMetadataScanner(loadGeneration);
         }
         catch (OperationCanceledException)
         {
@@ -388,7 +386,9 @@ public partial class MainWindow : Window
 
     private void SetTileSize(double tileSize, bool persist)
     {
-        _targetTileSize = Math.Clamp(RoundToTileStep(tileSize), MinTileSize, MaxTileSize);
+        var targetTileSize = Math.Clamp(RoundToTileStep(tileSize), MinTileSize, MaxTileSize);
+        var tileSizeChanged = Math.Abs(_targetTileSize - targetTileSize) > 0.1;
+        _targetTileSize = targetTileSize;
 
         if (Math.Abs(TileSizeSlider.Value - _targetTileSize) > 0.1)
         {
@@ -397,9 +397,12 @@ public partial class MainWindow : Window
             _isInitializing = false;
         }
 
-        ApplyTileLayout();
+        if (tileSizeChanged)
+        {
+            ApplyTileLayout();
+        }
 
-        if (persist)
+        if (persist && tileSizeChanged)
         {
             UserPreferences.SaveTileSize(_targetTileSize);
         }
@@ -437,32 +440,61 @@ public partial class MainWindow : Window
 
     private void ApplySort()
     {
-        var sortedPaths = (_sortMode switch
+        if (_sortMode == SortMode.Name)
         {
-            SortMode.Name => _allImagePaths
-                .OrderBy(Path.GetFileName, StringComparer.CurrentCultureIgnoreCase)
-                .ThenBy(path => path, StringComparer.CurrentCultureIgnoreCase),
-            SortMode.OldestFirst => _allImagePaths
-                .Select(path => new FileInfo(path))
-                .OrderBy(info => info.LastWriteTimeUtc)
-                .Select(info => info.FullName),
-            _ => _allImagePaths
-                .Select(path => new FileInfo(path))
-                .OrderByDescending(info => info.LastWriteTimeUtc)
-                .Select(info => info.FullName)
-        }).ToList();
+            _allImagePaths.Sort(CompareImagePathNames);
+        }
+        else
+        {
+            var lastWriteTimes = new Dictionary<string, DateTime>(_allImagePaths.Count, StringComparer.OrdinalIgnoreCase);
+            var originalOrder = new Dictionary<string, int>(_allImagePaths.Count, StringComparer.OrdinalIgnoreCase);
+            for (var index = 0; index < _allImagePaths.Count; index++)
+            {
+                var path = _allImagePaths[index];
+                lastWriteTimes[path] = File.GetLastWriteTimeUtc(path);
+                originalOrder[path] = index;
+            }
 
-        _allImagePaths.Clear();
-        _allImagePaths.AddRange(sortedPaths);
+            var descending = _sortMode == SortMode.NewestFirst;
+            _allImagePaths.Sort((left, right) => CompareImagePathDates(left, right, lastWriteTimes, originalOrder, descending));
+        }
 
         if (_allImageItems.Count > 1)
         {
-            var sortOrder = sortedPaths
-                .Select((path, index) => new { path, index })
-                .ToDictionary(entry => entry.path, entry => entry.index, StringComparer.OrdinalIgnoreCase);
+            var sortOrder = new Dictionary<string, int>(_allImagePaths.Count, StringComparer.OrdinalIgnoreCase);
+            for (var index = 0; index < _allImagePaths.Count; index++)
+            {
+                sortOrder[_allImagePaths[index]] = index;
+            }
 
             _allImageItems.Sort((left, right) => sortOrder[left.Path].CompareTo(sortOrder[right.Path]));
         }
+    }
+
+    private static int CompareImagePathNames(string left, string right)
+    {
+        var fileNameCompare = StringComparer.CurrentCultureIgnoreCase.Compare(Path.GetFileName(left), Path.GetFileName(right));
+        return fileNameCompare != 0
+            ? fileNameCompare
+            : StringComparer.CurrentCultureIgnoreCase.Compare(left, right);
+    }
+
+    private static int CompareImagePathDates(
+        string left,
+        string right,
+        Dictionary<string, DateTime> lastWriteTimes,
+        Dictionary<string, int> originalOrder,
+        bool descending)
+    {
+        var compare = lastWriteTimes[left].CompareTo(lastWriteTimes[right]);
+        if (descending)
+        {
+            compare = -compare;
+        }
+
+        return compare != 0
+            ? compare
+            : originalOrder[left].CompareTo(originalOrder[right]);
     }
 
     private void GalleryItem_PointerPressed(object? sender, PointerPressedEventArgs e)
@@ -486,9 +518,6 @@ public partial class MainWindow : Window
             return;
         }
 
-        // When the large preview is open, let Enter/Space bubble up to
-        // OnKeyDown so it closes the preview for the *currently selected*
-        // item instead of re-selecting the card that still has keyboard focus.
         if (LargePreviewOverlay.IsVisible)
         {
             return;
@@ -507,8 +536,6 @@ public partial class MainWindow : Window
         var windowWidth = e.NewSize.Width;
         var windowHeight = e.NewSize.Height;
 
-        // 1. Adjust sidebar width: scale between 260 and 380 based on window width.
-        // We will make it 30% of window width, clamped between 260 and 380.
         double targetSidebarWidth = Math.Clamp(windowWidth * 0.3, 260, 380);
         
         if (MainGrid != null && MainGrid.ColumnDefinitions.Count > 1)
@@ -516,8 +543,6 @@ public partial class MainWindow : Window
             MainGrid.ColumnDefinitions[1].Width = new GridLength(targetSidebarWidth, GridUnitType.Pixel);
         }
 
-        // 2. Adjust sidebar image preview height: scale between 180 and 350 based on window height.
-        // We will make it 40% of window height, clamped between 180 and 350.
         double targetImageHeight = Math.Clamp(windowHeight * 0.4, 180, 350);
 
         if (SidebarContent != null && SidebarContent.RowDefinitions.Count > 0)
@@ -535,10 +560,6 @@ public partial class MainWindow : Window
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
-        // When the large preview overlay is open, handle navigation and
-        // dismiss keys *before* base.OnKeyDown so that Avalonia's built-in
-        // focus navigation doesn't consume arrow keys without updating
-        // _selectedItem.
         if (LargePreviewOverlay.IsVisible)
         {
             if (e.Key is Key.Escape or Key.Enter or Key.Space)
@@ -610,6 +631,11 @@ public partial class MainWindow : Window
     private static bool IsTextInputFocused(object? source)
     {
         return source is TextBox;
+    }
+
+    private static bool IsGalleryNavigationKey(Key key)
+    {
+        return key is Key.Left or Key.Right or Key.Up or Key.Down or Key.Home or Key.End or Key.PageUp or Key.PageDown;
     }
 
     private bool ShowLargePreviewIfSelected()
@@ -776,9 +802,9 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
-    private void QueueViewportThumbnailSchedule()
+    private void QueueViewportThumbnailSchedule(bool force = false)
     {
-        if (_isViewportThumbnailScheduleQueued)
+        if (_isViewportThumbnailScheduleQueued && !force)
         {
             return;
         }
@@ -806,15 +832,14 @@ public partial class MainWindow : Window
             return;
         }
 
-        var visibleItems = new List<ImageItem>();
-        var aheadItems = new List<ImageItem>();
-
         var itemExtent = Math.Max(1, _tileItemExtent);
         var viewportWidth = GalleryScrollViewer.Viewport.Width > 0 ? GalleryScrollViewer.Viewport.Width : Bounds.Width;
         var viewportHeight = GalleryScrollViewer.Viewport.Height > 0 ? GalleryScrollViewer.Viewport.Height : Bounds.Height;
         var columnCount = Math.Max(1, (int)Math.Floor(Math.Max(itemExtent, viewportWidth) / itemExtent));
         var firstVisibleRow = Math.Max(0, (int)Math.Floor(GalleryScrollViewer.Offset.Y / itemExtent));
         var visibleRowCount = Math.Max(1, (int)Math.Ceiling(viewportHeight / itemExtent) + 1);
+        var visibleItems = new List<ImageItem>(visibleRowCount * columnCount);
+        var aheadItems = new List<ImageItem>(Math.Max(0, 6 * columnCount));
         if (_lastPrefetchFirstVisibleRow >= 0)
         {
             var rowDelta = firstVisibleRow.CompareTo(_lastPrefetchFirstVisibleRow);
@@ -908,7 +933,6 @@ public partial class MainWindow : Window
             return;
         }
 
-        // Collapse negative prompt when selecting a different item
         CollapseNegativePrompt();
 
         item.IsSelected = true;
@@ -1248,7 +1272,6 @@ public partial class MainWindow : Window
                 }
                 catch
                 {
-                    // Ignore P/Invoke exceptions
                 }
 
                 if (!success)
@@ -1281,7 +1304,6 @@ public partial class MainWindow : Window
         }
         catch (Exception)
         {
-            // Fallback
         }
     }
 
@@ -1355,6 +1377,68 @@ public partial class MainWindow : Window
         });
     }
 
+    private void QueueInitialMetadataScanner(int loadGeneration)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (_loadCancellation?.Token is not { IsCancellationRequested: false } token ||
+                loadGeneration != _loadGeneration ||
+                _allImageItems.Count == 0)
+            {
+                return;
+            }
+
+            QueueViewportThumbnailSchedule(force: true);
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (!token.IsCancellationRequested && loadGeneration == _loadGeneration)
+                {
+                    _ = StartInitialMetadataScannerWhenReadyAsync(loadGeneration, token);
+                }
+            }, DispatcherPriority.Background);
+        }, DispatcherPriority.Render);
+    }
+
+    private async Task StartInitialMetadataScannerWhenReadyAsync(int loadGeneration, CancellationToken token)
+    {
+        try
+        {
+            for (var poll = 0; poll < InitialMetadataScannerMaxPolls; poll++)
+            {
+                if (token.IsCancellationRequested || loadGeneration != _loadGeneration)
+                {
+                    return;
+                }
+
+                if (!_thumbnailLoads.HasVisibleWork)
+                {
+                    break;
+                }
+
+                await Task.Delay(InitialMetadataScannerPollInterval, token);
+            }
+
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (token.IsCancellationRequested || loadGeneration != _loadGeneration)
+                {
+                    return;
+                }
+
+                if (_allImageItems.Count == 0)
+                {
+                    return;
+                }
+
+                StartMetadataScanner(_allImageItems);
+                UpdateCountText();
+            }, DispatcherPriority.Background);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
     private bool HasSearchQueryActive()
     {
         return _hasSearchQueryActive;
@@ -1426,10 +1510,22 @@ public partial class MainWindow : Window
         else
         {
             SearchEngine.ParseQuery(query, out var positiveTerms, out var negativeTerms);
-            var searchScope = GetSearchScope();
-
-            filtered = _allImageItems.Where(item =>
-                ItemMatchesSearch(item, positiveTerms, negativeTerms, searchScope)).ToList();
+            if (positiveTerms.Count == 0 && negativeTerms.Count == 0)
+            {
+                filtered = _allImageItems;
+            }
+            else
+            {
+                var searchScope = GetSearchScope();
+                filtered = new List<ImageItem>(_allImageItems.Count);
+                foreach (var item in _allImageItems)
+                {
+                    if (ItemMatchesSearch(item, positiveTerms, negativeTerms, searchScope))
+                    {
+                        filtered.Add(item);
+                    }
+                }
+            }
         }
 
         var hasChanges = _viewModel.Items.Count != filtered.Count;
@@ -1857,7 +1953,6 @@ public partial class MainWindow : Window
             clickPanel.Children.Add(nameText);
             clickPanel.Children.Add(pathText);
 
-            // Add metadata row
             var metaParts = new System.Collections.Generic.List<string>();
             if (folder.ImageCount >= 0)
             {
