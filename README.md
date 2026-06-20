@@ -56,3 +56,5 @@ dotnet src\ComfyPromptViewer\bin\Debug\net9.0\ComfyPromptViewer.dll --self-check
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
+
+Third-party license notices are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
