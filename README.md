@@ -10,7 +10,8 @@ A local-first desktop app (.NET 9 + Avalonia 12) for browsing ComfyUI, Forge, an
 - **Metadata Viewer**: Parses positive prompts, negative prompts, models, samplers, seed, steps, CFG, and schedulers from ComfyUI PNG metadata plus A1111/WebUI Forge/Forge Neo-style `parameters` metadata in PNG text chunks and JPEG/WebP EXIF comments.
 - **Directory Watcher**: Monitors the active folder and automatically refreshes when new images are generated.
 - **Zoomable Preview**: Double-click any image to open a full-window overlay with mouse-wheel zoom and drag-to-pan.
-- **Performance Optimized**: Implements a disk cache for resized thumbnails and an in-memory LRU cache to keep RAM usage low.
+- **Metadata Cache**: Uses a local LiteDB cache (`metadata.db`) to persist parsed prompts and generation settings, avoiding repeat metadata parsing across folder reloads.
+- **Performance Optimized**: Implements a resized-thumbnail disk cache and an in-memory LRU cache to keep RAM usage low.
 - **Copy Prompts**: Quick-copy positive and negative prompts directly from the UI.
 
 ## Getting Started
@@ -37,6 +38,7 @@ Runs native trimming, compression, and outputs a single-file application requiri
 - [src/ComfyPromptViewer/MainWindow.Autoscroll.cs](src/ComfyPromptViewer/MainWindow.Autoscroll.cs) - Middle-click autoscroll loop, velocity smoothing, and pointer capture handlers.
 - [src/ComfyPromptViewer/MainWindow.Preview.cs](src/ComfyPromptViewer/MainWindow.Preview.cs) - Large preview overlay, zoom calculations, pan clamping, and canvas input handlers.
 - [src/ComfyPromptViewer/PromptExtractor.cs](src/ComfyPromptViewer/PromptExtractor.cs) - Metadata parsing logic for ComfyUI.
+- [src/ComfyPromptViewer/MetadataIndex.cs](src/ComfyPromptViewer/MetadataIndex.cs) - LiteDB-backed app-local metadata cache.
 - [src/ComfyPromptViewer/ImageFileReader.cs](src/ComfyPromptViewer/ImageFileReader.cs) - Low-allocation image header and size reader.
 - [src/ComfyPromptViewer/ThumbnailLoadCoordinator.cs](src/ComfyPromptViewer/ThumbnailLoadCoordinator.cs) - Viewport-aware thumbnail loading scheduling.
 - [src/ComfyPromptViewer/ImageCache.cs](src/ComfyPromptViewer/ImageCache.cs) - LRU cache for decoded bitmap memory.

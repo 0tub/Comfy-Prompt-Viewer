@@ -155,6 +155,7 @@ public partial class MainWindow
 
         if (deletedPaths.Count > 0)
         {
+            _ = Task.Run(() => MetadataIndex.DeletePaths(deletedPaths));
             var deletedSet = new HashSet<string>(deletedPaths, StringComparer.OrdinalIgnoreCase);
             var pathCount = _allImagePaths.RemoveAll(path => deletedSet.Contains(path));
             if (pathCount > 0)

@@ -556,7 +556,7 @@
                     <StackPanel Grid.Column="1" Spacing="0" VerticalAlignment="Center" Margin="6,0,0,0">
                         <TextBlock Text="Comfy Prompt Viewer" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontHeading}" FontSize="20" FontWeight="SemiBold" FontStyle="Normal" />
                         <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                            <TextBlock Name="FolderText" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontMono}" FontSize="11" FontWeight="Normal" Text="Open a folder of ComfyUI images to start scrolling." TextTrimming="PrefixCharacterEllipsis" VerticalAlignment="Center" />
+                            <TextBlock Name="FolderText" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontMono}" FontSize="11" FontWeight="Normal" Text="Open an image folder to start scrolling." TextTrimming="PrefixCharacterEllipsis" VerticalAlignment="Center" />
                             <Button Name="CopyPathButton"
                                     Content="copy"
                                     Click="CopyPathButton_Click"
@@ -1130,7 +1130,7 @@
                                        FontFamily="{DynamicResource FontHeading}"
                                        FontSize="24"
                                        FontWeight="SemiBold" />
-                            <TextBlock Text="A fast, local-first metadata browser and gallery for your ComfyUI generation outputs."
+                            <TextBlock Text="A fast, local-first metadata browser and gallery for image folders."
                                        Foreground="{DynamicResource TextMuted}"
                                        FontSize="14"
                                        TextWrapping="Wrap" />
@@ -1187,6 +1187,12 @@
                                         <StackPanel Orientation="Horizontal" Spacing="8">
                                             <TextBlock Text="🗑" Classes="emoji-icon" FontSize="13" VerticalAlignment="Center" Foreground="{DynamicResource TextMuted}" />
                                             <TextBlock Text="Clear Thumbnail Cache" FontSize="13" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Classes="menu-maintenance-btn" Click="ClearMetadataCacheButton_Click" ToolTip.Tip="Clear parsed metadata cache">
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <TextBlock Text="DB" Classes="emoji-icon" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="{DynamicResource TextMuted}" />
+                                            <TextBlock Text="Clear Metadata Cache" FontSize="13" VerticalAlignment="Center" />
                                         </StackPanel>
                                     </Button>
                                     <Button Classes="menu-maintenance-btn" Click="OpenAppDataButton_Click" ToolTip.Tip="Open application preferences and logs folder">

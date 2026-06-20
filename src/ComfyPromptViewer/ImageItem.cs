@@ -377,20 +377,43 @@ public sealed class ImageItem : INotifyPropertyChanged
 
         try
         {
-            var result = await Task.Run(() => ImageFileReader.Read(Path), token);
+            var entry = await Task.Run(() =>
+            {
+                if (MetadataIndex.TryLoad(Path, out var cached))
+                {
+                    return cached;
+                }
+
+                var result = ImageFileReader.Read(Path);
+                var extracted = PromptExtractor.ExtractAll(result.TextMetadata);
+                MetadataIndex.Save(Path, result, extracted);
+
+                return new MetadataIndexEntry
+                {
+                    Width = result.Width,
+                    Height = result.Height,
+                    Prompt = extracted.Prompt,
+                    NegativePrompt = extracted.NegativePrompt,
+                    Model = extracted.GenerationSettings.Model,
+                    Sampler = extracted.GenerationSettings.Sampler,
+                    Seed = extracted.GenerationSettings.Seed,
+                    Settings = extracted.GenerationSettings.Settings,
+                    Lora = extracted.GenerationSettings.Lora
+                };
+            }, token);
+
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 if (token.IsCancellationRequested) return;
-                _width = result.Width;
-                _height = result.Height;
-                var extracted = PromptExtractor.ExtractAll(result.TextMetadata);
-                Prompt = extracted.Prompt;
-                NegativePrompt = extracted.NegativePrompt;
-                Model = extracted.GenerationSettings.Model;
-                Sampler = extracted.GenerationSettings.Sampler;
-                Seed = extracted.GenerationSettings.Seed;
-                Settings = extracted.GenerationSettings.Settings;
-                Lora = extracted.GenerationSettings.Lora;
+                _width = entry.Width;
+                _height = entry.Height;
+                Prompt = entry.Prompt;
+                NegativePrompt = entry.NegativePrompt;
+                Model = entry.Model;
+                Sampler = entry.Sampler;
+                Seed = entry.Seed;
+                Settings = entry.Settings;
+                Lora = entry.Lora;
                 MarkMetadataLoaded();
                 OnPropertyChanged(nameof(DimensionsText));
                 OnPropertyChanged(nameof(IsLoading));
@@ -405,6 +428,27 @@ public sealed class ImageItem : INotifyPropertyChanged
                 MarkMetadataLoaded();
             });
         }
+    }
+
+    internal void ApplyMetadataEntry(MetadataIndexEntry entry)
+    {
+        if (_hasLoadedMetadata)
+        {
+            return;
+        }
+
+        _width = entry.Width;
+        _height = entry.Height;
+        Prompt = entry.Prompt;
+        NegativePrompt = entry.NegativePrompt;
+        Model = entry.Model;
+        Sampler = entry.Sampler;
+        Seed = entry.Seed;
+        Settings = entry.Settings;
+        Lora = entry.Lora;
+        MarkMetadataLoaded();
+        OnPropertyChanged(nameof(DimensionsText));
+        OnPropertyChanged(nameof(IsLoading));
     }
 
     public void EnsureSelectedPreviewLoaded(CancellationToken token)

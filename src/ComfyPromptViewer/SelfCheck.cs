@@ -13,6 +13,8 @@ internal static class SelfCheck
         CheckSearchParsing();
         CheckPromptExtraction();
         CheckPngMetadataRead();
+        CheckMetadataIndexRoundTrip();
+        CheckMetadataIndexCleanup();
         CheckThumbnailCacheWriteBackpressure();
         CheckDeferredThumbnailCacheWriteQueue();
         CheckDeferredThumbnailCacheWritePause();
@@ -67,6 +69,85 @@ internal static class SelfCheck
             {
             }
         }
+    }
+
+    private static void CheckMetadataIndexRoundTrip()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}.png");
+        var databasePath = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-metadata-{Guid.NewGuid():N}.db");
+        try
+        {
+            WriteTinyPng(path, "parameters", "cached prompt\nSteps: 1, Seed: 2");
+            Check(File.Exists(path), "Expected temporary metadata index source file.");
+            using (MetadataIndex.UseDatabaseForSelfCheck(databasePath))
+            {
+                Check(MetadataIndex.RoundTripsForSelfCheck(path), "Expected metadata index round trip.");
+            }
+        }
+        finally
+        {
+            try
+            {
+                File.Delete(path);
+                File.Delete(databasePath);
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    private static void CheckMetadataIndexCleanup()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-metadata-{Guid.NewGuid():N}");
+        var databasePath = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-metadata-{Guid.NewGuid():N}.db");
+        var keepPath = Path.Combine(folder, "keep.png");
+        var deletePath = Path.Combine(folder, "delete.png");
+        var prunePath = Path.Combine(folder, "prune.png");
+
+        try
+        {
+            Directory.CreateDirectory(folder);
+            WriteTinyPng(keepPath, "parameters", "keep prompt");
+            WriteTinyPng(deletePath, "parameters", "delete prompt");
+            WriteTinyPng(prunePath, "parameters", "prune prompt");
+
+            using (MetadataIndex.UseDatabaseForSelfCheck(databasePath))
+            {
+                SaveSelfCheckMetadata(keepPath, "keep prompt");
+                SaveSelfCheckMetadata(deletePath, "delete prompt");
+                SaveSelfCheckMetadata(prunePath, "prune prompt");
+
+                MetadataIndex.DeletePaths([deletePath]);
+                Check(!MetadataIndex.TryLoad(deletePath, out _), "Expected deleted metadata index path to be removed.");
+
+                MetadataIndex.PruneMissing([keepPath], includeSubfolders: false);
+                Check(MetadataIndex.TryLoad(keepPath, out _), "Expected current metadata index path to remain.");
+                Check(!MetadataIndex.TryLoad(prunePath, out _), "Expected missing metadata index path to be pruned.");
+            }
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(folder))
+                {
+                    Directory.Delete(folder, recursive: true);
+                }
+                File.Delete(databasePath);
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    private static void SaveSelfCheckMetadata(string path, string prompt)
+    {
+        MetadataIndex.Save(
+            path,
+            new ImageReadResult(1, 1, new(StringComparer.OrdinalIgnoreCase)),
+            new ExtractedPromptMetadata { Prompt = prompt });
     }
 
     private static void CheckThumbnailCacheWriteBackpressure()

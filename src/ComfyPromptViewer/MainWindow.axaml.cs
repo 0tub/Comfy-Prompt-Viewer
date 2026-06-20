@@ -225,6 +225,7 @@ public partial class MainWindow : Window
             _allImagePaths.AddRange(imagePaths);
             UserPreferences.SaveLastFolderPath(folderPath);
             UserPreferences.AddRecentFolder(folderPath, imagePaths.Count);
+            _ = Task.Run(() => MetadataIndex.PruneMissing(imagePaths, includeSubfolders));
             ApplySort();
             CountText.Text = $"{_allImagePaths.Count:n0} images";
 
@@ -1320,8 +1321,39 @@ public partial class MainWindow : Window
             {
                 var lastRefreshTime = DateTime.UtcNow;
                 var itemsSnapshot = items.ToList();
+                var cachedEntries = await Task.Run(() =>
+                    MetadataIndex.LoadMany(itemsSnapshot.Select(item => item.Path), token), token);
 
-                await Parallel.ForEachAsync(itemsSnapshot, new ParallelOptions
+                if (cachedEntries.Count > 0 && !token.IsCancellationRequested && scannerGeneration == _scannerGeneration)
+                {
+                    await Dispatcher.UIThread.InvokeAsync(() =>
+                    {
+                        if (token.IsCancellationRequested || scannerGeneration != _scannerGeneration)
+                        {
+                            return;
+                        }
+
+                        foreach (var item in itemsSnapshot)
+                        {
+                            if (!item.HasLoadedMetadata &&
+                                cachedEntries.TryGetValue(item.Path, out var entry))
+                            {
+                                item.ApplyMetadataEntry(entry);
+                            }
+                        }
+
+                        if (HasSearchQueryActive())
+                        {
+                            ApplyFilter();
+                        }
+                    });
+                }
+
+                var uncachedItems = itemsSnapshot
+                    .Where(item => !item.HasLoadedMetadata)
+                    .ToList();
+
+                await Parallel.ForEachAsync(uncachedItems, new ParallelOptions
                 {
                     MaxDegreeOfParallelism = 2,
                     CancellationToken = token
@@ -1755,7 +1787,7 @@ public partial class MainWindow : Window
     {
         if (string.IsNullOrEmpty(path))
         {
-            return "Open a folder of ComfyUI images to start scrolling.";
+            return "Open an image folder to start scrolling.";
         }
 
         try
@@ -1807,6 +1839,19 @@ public partial class MainWindow : Window
         {
             DebugLog.Write($"Failed to clear thumbnail cache: {ex}");
             ShowMenuError($"Could not clear cache: {ex.Message}");
+        }
+    }
+
+    private void ClearMetadataCacheButton_Click(object? sender, RoutedEventArgs e)
+    {
+        try
+        {
+            MetadataIndex.Clear();
+        }
+        catch (Exception ex)
+        {
+            DebugLog.Write($"Failed to clear metadata cache: {ex}");
+            ShowMenuError($"Could not clear metadata cache: {ex.Message}");
         }
     }
 
@@ -2008,8 +2053,8 @@ public partial class MainWindow : Window
                 Cursor = new Cursor(StandardCursorType.Arrow),
                 Margin = new Thickness(8, 0, 0, 0)
             };
-            closeButton.SetValue(AutomationProperties.NameProperty, $"Remove recent folder {folderName}");
-            ToolTip.SetTip(closeButton, "Remove recent folder");
+            closeButton.SetValue(AutomationProperties.NameProperty, $"Remove {folderName} from Recent");
+            ToolTip.SetTip(closeButton, "Remove from Recent");
             closeButton.Click += (s, e) =>
             {
                 RemoveRecentFolder(folderPath);
