@@ -723,7 +723,7 @@
                                       Classes="search-scope-combo"
                                       VerticalAlignment="Center"
                                       AutomationProperties.Name="Search scope"
-                                      ToolTip.Tip="Choose whether search checks prompts, filenames, or both."
+                                      ToolTip.Tip="Choose whether search checks positive prompts, negative prompts, filenames, or all fields."
                                       SelectionChanged="SearchScopeComboBox_SelectionChanged">
                                 <ComboBox.Resources>
                                     <SolidColorBrush x:Key="ComboBoxBackground">Transparent</SolidColorBrush>
@@ -735,7 +735,8 @@
                                     <Thickness x:Key="ComboBoxBorderThemeThickness">0</Thickness>
                                 </ComboBox.Resources>
                                 <ComboBoxItem Content="All" />
-                                <ComboBoxItem Content="Prompt" />
+                                <ComboBoxItem Content="Positive" />
+                                <ComboBoxItem Content="Negative" />
                                 <ComboBoxItem Content="Filename" />
                             </ComboBox>
                             <Rectangle Width="1" Fill="{DynamicResource BorderSubtle}" Height="18" VerticalAlignment="Center" Margin="2,0,0,0" />
@@ -805,6 +806,8 @@
                                         <ContextMenu>
                                             <MenuItem Header="Open in File Explorer" Click="MenuOpenInExplorer_Click" />
                                             <MenuItem Header="Copy Prompt" Click="MenuCardCopyPrompt_Click" IsEnabled="{Binding HasPrompt}" />
+                                            <Separator />
+                                            <MenuItem Header="Delete Image" Click="MenuDeleteImage_Click" />
                                         </ContextMenu>
                                     </Border.ContextMenu>
                                     <Panel>
@@ -1116,15 +1119,22 @@
                     Grid.ColumnSpan="2"
                     Background="{DynamicResource SurfaceBase}"
                     IsVisible="True">
-                <Grid ColumnDefinitions="320,*" MaxWidth="850" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="20,20,20,80">
-                    <!-- Left Column: Start -->
-                    <StackPanel Grid.Column="0" Spacing="36" Margin="0,0,40,0" VerticalAlignment="Top">
-                        <StackPanel Spacing="12">
+                <Grid RowDefinitions="Auto,Auto,*"
+                      ColumnDefinitions="320,*"
+                      RowSpacing="28"
+                      ColumnSpacing="40"
+                      MaxWidth="850"
+                      HorizontalAlignment="Center"
+                      VerticalAlignment="Center"
+                      Margin="20">
+                    <!-- Header -->
+                    <StackPanel Grid.Row="0" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="16" HorizontalAlignment="Center" VerticalAlignment="Top">
                             <Image Source="avares://ComfyPromptViewer/Assets/app.png"
                                    Width="56"
                                    Height="56"
                                    HorizontalAlignment="Left"
-                                   Margin="0,0,0,8" />
+                                   VerticalAlignment="Center" />
+                            <StackPanel Spacing="6" VerticalAlignment="Center">
                             <TextBlock Text="Comfy Prompt Viewer"
                                        Foreground="{DynamicResource TextPrimary}"
                                        FontFamily="{DynamicResource FontHeading}"
@@ -1134,17 +1144,18 @@
                                        Foreground="{DynamicResource TextMuted}"
                                        FontSize="14"
                                        TextWrapping="Wrap" />
+                            </StackPanel>
                         </StackPanel>
 
                         <!-- Error Banner on Main Menu -->
-                        <Border Name="MenuErrorBanner" Background="{DynamicResource DangerSurface}" BorderBrush="{DynamicResource DangerBorder}" BorderThickness="1" CornerRadius="2" Padding="12,8" IsVisible="False">
+                        <Border Name="MenuErrorBanner" Grid.Row="1" Grid.ColumnSpan="2" Background="{DynamicResource DangerSurface}" BorderBrush="{DynamicResource DangerBorder}" BorderThickness="1" CornerRadius="2" Padding="12,8" IsVisible="False">
                             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                                 <TextBlock Name="MenuErrorText" Text="Error details here..." Foreground="{DynamicResource DangerText}" FontSize="13" TextWrapping="Wrap" VerticalAlignment="Center" />
                                 <Button Grid.Column="1" Classes="close-btn" Content="✕" Click="CloseMenuError_Click" Width="20" Height="20" CornerRadius="2" FontSize="9" Padding="0" VerticalAlignment="Center" AutomationProperties.Name="Dismiss error" ToolTip.Tip="Dismiss error" />
                             </Grid>
                         </Border>
 
-                        <StackPanel Spacing="16">
+                        <StackPanel Grid.Row="2" Grid.Column="0" Spacing="16" VerticalAlignment="Top">
                             <TextBlock Text="Start"
                                        Foreground="{DynamicResource TextPrimary}"
                                        FontFamily="{DynamicResource FontHeading}"
@@ -1168,6 +1179,73 @@
                                           Foreground="{DynamicResource TextSecondary}"
                                           AutomationProperties.Name="Include subfolders"
                                           ToolTip.Tip="Include images from nested folders" />
+                                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10" Margin="12,4,0,0">
+                                    <TextBlock Grid.Column="0"
+                                               Text="Theme"
+                                               Foreground="{DynamicResource TextSecondary}"
+                                               FontSize="13"
+                                               VerticalAlignment="Center" />
+                                    <ComboBox Grid.Column="1"
+                                              Name="ThemeComboBox"
+                                              Width="190"
+                                              Height="30"
+                                              FontSize="12"
+                                              VerticalAlignment="Center"
+                                              AutomationProperties.Name="Theme mode"
+                                              ToolTip.Tip="Choose the app color theme"
+                                              SelectionChanged="ThemeComboBox_SelectionChanged">
+                                        <ComboBoxItem>
+                                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                                <Grid Width="34" Height="12" ColumnDefinitions="*,*,*" VerticalAlignment="Center">
+                                                    <Border Grid.Column="0" Background="#17120D" CornerRadius="2,0,0,2" />
+                                                    <Border Grid.Column="1" Background="#272016" />
+                                                    <Border Grid.Column="2" Background="#8B3A2E" CornerRadius="0,2,2,0" />
+                                                </Grid>
+                                                <TextBlock Text="Brown" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center" />
+                                            </StackPanel>
+                                        </ComboBoxItem>
+                                        <ComboBoxItem>
+                                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                                <Grid Width="34" Height="12" ColumnDefinitions="*,*,*" VerticalAlignment="Center">
+                                                    <Border Grid.Column="0" Background="#111315" CornerRadius="2,0,0,2" />
+                                                    <Border Grid.Column="1" Background="#202326" />
+                                                    <Border Grid.Column="2" Background="#6E7681" CornerRadius="0,2,2,0" />
+                                                </Grid>
+                                                <TextBlock Text="Dark Gray" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center" />
+                                            </StackPanel>
+                                        </ComboBoxItem>
+                                        <ComboBoxItem>
+                                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                                <Grid Width="34" Height="12" ColumnDefinitions="*,*,*" VerticalAlignment="Center">
+                                                    <Border Grid.Column="0" Background="#0D1320" CornerRadius="2,0,0,2" />
+                                                    <Border Grid.Column="1" Background="#182236" />
+                                                    <Border Grid.Column="2" Background="#3D6EA8" CornerRadius="0,2,2,0" />
+                                                </Grid>
+                                                <TextBlock Text="Dark Blue" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center" />
+                                            </StackPanel>
+                                        </ComboBoxItem>
+                                        <ComboBoxItem>
+                                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                                <Grid Width="34" Height="12" ColumnDefinitions="*,*,*" VerticalAlignment="Center">
+                                                    <Border Grid.Column="0" Background="#0D1712" CornerRadius="2,0,0,2" />
+                                                    <Border Grid.Column="1" Background="#18251D" />
+                                                    <Border Grid.Column="2" Background="#4F7D5E" CornerRadius="0,2,2,0" />
+                                                </Grid>
+                                                <TextBlock Text="Dark Green" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center" />
+                                            </StackPanel>
+                                        </ComboBoxItem>
+                                        <ComboBoxItem>
+                                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                                <Grid Width="34" Height="12" ColumnDefinitions="*,*,*" VerticalAlignment="Center">
+                                                    <Border Grid.Column="0" Background="#17111B" CornerRadius="2,0,0,2" />
+                                                    <Border Grid.Column="1" Background="#251B2B" />
+                                                    <Border Grid.Column="2" Background="#7B4F8C" CornerRadius="0,2,2,0" />
+                                                </Grid>
+                                                <TextBlock Text="Plum" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center" />
+                                            </StackPanel>
+                                        </ComboBoxItem>
+                                    </ComboBox>
+                                </Grid>
                             </StackPanel>
 
                             <!-- Collapsible Advanced Section -->
@@ -1204,10 +1282,9 @@
                                 </StackPanel>
                             </StackPanel>
                         </StackPanel>
-                    </StackPanel>
 
                     <!-- Right Column: Recent -->
-                    <Grid Grid.Column="1" RowDefinitions="Auto,*" Height="400" VerticalAlignment="Top">
+                    <Grid Grid.Row="2" Grid.Column="1" RowDefinitions="Auto,*" Height="400" VerticalAlignment="Top">
                         <TextBlock Grid.Row="0"
                                    Text="Recent"
                                    Foreground="{DynamicResource TextPrimary}"

@@ -40,6 +40,7 @@ public partial class MainWindow : Window
     private DispatcherTimer? _searchDebounceTimer;
     private ImageItem? _selectedItem;
     private SortMode _sortMode = SortMode.NewestFirst;
+    private ThemeMode _themeMode = UserPreferences.LoadThemeMode();
     private string? _currentFolderPath;
     private int _loadedMetadataCount;
     private int _loadGeneration;
@@ -55,12 +56,29 @@ public partial class MainWindow : Window
     private volatile bool _hasSearchQueryActive;
     private TextBox? _activeContextMenuTextBox;
 
-    private enum SearchScope
+    internal enum SearchScope
     {
         All,
-        Prompts,
+        PositivePrompt,
+        NegativePrompt,
         Filename
     }
+
+    private sealed record ThemePalette(
+        string BackgroundBase,
+        string SurfaceCard,
+        string SurfaceSidebar,
+        string SurfaceElevated,
+        string SurfaceInput,
+        string BorderSubtle,
+        string ToolbarBorderSubtle,
+        string BorderAccent,
+        string CardHoverBorder,
+        string TextPrimary,
+        string TextSecondary,
+        string TextMuted,
+        string TextAccent,
+        string EmptyStateSubtext);
 
     public MainWindow()
     {
@@ -88,10 +106,155 @@ public partial class MainWindow : Window
         ApplyTileLayout();
         SortComboBox.SelectedIndex = (int)_sortMode;
         SearchScopeComboBox.SelectedIndex = (int)SearchScope.All;
+        ApplyTheme(_themeMode);
+        ThemeComboBox.SelectedIndex = (int)_themeMode;
 
         _isInitializing = false;
         this.SizeChanged += Window_SizeChanged;
         this.Opened += MainWindow_Opened;
+    }
+
+    private void ThemeComboBox_SelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_isInitializing)
+        {
+            return;
+        }
+
+        var selectedIndex = ThemeComboBox.SelectedIndex;
+        if (selectedIndex < 0 || selectedIndex > (int)ThemeMode.Plum)
+        {
+            return;
+        }
+
+        _themeMode = (ThemeMode)selectedIndex;
+        ApplyTheme(_themeMode);
+        UserPreferences.SaveThemeMode(_themeMode);
+    }
+
+    private static void ApplyTheme(ThemeMode themeMode)
+    {
+        var resources = Application.Current?.Resources;
+        if (resources is null)
+        {
+            return;
+        }
+
+        var palette = GetThemePalette(themeMode);
+
+        SetBrush(resources, "BackgroundBase", palette.BackgroundBase);
+        SetBrush(resources, "SurfaceBase", palette.BackgroundBase);
+        SetBrush(resources, "SurfaceCard", palette.SurfaceCard);
+        SetBrush(resources, "SurfaceSidebar", palette.SurfaceSidebar);
+        SetBrush(resources, "SurfaceElevated", palette.SurfaceElevated);
+        SetBrush(resources, "SurfaceInput", palette.SurfaceInput);
+        SetBrush(resources, "BorderSubtle", palette.BorderSubtle);
+        SetBrush(resources, "ToolbarBorderSubtle", palette.ToolbarBorderSubtle);
+        SetBrush(resources, "BorderAccent", palette.BorderAccent);
+        SetBrush(resources, "CardHoverBorder", palette.CardHoverBorder);
+        SetBrush(resources, "TextPrimary", palette.TextPrimary);
+        SetBrush(resources, "TextSecondary", palette.TextSecondary);
+        SetBrush(resources, "TextMuted", palette.TextMuted);
+        SetBrush(resources, "TextAccent", palette.TextAccent);
+        SetBrush(resources, "PromptText", palette.TextSecondary);
+        SetBrush(resources, "EmptyStateSubtext", palette.EmptyStateSubtext);
+
+        SetColor(resources, "SystemAccentColor", palette.BorderAccent);
+        SetBrush(resources, "SystemControlHighlightAccentBrush", palette.BorderAccent);
+        SetBrush(resources, "AccentFillColorDefaultBrush", palette.BorderAccent);
+        SetBrush(resources, "AccentFillColorSecondaryBrush", palette.BorderAccent);
+        SetBrush(resources, "AccentFillColorTertiaryBrush", palette.BorderAccent);
+
+        SetBrush(resources, "SliderThumbBackground", palette.BorderAccent);
+        SetBrush(resources, "SliderThumbBackgroundPointerOver", palette.TextAccent);
+        SetBrush(resources, "SliderThumbBackgroundPressed", palette.BorderAccent);
+        SetBrush(resources, "SliderThumbBackgroundDisabled", palette.BorderSubtle);
+        SetBrush(resources, "SliderTrackFill", palette.BorderSubtle);
+        SetBrush(resources, "SliderTrackFillPointerOver", palette.BorderSubtle);
+        SetBrush(resources, "SliderTrackFillPressed", palette.BorderSubtle);
+        SetBrush(resources, "SliderTrackFillDisabled", palette.SurfaceInput);
+        SetBrush(resources, "SliderTrackValueFill", palette.BorderAccent);
+        SetBrush(resources, "SliderTrackValueFillPointerOver", palette.BorderAccent);
+        SetBrush(resources, "SliderTrackValueFillPressed", palette.BorderAccent);
+        SetBrush(resources, "SliderTrackValueFillDisabled", palette.BorderSubtle);
+
+        SetBrush(resources, "ComboBoxBackground", palette.SurfaceInput);
+        SetBrush(resources, "ComboBoxBackgroundPointerOver", palette.SurfaceElevated);
+        SetBrush(resources, "ComboBoxBackgroundPressed", palette.SurfaceInput);
+        SetBrush(resources, "ComboBoxBackgroundDisabled", palette.SurfaceSidebar);
+        SetBrush(resources, "ComboBoxBorderBrush", palette.BorderSubtle);
+        SetBrush(resources, "ComboBoxBorderBrushPointerOver", palette.BorderAccent);
+        SetBrush(resources, "ComboBoxBorderBrushPressed", palette.BorderAccent);
+        SetBrush(resources, "ComboBoxBorderBrushDisabled", palette.BorderSubtle);
+        SetBrush(resources, "ComboBoxDropdownBackground", palette.SurfaceCard);
+        SetBrush(resources, "ComboBoxDropDownBackground", palette.SurfaceCard);
+        SetBrush(resources, "ComboBoxDropdownBorderBrush", palette.BorderSubtle);
+        SetBrush(resources, "ComboBoxDropDownBorderBrush", palette.BorderSubtle);
+        SetBrush(resources, "ComboBoxForeground", palette.TextPrimary);
+        SetBrush(resources, "ComboBoxForegroundPointerOver", palette.TextPrimary);
+        SetBrush(resources, "ComboBoxForegroundPressed", palette.TextPrimary);
+        SetBrush(resources, "ComboBoxForegroundDisabled", palette.TextMuted);
+        SetBrush(resources, "ComboBoxItemBackgroundPointerOver", palette.SurfaceInput);
+        SetBrush(resources, "ComboBoxItemBackgroundPressed", palette.SurfaceInput);
+        SetBrush(resources, "ComboBoxItemBackgroundSelected", palette.BorderAccent);
+        SetBrush(resources, "ComboBoxItemBackgroundSelectedPointerOver", palette.TextAccent);
+        SetBrush(resources, "ComboBoxItemBackgroundSelectedPressed", palette.BorderAccent);
+        SetBrush(resources, "ComboBoxItemForeground", palette.TextSecondary);
+        SetBrush(resources, "ComboBoxItemForegroundPointerOver", palette.TextPrimary);
+        SetBrush(resources, "ComboBoxItemForegroundPressed", palette.TextPrimary);
+        SetBrush(resources, "ComboBoxItemForegroundSelected", palette.TextPrimary);
+        SetBrush(resources, "ComboBoxItemForegroundSelectedPointerOver", palette.TextPrimary);
+        SetBrush(resources, "ComboBoxItemForegroundSelectedPressed", palette.TextPrimary);
+        SetBrush(resources, "ComboBoxItemForegroundDisabled", palette.TextMuted);
+
+        SetBrush(resources, "MenuFlyoutPresenterBackground", palette.BackgroundBase);
+        SetBrush(resources, "MenuFlyoutPresenterBorderBrush", palette.BorderSubtle);
+        SetBrush(resources, "MenuFlyoutItemBackgroundPointerOver", palette.SurfaceCard);
+        SetBrush(resources, "MenuFlyoutItemBackgroundPressed", palette.SurfaceInput);
+        SetBrush(resources, "MenuFlyoutItemForeground", palette.TextSecondary);
+        SetBrush(resources, "MenuFlyoutItemForegroundPointerOver", palette.TextPrimary);
+        SetBrush(resources, "MenuFlyoutItemForegroundPressed", palette.TextPrimary);
+        SetBrush(resources, "MenuFlyoutItemForegroundDisabled", palette.TextMuted);
+    }
+
+    private static ThemePalette GetThemePalette(ThemeMode themeMode)
+    {
+        return themeMode switch
+        {
+            ThemeMode.DarkGray => new ThemePalette(
+                "#111315", "#202326", "#171A1D", "#1D2023", "#24282C", "#343A40", "#434B52",
+                "#6E7681", "#464D55", "#F1F4F6", "#C4CCD4", "#828B95", "#A8B2BD", "#69737D"),
+            ThemeMode.DarkBlue => new ThemePalette(
+                "#0D1320", "#182236", "#111A2B", "#162033", "#1B2940", "#2A3A56", "#394D70",
+                "#3D6EA8", "#344A68", "#EEF5FF", "#B9CBE2", "#7186A0", "#7EA7D8", "#5E7188"),
+            ThemeMode.DarkGreen => new ThemePalette(
+                "#0D1712", "#18251D", "#111D16", "#16231B", "#1C2B22", "#2C3E32", "#3B5142",
+                "#4F7D5E", "#3A4E40", "#EFF7F0", "#BFD3C3", "#758B7A", "#83B88E", "#617467"),
+            ThemeMode.Plum => new ThemePalette(
+                "#17111B", "#251B2B", "#1C1421", "#231928", "#2B2032", "#3B2D45", "#4D3A5A",
+                "#7B4F8C", "#4A3855", "#F5EDF7", "#CFB9D7", "#8B7594", "#B985C8", "#735F7B"),
+            _ => new ThemePalette(
+                "#17120D", "#272016", "#1C1610", "#261E16", "#2C2318", "#3A2E22", "#4A3A2A",
+                "#8B3A2E", "#4A3D30", "#F5EDE0", "#C4AE92", "#8C7660", "#D4795A", "#74604E")
+        };
+    }
+
+    private static void SetBrush(IResourceDictionary resources, string key, string color)
+    {
+        var parsed = Color.Parse(color);
+        if (resources[key] is SolidColorBrush brush)
+        {
+            brush.Color = parsed;
+        }
+        else
+        {
+            resources[key] = new SolidColorBrush(parsed);
+        }
+    }
+
+    private static void SetColor(IResourceDictionary resources, string key, string color)
+    {
+        resources[key] = Color.Parse(color);
     }
 
     private async void MainWindow_Opened(object? sender, EventArgs e)
@@ -1226,6 +1389,39 @@ public partial class MainWindow : Window
         }
     }
 
+    private void MenuDeleteImage_Click(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Control { DataContext: ImageItem item })
+        {
+            return;
+        }
+
+        try
+        {
+            var path = item.Path;
+            if (File.Exists(path))
+            {
+                if (OperatingSystem.IsWindows())
+                {
+                    Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(
+                        path,
+                        Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
+                        Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+                }
+                else
+                {
+                    File.Delete(path);
+                }
+            }
+
+            ProcessWatcherChanges([], [path]);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            CountText.Text = $"Could not delete image: {ex.Message}";
+        }
+    }
+
     [System.Runtime.InteropServices.DllImport("shell32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, ExactSpelling = true)]
     private static extern int SHParseDisplayName(
         [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)] string pszName,
@@ -1536,7 +1732,8 @@ public partial class MainWindow : Window
     {
         return SearchScopeComboBox.SelectedIndex switch
         {
-            (int)SearchScope.Prompts => SearchScope.Prompts,
+            (int)SearchScope.PositivePrompt => SearchScope.PositivePrompt,
+            (int)SearchScope.NegativePrompt => SearchScope.NegativePrompt,
             (int)SearchScope.Filename => SearchScope.Filename,
             _ => SearchScope.All
         };
@@ -1604,7 +1801,7 @@ public partial class MainWindow : Window
         ToggleGalleryEmptyState(showEmpty);
     }
 
-    private static bool ItemMatchesSearch(
+    internal static bool ItemMatchesSearch(
         ImageItem item,
         List<SearchTerm> positiveTerms,
         List<SearchTerm> negativeTerms,
@@ -1613,9 +1810,12 @@ public partial class MainWindow : Window
         return searchScope switch
         {
             SearchScope.Filename => TextMatchesTerms(item.FileName, positiveTerms, negativeTerms),
-            SearchScope.Prompts => item.HasLoadedMetadata &&
-                                   PromptMatchesTerms(item, positiveTerms, negativeTerms) ||
-                                   !item.HasLoadedMetadata,
+            SearchScope.PositivePrompt => item.HasLoadedMetadata
+                ? TextMatchesTerms(item.Prompt, positiveTerms, negativeTerms)
+                : true,
+            SearchScope.NegativePrompt => item.HasLoadedMetadata
+                ? TextMatchesTerms(item.NegativePrompt, positiveTerms, negativeTerms)
+                : true,
             _ => ItemMatchesAllSearch(item, positiveTerms, negativeTerms)
         };
     }
@@ -1647,30 +1847,6 @@ public partial class MainWindow : Window
             }
 
             if (!SearchEngine.IsMatch(item.Prompt, item.NegativePrompt, term))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private static bool PromptMatchesTerms(
-        ImageItem item,
-        List<SearchTerm> positiveTerms,
-        List<SearchTerm> negativeTerms)
-    {
-        foreach (var term in positiveTerms)
-        {
-            if (!SearchEngine.IsMatch(item.Prompt, item.NegativePrompt, term))
-            {
-                return false;
-            }
-        }
-
-        foreach (var term in negativeTerms)
-        {
-            if (SearchEngine.IsMatch(item.Prompt, item.NegativePrompt, term))
             {
                 return false;
             }

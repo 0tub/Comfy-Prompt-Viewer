@@ -11,6 +11,7 @@ internal static class SelfCheck
     public static void Run()
     {
         CheckSearchParsing();
+        CheckThemeModes();
         CheckPromptExtraction();
         CheckPngMetadataRead();
         CheckMetadataIndexRoundTrip();
@@ -31,6 +32,31 @@ internal static class SelfCheck
         Check(negative.Count == 2, "Expected two negative search terms.");
         Check(negative[0] is { Text: "bad", IsExact: false }, "Expected plain negative term.");
         Check(negative[1] is { Text: "low quality", IsExact: true }, "Expected exact negative term.");
+
+        var item = new ImageItem(Path.Combine(Path.GetTempPath(), "search-scope-selfcheck.png"), tileSize: 120);
+        item.ApplyMetadataEntry(new MetadataIndexEntry
+        {
+            SourcePath = item.Path,
+            Prompt = "sunlit portrait",
+            NegativePrompt = "blurry watermark"
+        });
+
+        SearchEngine.ParseQuery("watermark", out positive, out negative);
+        Check(!MainWindow.ItemMatchesSearch(item, positive, negative, MainWindow.SearchScope.PositivePrompt),
+            "Expected positive prompt search to ignore negative prompt text.");
+        Check(MainWindow.ItemMatchesSearch(item, positive, negative, MainWindow.SearchScope.NegativePrompt),
+            "Expected negative prompt search to match negative prompt text.");
+    }
+
+    private static void CheckThemeModes()
+    {
+        Check(Enum.GetValues<ThemeMode>().Length == 5, "Expected five theme modes.");
+        Check((int)ThemeMode.Brown == 0 &&
+              (int)ThemeMode.DarkGray == 1 &&
+              (int)ThemeMode.DarkBlue == 2 &&
+              (int)ThemeMode.DarkGreen == 3 &&
+              (int)ThemeMode.Plum == 4,
+            "Expected theme mode order to match ThemeComboBox.");
     }
 
     private static void CheckPromptExtraction()

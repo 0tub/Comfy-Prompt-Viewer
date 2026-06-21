@@ -13,6 +13,7 @@ public static class UserPreferences
     private static readonly string LastFolderPath = System.IO.Path.Combine(AppDataDir, "last-folder.txt");
     private static readonly string RecentFoldersPath = System.IO.Path.Combine(AppDataDir, "recent-folders.txt");
     private static readonly string IncludeSubfoldersPath = System.IO.Path.Combine(AppDataDir, "include-subfolders.txt");
+    private static readonly string ThemeModePath = System.IO.Path.Combine(AppDataDir, "theme-mode.txt");
 
     public static double LoadTileSize(double defaultValue, double minValue, double maxValue)
     {
@@ -201,6 +202,47 @@ public static class UserPreferences
             DebugLog.Write($"Failed to save include-subfolders setting: {ex.Message}");
         }
     }
+
+    public static ThemeMode LoadThemeMode()
+    {
+        try
+        {
+            if (File.Exists(ThemeModePath) &&
+                Enum.TryParse<ThemeMode>(File.ReadAllText(ThemeModePath).Trim(), ignoreCase: true, out var value) &&
+                Enum.IsDefined(value))
+            {
+                return value;
+            }
+        }
+        catch (Exception ex)
+        {
+            DebugLog.Write($"Failed to load theme mode: {ex.Message}");
+        }
+
+        return ThemeMode.Brown;
+    }
+
+    public static void SaveThemeMode(ThemeMode themeMode)
+    {
+        try
+        {
+            Directory.CreateDirectory(AppDataDir);
+            File.WriteAllText(ThemeModePath, themeMode.ToString());
+        }
+        catch (Exception ex)
+        {
+            DebugLog.Write($"Failed to save theme mode: {ex.Message}");
+        }
+    }
+}
+
+public enum ThemeMode
+{
+    Brown,
+    DarkGray,
+    DarkBlue,
+    DarkGreen,
+    Plum
 }
 
 public class RecentFolder
