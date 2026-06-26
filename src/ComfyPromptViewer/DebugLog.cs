@@ -37,6 +37,7 @@ public static class DebugLog
         }
         catch
         {
+            // Intentionally silent: debug logging must never break app behavior.
         }
     }
 

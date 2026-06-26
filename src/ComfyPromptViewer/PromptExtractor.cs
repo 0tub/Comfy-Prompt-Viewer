@@ -11,6 +11,8 @@ public static class PromptExtractor
 {
     private static readonly string[] PositiveKeys = ["positive", "prompt", "text"];
     private static readonly string[] ModelInputKeys = ["ckpt_name", "unet_name", "model_name", "checkpoint", "model"];
+    private static readonly string[] NegativeMarkers = ["negative", "neg_prompt", "negative_prompt"];
+    private const int MaxModelLinkDepth = 6;
 
     public static ExtractedPromptMetadata ExtractAll(Dictionary<string, string> metadata)
     {
@@ -157,7 +159,7 @@ public static class PromptExtractor
                 var bestNegativePrompt = "";
                 foreach (var node in nodes.Values)
                 {
-                    if (NodeLooksNegative(node))
+                    if (!IsKSamplerNode(node) && NodeLooksNegative(node))
                     {
                         KeepBestPromptLike(ref bestNegativePrompt, ExtractTextFromNode(node));
                     }
@@ -242,6 +244,11 @@ public static class PromptExtractor
                 var negativeCandidates = new List<string>();
                 foreach (var node in nodes.EnumerateArray())
                 {
+                    if (IsWorkflowSamplerNode(node))
+                    {
+                        continue;
+                    }
+
                     if (NodeLooksNegative(node))
                     {
                         AddWorkflowCandidates(node, negativeCandidates);
@@ -302,7 +309,7 @@ public static class PromptExtractor
         var best = "";
         foreach (var node in nodes)
         {
-            if (!NodeLooksNegative(node))
+            if (!IsKSamplerNode(node) && !NodeLooksNegative(node))
             {
                 KeepBestPromptLike(ref best, ExtractTextFromNode(node));
             }
@@ -446,7 +453,7 @@ public static class PromptExtractor
 
     private static string? FindModelName(Dictionary<string, JsonElement> nodes, JsonElement node, int depth = 0)
     {
-        if (depth > 6 || !node.TryGetProperty("inputs", out var inputs) || inputs.ValueKind != JsonValueKind.Object)
+        if (depth > MaxModelLinkDepth || !node.TryGetProperty("inputs", out var inputs) || inputs.ValueKind != JsonValueKind.Object)
         {
             return null;
         }
@@ -519,10 +526,31 @@ public static class PromptExtractor
                string.Equals(value, "KSamplerAdvanced", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static bool IsWorkflowSamplerNode(JsonElement node)
+    {
+        if (!node.TryGetProperty("type", out var type) ||
+            type.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        var value = type.GetString();
+        return string.Equals(value, "KSampler", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(value, "KSamplerAdvanced", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static bool NodeLooksNegative(JsonElement node)
     {
         var text = node.GetRawText();
-        return text.Contains("negative", StringComparison.OrdinalIgnoreCase);
+        foreach (var marker in NegativeMarkers)
+        {
+            if (text.Contains(marker, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string LongestPromptLike(IEnumerable<string> values)
@@ -686,8 +714,9 @@ public static class PromptExtractor
                 SettingsLine = lines[settingsIndex]
             };
         }
-        catch
+        catch (Exception ex)
         {
+            DebugLog.Write($"Failed to parse Draw Things XMP metadata: {ex.Message}");
             return null;
         }
     }

@@ -29,17 +29,27 @@ public partial class MainWindow : Window
     private const double WheelScrollRowsPerNotch = 1.7;
     private const double MinWheelScrollPixels = 180;
     private const double MaxWheelViewportRatio = 0.58;
+    private const double SidebarWidthWindowRatio = 0.3;
+    private const double MinSidebarWidth = 260;
+    private const double MaxSidebarWidth = 380;
+    private const double SidebarPreviewHeightWindowRatio = 0.4;
+    private const double MinSidebarPreviewHeight = 180;
+    private const double MaxSidebarPreviewHeight = 350;
     private const double CollapsedPositivePromptMaxHeight = 168;
     private const int LongPositivePromptCharacterThreshold = 500;
     private const int LongPositivePromptLineThreshold = 7;
     private static readonly TimeSpan InitialMetadataScannerPollInterval = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeSpan MetadataScannerSearchRefreshInterval = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan AdvancedMaintenanceStatusDuration = TimeSpan.FromSeconds(2.5);
     private const int InitialMetadataScannerMaxPolls = 15;
+    private const int MetadataScannerMaxDegreeOfParallelism = 2;
     private readonly GalleryViewModel _viewModel = new();
     private readonly ThumbnailLoadCoordinator _thumbnailLoads = new();
     private readonly List<string> _allImagePaths = [];
     private readonly List<ImageItem> _allImageItems = [];
     private CancellationTokenSource? _loadCancellation;
     private CancellationTokenSource? _scannerCancellation;
+    private CancellationTokenSource? _advancedMaintenanceStatusCancellation;
     private DispatcherTimer? _searchDebounceTimer;
     private ImageItem? _selectedItem;
     private SortMode _sortMode = SortMode.NewestFirst;
@@ -60,6 +70,7 @@ public partial class MainWindow : Window
     private volatile bool _hasSearchQueryActive;
     private TextBox? _activeContextMenuTextBox;
     private bool _isPositivePromptExpanded;
+    private bool _isNegativePromptExpanded;
 
     internal enum SearchScope
     {
@@ -84,6 +95,83 @@ public partial class MainWindow : Window
         string TextMuted,
         string TextAccent,
         string EmptyStateSubtext);
+
+    private static readonly (string Key, Func<ThemePalette, string> Color)[] ThemeBrushResources =
+    [
+        ("BackgroundBase", p => p.BackgroundBase),
+        ("SurfaceBase", p => p.BackgroundBase),
+        ("LargePreviewOverlayBackground", p => p.BackgroundBase),
+        ("SurfaceCard", p => p.SurfaceCard),
+        ("SurfaceSidebar", p => p.SurfaceSidebar),
+        ("SurfaceElevated", p => p.SurfaceElevated),
+        ("SurfaceInput", p => p.SurfaceInput),
+        ("BorderSubtle", p => p.BorderSubtle),
+        ("ToolbarBorderSubtle", p => p.ToolbarBorderSubtle),
+        ("BorderAccent", p => p.BorderAccent),
+        ("CardHoverBorder", p => p.CardHoverBorder),
+        ("TextPrimary", p => p.TextPrimary),
+        ("TextSecondary", p => p.TextSecondary),
+        ("TextMuted", p => p.TextMuted),
+        ("TextAccent", p => p.TextAccent),
+        ("PromptText", p => p.TextSecondary),
+        ("EmptyStateSubtext", p => p.EmptyStateSubtext),
+
+        ("SystemControlHighlightAccentBrush", p => p.BorderAccent),
+        ("AccentFillColorDefaultBrush", p => p.BorderAccent),
+        ("AccentFillColorSecondaryBrush", p => p.BorderAccent),
+        ("AccentFillColorTertiaryBrush", p => p.BorderAccent),
+
+        ("SliderThumbBackground", p => p.BorderAccent),
+        ("SliderThumbBackgroundPointerOver", p => p.TextAccent),
+        ("SliderThumbBackgroundPressed", p => p.BorderAccent),
+        ("SliderThumbBackgroundDisabled", p => p.BorderSubtle),
+        ("SliderTrackFill", p => p.BorderSubtle),
+        ("SliderTrackFillPointerOver", p => p.BorderSubtle),
+        ("SliderTrackFillPressed", p => p.BorderSubtle),
+        ("SliderTrackFillDisabled", p => p.SurfaceInput),
+        ("SliderTrackValueFill", p => p.BorderAccent),
+        ("SliderTrackValueFillPointerOver", p => p.BorderAccent),
+        ("SliderTrackValueFillPressed", p => p.BorderAccent),
+        ("SliderTrackValueFillDisabled", p => p.BorderSubtle),
+
+        ("ComboBoxBackground", p => p.SurfaceInput),
+        ("ComboBoxBackgroundPointerOver", p => p.SurfaceElevated),
+        ("ComboBoxBackgroundPressed", p => p.SurfaceInput),
+        ("ComboBoxBackgroundDisabled", p => p.SurfaceSidebar),
+        ("ComboBoxBorderBrush", p => p.BorderSubtle),
+        ("ComboBoxBorderBrushPointerOver", p => p.BorderAccent),
+        ("ComboBoxBorderBrushPressed", p => p.BorderAccent),
+        ("ComboBoxBorderBrushDisabled", p => p.BorderSubtle),
+        ("ComboBoxDropdownBackground", p => p.SurfaceCard),
+        ("ComboBoxDropDownBackground", p => p.SurfaceCard),
+        ("ComboBoxDropdownBorderBrush", p => p.BorderSubtle),
+        ("ComboBoxDropDownBorderBrush", p => p.BorderSubtle),
+        ("ComboBoxForeground", p => p.TextPrimary),
+        ("ComboBoxForegroundPointerOver", p => p.TextPrimary),
+        ("ComboBoxForegroundPressed", p => p.TextPrimary),
+        ("ComboBoxForegroundDisabled", p => p.TextMuted),
+        ("ComboBoxItemBackgroundPointerOver", p => p.SurfaceInput),
+        ("ComboBoxItemBackgroundPressed", p => p.SurfaceInput),
+        ("ComboBoxItemBackgroundSelected", p => p.BorderAccent),
+        ("ComboBoxItemBackgroundSelectedPointerOver", p => p.TextAccent),
+        ("ComboBoxItemBackgroundSelectedPressed", p => p.BorderAccent),
+        ("ComboBoxItemForeground", p => p.TextSecondary),
+        ("ComboBoxItemForegroundPointerOver", p => p.TextPrimary),
+        ("ComboBoxItemForegroundPressed", p => p.TextPrimary),
+        ("ComboBoxItemForegroundSelected", p => p.TextPrimary),
+        ("ComboBoxItemForegroundSelectedPointerOver", p => p.TextPrimary),
+        ("ComboBoxItemForegroundSelectedPressed", p => p.TextPrimary),
+        ("ComboBoxItemForegroundDisabled", p => p.TextMuted),
+
+        ("MenuFlyoutPresenterBackground", p => p.BackgroundBase),
+        ("MenuFlyoutPresenterBorderBrush", p => p.BorderSubtle),
+        ("MenuFlyoutItemBackgroundPointerOver", p => p.SurfaceCard),
+        ("MenuFlyoutItemBackgroundPressed", p => p.SurfaceInput),
+        ("MenuFlyoutItemForeground", p => p.TextSecondary),
+        ("MenuFlyoutItemForegroundPointerOver", p => p.TextPrimary),
+        ("MenuFlyoutItemForegroundPressed", p => p.TextPrimary),
+        ("MenuFlyoutItemForegroundDisabled", p => p.TextMuted)
+    ];
 
     private readonly record struct GalleryScrollAnchor(ImageItem Item, int OldIndex, double Offset);
 
@@ -150,80 +238,11 @@ public partial class MainWindow : Window
 
         var palette = GetThemePalette(themeMode);
 
-        SetBrush(resources, "BackgroundBase", palette.BackgroundBase);
-        SetBrush(resources, "SurfaceBase", palette.BackgroundBase);
-        SetBrush(resources, "LargePreviewOverlayBackground", palette.BackgroundBase);
-        SetBrush(resources, "SurfaceCard", palette.SurfaceCard);
-        SetBrush(resources, "SurfaceSidebar", palette.SurfaceSidebar);
-        SetBrush(resources, "SurfaceElevated", palette.SurfaceElevated);
-        SetBrush(resources, "SurfaceInput", palette.SurfaceInput);
-        SetBrush(resources, "BorderSubtle", palette.BorderSubtle);
-        SetBrush(resources, "ToolbarBorderSubtle", palette.ToolbarBorderSubtle);
-        SetBrush(resources, "BorderAccent", palette.BorderAccent);
-        SetBrush(resources, "CardHoverBorder", palette.CardHoverBorder);
-        SetBrush(resources, "TextPrimary", palette.TextPrimary);
-        SetBrush(resources, "TextSecondary", palette.TextSecondary);
-        SetBrush(resources, "TextMuted", palette.TextMuted);
-        SetBrush(resources, "TextAccent", palette.TextAccent);
-        SetBrush(resources, "PromptText", palette.TextSecondary);
-        SetBrush(resources, "EmptyStateSubtext", palette.EmptyStateSubtext);
-
         SetColor(resources, "SystemAccentColor", palette.BorderAccent);
-        SetBrush(resources, "SystemControlHighlightAccentBrush", palette.BorderAccent);
-        SetBrush(resources, "AccentFillColorDefaultBrush", palette.BorderAccent);
-        SetBrush(resources, "AccentFillColorSecondaryBrush", palette.BorderAccent);
-        SetBrush(resources, "AccentFillColorTertiaryBrush", palette.BorderAccent);
-
-        SetBrush(resources, "SliderThumbBackground", palette.BorderAccent);
-        SetBrush(resources, "SliderThumbBackgroundPointerOver", palette.TextAccent);
-        SetBrush(resources, "SliderThumbBackgroundPressed", palette.BorderAccent);
-        SetBrush(resources, "SliderThumbBackgroundDisabled", palette.BorderSubtle);
-        SetBrush(resources, "SliderTrackFill", palette.BorderSubtle);
-        SetBrush(resources, "SliderTrackFillPointerOver", palette.BorderSubtle);
-        SetBrush(resources, "SliderTrackFillPressed", palette.BorderSubtle);
-        SetBrush(resources, "SliderTrackFillDisabled", palette.SurfaceInput);
-        SetBrush(resources, "SliderTrackValueFill", palette.BorderAccent);
-        SetBrush(resources, "SliderTrackValueFillPointerOver", palette.BorderAccent);
-        SetBrush(resources, "SliderTrackValueFillPressed", palette.BorderAccent);
-        SetBrush(resources, "SliderTrackValueFillDisabled", palette.BorderSubtle);
-
-        SetBrush(resources, "ComboBoxBackground", palette.SurfaceInput);
-        SetBrush(resources, "ComboBoxBackgroundPointerOver", palette.SurfaceElevated);
-        SetBrush(resources, "ComboBoxBackgroundPressed", palette.SurfaceInput);
-        SetBrush(resources, "ComboBoxBackgroundDisabled", palette.SurfaceSidebar);
-        SetBrush(resources, "ComboBoxBorderBrush", palette.BorderSubtle);
-        SetBrush(resources, "ComboBoxBorderBrushPointerOver", palette.BorderAccent);
-        SetBrush(resources, "ComboBoxBorderBrushPressed", palette.BorderAccent);
-        SetBrush(resources, "ComboBoxBorderBrushDisabled", palette.BorderSubtle);
-        SetBrush(resources, "ComboBoxDropdownBackground", palette.SurfaceCard);
-        SetBrush(resources, "ComboBoxDropDownBackground", palette.SurfaceCard);
-        SetBrush(resources, "ComboBoxDropdownBorderBrush", palette.BorderSubtle);
-        SetBrush(resources, "ComboBoxDropDownBorderBrush", palette.BorderSubtle);
-        SetBrush(resources, "ComboBoxForeground", palette.TextPrimary);
-        SetBrush(resources, "ComboBoxForegroundPointerOver", palette.TextPrimary);
-        SetBrush(resources, "ComboBoxForegroundPressed", palette.TextPrimary);
-        SetBrush(resources, "ComboBoxForegroundDisabled", palette.TextMuted);
-        SetBrush(resources, "ComboBoxItemBackgroundPointerOver", palette.SurfaceInput);
-        SetBrush(resources, "ComboBoxItemBackgroundPressed", palette.SurfaceInput);
-        SetBrush(resources, "ComboBoxItemBackgroundSelected", palette.BorderAccent);
-        SetBrush(resources, "ComboBoxItemBackgroundSelectedPointerOver", palette.TextAccent);
-        SetBrush(resources, "ComboBoxItemBackgroundSelectedPressed", palette.BorderAccent);
-        SetBrush(resources, "ComboBoxItemForeground", palette.TextSecondary);
-        SetBrush(resources, "ComboBoxItemForegroundPointerOver", palette.TextPrimary);
-        SetBrush(resources, "ComboBoxItemForegroundPressed", palette.TextPrimary);
-        SetBrush(resources, "ComboBoxItemForegroundSelected", palette.TextPrimary);
-        SetBrush(resources, "ComboBoxItemForegroundSelectedPointerOver", palette.TextPrimary);
-        SetBrush(resources, "ComboBoxItemForegroundSelectedPressed", palette.TextPrimary);
-        SetBrush(resources, "ComboBoxItemForegroundDisabled", palette.TextMuted);
-
-        SetBrush(resources, "MenuFlyoutPresenterBackground", palette.BackgroundBase);
-        SetBrush(resources, "MenuFlyoutPresenterBorderBrush", palette.BorderSubtle);
-        SetBrush(resources, "MenuFlyoutItemBackgroundPointerOver", palette.SurfaceCard);
-        SetBrush(resources, "MenuFlyoutItemBackgroundPressed", palette.SurfaceInput);
-        SetBrush(resources, "MenuFlyoutItemForeground", palette.TextSecondary);
-        SetBrush(resources, "MenuFlyoutItemForegroundPointerOver", palette.TextPrimary);
-        SetBrush(resources, "MenuFlyoutItemForegroundPressed", palette.TextPrimary);
-        SetBrush(resources, "MenuFlyoutItemForegroundDisabled", palette.TextMuted);
+        foreach (var (key, color) in ThemeBrushResources)
+        {
+            SetBrush(resources, key, color(palette));
+        }
     }
 
     private static ThemePalette GetThemePalette(ThemeMode themeMode)
@@ -288,6 +307,7 @@ public partial class MainWindow : Window
         CancelAndDispose(ref _scannerCancellation);
         _scannerGeneration++;
         CancelAndDispose(ref _loadCancellation);
+        CancelAndDispose(ref _advancedMaintenanceStatusCancellation);
         _loadGeneration++;
         _thumbnailLoads.Clear();
         ImageItem.ClearDeferredThumbnailCacheWrites();
@@ -337,6 +357,10 @@ public partial class MainWindow : Window
     private void AdvancedToggle_Click(object? sender, RoutedEventArgs e)
     {
         AdvancedPanel.IsVisible = AdvancedToggle.IsChecked == true;
+        if (!AdvancedPanel.IsVisible)
+        {
+            ClearAdvancedMaintenanceStatus();
+        }
     }
 
     private async void OpenFolderButton_Click(object? sender, RoutedEventArgs e)
@@ -714,14 +738,20 @@ public partial class MainWindow : Window
         var windowWidth = e.NewSize.Width;
         var windowHeight = e.NewSize.Height;
 
-        double targetSidebarWidth = Math.Clamp(windowWidth * 0.3, 260, 380);
+        double targetSidebarWidth = Math.Clamp(
+            windowWidth * SidebarWidthWindowRatio,
+            MinSidebarWidth,
+            MaxSidebarWidth);
         
         if (MainGrid != null && MainGrid.ColumnDefinitions.Count > 1)
         {
             MainGrid.ColumnDefinitions[1].Width = new GridLength(targetSidebarWidth, GridUnitType.Pixel);
         }
 
-        double targetImageHeight = Math.Clamp(windowHeight * 0.4, 180, 350);
+        double targetImageHeight = Math.Clamp(
+            windowHeight * SidebarPreviewHeightWindowRatio,
+            MinSidebarPreviewHeight,
+            MaxSidebarPreviewHeight);
 
         if (SidebarContent != null && SidebarContent.RowDefinitions.Count > 0)
         {
@@ -1100,6 +1130,7 @@ public partial class MainWindow : Window
             SidebarNegativePrompt.Text = "";
             SidebarNegativePromptContainer.IsVisible = false;
             CollapseNegativePrompt();
+            ApplyNegativePromptPresentation("");
 
             SidebarHeaderTitle.Text = "Metadata";
             ToolTip.SetTip(SidebarHeaderTitle, null);
@@ -1109,6 +1140,7 @@ public partial class MainWindow : Window
 
         CollapseNegativePrompt();
         _isPositivePromptExpanded = false;
+        _isNegativePromptExpanded = false;
 
         item.IsSelected = true;
         item.PropertyChanged += SelectedItem_PropertyChanged;
@@ -1150,25 +1182,36 @@ public partial class MainWindow : Window
 
     private void ToggleNegativePrompt()
     {
-        bool isVisible = !SidebarNegativePrompt.IsVisible;
-        SidebarNegativePrompt.IsVisible = isVisible;
+        bool isVisible = !SidebarNegativePromptTextContainer.IsVisible;
+        SidebarNegativePromptTextContainer.IsVisible = isVisible;
         SidebarCopyNegativePromptButton.IsVisible = isVisible;
         SidebarNegativePromptArrow.Text = isVisible ? "▾" : "▸";
         SidebarNegativePromptHeader.IsChecked = isVisible;
+        ApplyNegativePromptPresentation(SidebarNegativePrompt.Text ?? "");
     }
 
     private void CollapseNegativePrompt()
     {
-        SidebarNegativePrompt.IsVisible = false;
+        SidebarNegativePromptTextContainer.IsVisible = false;
         SidebarCopyNegativePromptButton.IsVisible = false;
+        SidebarNegativePromptFade.IsVisible = false;
+        SidebarNegativePromptExpandButton.IsVisible = false;
         SidebarNegativePromptArrow.Text = "▸";
         SidebarNegativePromptHeader.IsChecked = false;
+        _isNegativePromptExpanded = false;
     }
 
     private void SidebarPromptExpandButton_Click(object? sender, RoutedEventArgs e)
     {
         _isPositivePromptExpanded = !_isPositivePromptExpanded;
         ApplyPositivePromptPresentation(SidebarPrompt.Text ?? "");
+        e.Handled = true;
+    }
+
+    private void SidebarNegativePromptExpandButton_Click(object? sender, RoutedEventArgs e)
+    {
+        _isNegativePromptExpanded = !_isNegativePromptExpanded;
+        ApplyNegativePromptPresentation(SidebarNegativePrompt.Text ?? "");
         e.Handled = true;
     }
 
@@ -1190,6 +1233,28 @@ public partial class MainWindow : Window
         if (SidebarPromptExpandButton.Content is TextBlock label)
         {
             label.Text = _isPositivePromptExpanded ? "Show less" : "Show more";
+        }
+    }
+
+    private void ApplyNegativePromptPresentation(string prompt)
+    {
+        // Intentional heuristic: mirrors positive prompt expansion without an extra text measurement pass.
+        bool isLong = prompt.Length >= LongPositivePromptCharacterThreshold ||
+                      prompt.Count(character => character == '\n') >= LongPositivePromptLineThreshold;
+        if (!isLong)
+        {
+            _isNegativePromptExpanded = false;
+        }
+
+        bool isCollapsed = isLong && !_isNegativePromptExpanded;
+        bool isVisible = SidebarNegativePromptTextContainer.IsVisible;
+        SidebarNegativePrompt.MaxHeight = isCollapsed ? CollapsedPositivePromptMaxHeight : double.PositiveInfinity;
+        SidebarNegativePromptFade.IsVisible = isVisible && isCollapsed;
+        SidebarNegativePromptExpandButton.IsVisible = isVisible && isLong;
+        SidebarNegativePromptExpandButton.IsChecked = _isNegativePromptExpanded;
+        if (SidebarNegativePromptExpandButton.Content is TextBlock label)
+        {
+            label.Text = _isNegativePromptExpanded ? "Show less" : "Show more";
         }
     }
 
@@ -1245,6 +1310,7 @@ public partial class MainWindow : Window
         SidebarNegativePrompt.SelectionStart = 0;
         SidebarNegativePrompt.SelectionEnd = 0;
         SidebarNegativePromptContainer.IsVisible = item.HasNegativePrompt;
+        ApplyNegativePromptPresentation(SidebarNegativePrompt.Text);
 
         SidebarImage.Source = item.SelectedPreview ?? item.Preview;
     }
@@ -1542,8 +1608,9 @@ public partial class MainWindow : Window
                         }
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
+                    DebugLog.Write($"Failed to select image in Explorer shell API for {filePath}: {ex.Message}");
                 }
 
                 if (!success)
@@ -1574,8 +1641,9 @@ public partial class MainWindow : Window
                 }
             }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            DebugLog.Write($"Failed to open file manager for {filePath}: {ex.Message}");
         }
     }
 
@@ -1626,7 +1694,7 @@ public partial class MainWindow : Window
 
                 await Parallel.ForEachAsync(uncachedItems, new ParallelOptions
                 {
-                    MaxDegreeOfParallelism = 2,
+                    MaxDegreeOfParallelism = MetadataScannerMaxDegreeOfParallelism,
                     CancellationToken = token
                 },
                 async (item, cancellationToken) =>
@@ -1641,7 +1709,7 @@ public partial class MainWindow : Window
                             bool shouldRefresh = false;
                             lock (itemsSnapshot)
                             {
-                                if ((now - lastRefreshTime).TotalMilliseconds > 1000)
+                                if (now - lastRefreshTime > MetadataScannerSearchRefreshInterval)
                                 {
                                     lastRefreshTime = now;
                                     shouldRefresh = true;
@@ -1660,7 +1728,10 @@ public partial class MainWindow : Window
                         }
                     }
                     catch (OperationCanceledException) { }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        DebugLog.Write($"Metadata scanner worker failed: {ex.Message}");
+                    }
                 });
 
                 if (!token.IsCancellationRequested && scannerGeneration == _scannerGeneration)
@@ -2131,8 +2202,9 @@ public partial class MainWindow : Window
             var lastSegments = parts.Skip(parts.Length - maxSegments).ToArray();
             return "..." + separator + string.Join(separator, lastSegments);
         }
-        catch
+        catch (Exception ex)
         {
+            DebugLog.Write($"Failed to shorten path {path}: {ex.Message}");
             return path;
         }
     }
@@ -2162,10 +2234,12 @@ public partial class MainWindow : Window
             }
 
             Directory.CreateDirectory(ImageItem.ThumbnailCacheRootDir);
+            ShowAdvancedMaintenanceStatus("Thumbnail cache cleared.");
         }
         catch (Exception ex)
         {
             DebugLog.Write($"Failed to clear thumbnail cache: {ex}");
+            ClearAdvancedMaintenanceStatus();
             ShowMenuError($"Could not clear cache: {ex.Message}");
         }
     }
@@ -2175,10 +2249,12 @@ public partial class MainWindow : Window
         try
         {
             MetadataIndex.Clear();
+            ShowAdvancedMaintenanceStatus("Metadata cache cleared.");
         }
         catch (Exception ex)
         {
             DebugLog.Write($"Failed to clear metadata cache: {ex}");
+            ClearAdvancedMaintenanceStatus();
             ShowMenuError($"Could not clear metadata cache: {ex.Message}");
         }
     }
@@ -2189,12 +2265,55 @@ public partial class MainWindow : Window
         {
             Directory.CreateDirectory(ImageItem.ThumbnailCacheRootDir);
             OpenFolderInFileManager(UserPreferences.AppDataDir);
+            ShowAdvancedMaintenanceStatus("App data folder opened.");
         }
         catch (Exception ex)
         {
             DebugLog.Write($"Failed to open app data folder: {ex}");
+            ClearAdvancedMaintenanceStatus();
             ShowMenuError($"Could not open app data: {ex.Message}");
         }
+    }
+
+    private async void ShowAdvancedMaintenanceStatus(string message)
+    {
+        CancelAndDispose(ref _advancedMaintenanceStatusCancellation);
+        _advancedMaintenanceStatusCancellation = new CancellationTokenSource();
+        var token = _advancedMaintenanceStatusCancellation.Token;
+
+        AdvancedMaintenanceStatus.Text = message;
+        AdvancedMaintenanceStatus.Opacity = 0;
+        AdvancedMaintenanceStatus.IsVisible = true;
+        await Task.Yield();
+        if (token.IsCancellationRequested)
+        {
+            return;
+        }
+
+        AdvancedMaintenanceStatus.Opacity = 1;
+
+        try
+        {
+            await Task.Delay(AdvancedMaintenanceStatusDuration, token);
+            AdvancedMaintenanceStatus.Opacity = 0;
+            await Task.Delay(120, token);
+            if (!token.IsCancellationRequested)
+            {
+                AdvancedMaintenanceStatus.IsVisible = false;
+                AdvancedMaintenanceStatus.Text = "";
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private void ClearAdvancedMaintenanceStatus()
+    {
+        CancelAndDispose(ref _advancedMaintenanceStatusCancellation);
+        AdvancedMaintenanceStatus.Opacity = 0;
+        AdvancedMaintenanceStatus.IsVisible = false;
+        AdvancedMaintenanceStatus.Text = "";
     }
 
     private void ShowMainMenu()

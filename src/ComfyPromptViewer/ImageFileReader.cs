@@ -14,6 +14,12 @@ public static class ImageFileReader
     private const ushort ExifIfdPointerTag = 0x8769;
     private const ushort UserCommentTag = 0x9286;
     private static readonly Encoding StrictUtf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+    private static ReadOnlySpan<byte> PngSignature => [137, 80, 78, 71, 13, 10, 26, 10];
+    private static ReadOnlySpan<byte> PngHeaderChunk => "IHDR"u8;
+    private static ReadOnlySpan<byte> PngTextChunk => "tEXt"u8;
+    private static ReadOnlySpan<byte> PngInternationalTextChunk => "iTXt"u8;
+    private static ReadOnlySpan<byte> PngCompressedTextChunk => "zTXt"u8;
+    private static ReadOnlySpan<byte> PngEndChunk => "IEND"u8;
 
     public static bool IsSupportedImage(string path)
     {
@@ -71,10 +77,9 @@ public static class ImageFileReader
 
     private static ImageReadResult ReadPng(Stream stream)
     {
-        ReadOnlySpan<byte> pngSignature = [137, 80, 78, 71, 13, 10, 26, 10];
         Span<byte> signature = stackalloc byte[8];
         ReadExactly(stream, signature);
-        if (!signature.SequenceEqual(pngSignature))
+        if (!signature.SequenceEqual(PngSignature))
         {
             throw new InvalidDataException("Invalid PNG signature.");
         }
@@ -97,7 +102,7 @@ public static class ImageFileReader
 
             var dataLength = checked((int)length);
 
-            if (typeBytes.SequenceEqual("IHDR"u8))
+            if (typeBytes.SequenceEqual(PngHeaderChunk))
             {
                 if (dataLength != 13)
                 {
@@ -109,7 +114,7 @@ public static class ImageFileReader
                 width = ReadInt32BigEndian(ihdrData[..4]);
                 height = ReadInt32BigEndian(ihdrData.Slice(4, 4));
             }
-            else if (typeBytes.SequenceEqual("tEXt"u8))
+            else if (typeBytes.SequenceEqual(PngTextChunk))
             {
                 if (dataLength > MaxTextChunkBytes)
                 {
@@ -120,7 +125,7 @@ public static class ImageFileReader
                 SkipCrc(stream);
                 ReadTextChunk(data, metadata);
             }
-            else if (typeBytes.SequenceEqual("iTXt"u8))
+            else if (typeBytes.SequenceEqual(PngInternationalTextChunk))
             {
                 if (dataLength > MaxTextChunkBytes)
                 {
@@ -131,7 +136,7 @@ public static class ImageFileReader
                 SkipCrc(stream);
                 ReadInternationalTextChunk(data, metadata);
             }
-            else if (typeBytes.SequenceEqual("zTXt"u8))
+            else if (typeBytes.SequenceEqual(PngCompressedTextChunk))
             {
                 if (dataLength > MaxTextChunkBytes)
                 {
@@ -142,7 +147,7 @@ public static class ImageFileReader
                 SkipCrc(stream);
                 ReadCompressedTextChunk(data, metadata);
             }
-            else if (typeBytes.SequenceEqual("IEND"u8))
+            else if (typeBytes.SequenceEqual(PngEndChunk))
             {
                 SkipChunk(stream, dataLength);
                 return new ImageReadResult(width, height, metadata);

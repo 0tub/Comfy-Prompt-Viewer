@@ -123,15 +123,16 @@
             <Setter Property="FontSize" Value="16" />
         </Style>
         <Style Selector="Button.close-btn /template/ ContentPresenter">
-            <Setter Property="Transitions">
-                <Transitions>
-                    <BrushTransition Property="Background" Duration="0:0:0.12" Easing="CubicEaseOut" />
-                    <BrushTransition Property="Foreground" Duration="0:0:0.12" Easing="CubicEaseOut" />
-                </Transitions>
-            </Setter>
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
         </Style>
         <Style Selector="Button.close-btn:pointerover /template/ ContentPresenter">
             <Setter Property="Background" Value="{DynamicResource SurfaceInput}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+        </Style>
+        <Style Selector="Button.close-btn:pressed /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource SurfaceInput}" />
+            <Setter Property="BorderBrush" Value="Transparent" />
             <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
         </Style>
 
@@ -1119,34 +1120,70 @@
                                               </Button>
                                           </Grid>
 
-                                          <TextBox Name="SidebarNegativePrompt"
-                                                   IsReadOnly="True"
-                                                   AcceptsReturn="True"
-                                                   TextWrapping="Wrap"
-                                                   Background="{DynamicResource SurfaceInput}"
-                                                   Foreground="{DynamicResource PromptText}"
-                                                   BorderBrush="{DynamicResource BorderAccent}"
-                                                   BorderThickness="3,0,0,0"
-                                                   CornerRadius="2"
-                                                   Padding="10,8"
-                                                   FontFamily="{DynamicResource FontUI}"
-                                                   FontSize="12"
-                                                   FontWeight="Normal"
-                                                   LineHeight="20.4"
-                                                   FocusAdorner="{x:Null}"
-                                                   AutomationProperties.Name="Negative prompt"
-                                                   MinHeight="80"
-                                                   IsVisible="False"
-                                                   PlaceholderText="No negative prompt found">
-                                              <TextBox.ContextMenu>
-                                                  <ContextMenu Opened="ContextMenu_Opened">
-                                                      <MenuItem Header="Copy Selected Text" Name="MenuCopyNegativeSelection" Click="MenuCopySelection_Click" InputGesture="Ctrl+C" />
-                                                      <MenuItem Header="Copy Full Prompt" Name="MenuCopyNegativeFullPrompt" Click="MenuCopyFullPrompt_Click" />
-                                                      <Separator />
-                                                      <MenuItem Header="Select All" Name="MenuSelectNegativeAll" Click="MenuSelectAll_Click" InputGesture="Ctrl+A" />
-                                                  </ContextMenu>
-                                              </TextBox.ContextMenu>
-                                          </TextBox>
+                                          <Grid Name="SidebarNegativePromptTextContainer"
+                                                ClipToBounds="True"
+                                                IsVisible="False">
+                                              <TextBox Name="SidebarNegativePrompt"
+                                                       IsReadOnly="True"
+                                                       AcceptsReturn="True"
+                                                       TextWrapping="Wrap"
+                                                       Background="{DynamicResource SurfaceInput}"
+                                                       Foreground="{DynamicResource PromptText}"
+                                                       BorderBrush="{DynamicResource BorderAccent}"
+                                                       BorderThickness="3,0,0,0"
+                                                       CornerRadius="2"
+                                                       Padding="10,8"
+                                                       FontFamily="{DynamicResource FontUI}"
+                                                       FontSize="12"
+                                                       FontWeight="Normal"
+                                                       LineHeight="20.4"
+                                                       FocusAdorner="{x:Null}"
+                                                       AutomationProperties.Name="Negative prompt"
+                                                       MinHeight="80"
+                                                       MaxHeight="168"
+                                                       ScrollViewer.VerticalScrollBarVisibility="Hidden"
+                                                       PlaceholderText="No negative prompt found">
+                                                  <TextBox.ContextMenu>
+                                                      <ContextMenu Opened="ContextMenu_Opened">
+                                                          <MenuItem Header="Copy Selected Text" Name="MenuCopyNegativeSelection" Click="MenuCopySelection_Click" InputGesture="Ctrl+C" />
+                                                          <MenuItem Header="Copy Full Prompt" Name="MenuCopyNegativeFullPrompt" Click="MenuCopyFullPrompt_Click" />
+                                                          <Separator />
+                                                          <MenuItem Header="Select All" Name="MenuSelectNegativeAll" Click="MenuSelectAll_Click" InputGesture="Ctrl+A" />
+                                                      </ContextMenu>
+                                                  </TextBox.ContextMenu>
+                                              </TextBox>
+                                              <Border Name="SidebarNegativePromptFade"
+                                                      Height="48"
+                                                      Margin="3,0,0,0"
+                                                      VerticalAlignment="Bottom"
+                                                      Background="{DynamicResource SurfaceInput}"
+                                                      IsHitTestVisible="False"
+                                                      IsVisible="False">
+                                                  <Border.OpacityMask>
+                                                      <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
+                                                          <GradientStop Offset="0" Color="#00FFFFFF" />
+                                                          <GradientStop Offset="1" Color="#FFFFFFFF" />
+                                                      </LinearGradientBrush>
+                                                  </Border.OpacityMask>
+                                              </Border>
+                                          </Grid>
+                                          <ToggleButton Name="SidebarNegativePromptExpandButton"
+                                                        Classes="flat-toggle"
+                                                        IsVisible="False"
+                                                        HorizontalAlignment="Left"
+                                                        Margin="0,6,0,0"
+                                                        Click="SidebarNegativePromptExpandButton_Click"
+                                                        AutomationProperties.Name="Expand negative prompt">
+                                              <ToolTip.Tip>
+                                                  <TextBlock Text="Show or hide the full negative prompt"
+                                                             Foreground="{DynamicResource TextSecondary}" />
+                                              </ToolTip.Tip>
+                                              <TextBlock Text="Show more"
+                                                         Foreground="{DynamicResource TextAccent}"
+                                                         FontFamily="{DynamicResource FontUI}"
+                                                         FontSize="11"
+                                                         FontWeight="SemiBold" />
+                                          </ToggleButton>
                                       </StackPanel>
 
                                       <!-- Compact Settings Card -->
@@ -1380,6 +1417,19 @@
                                             <TextBlock Text="Open App Data Folder" FontSize="13" VerticalAlignment="Center" />
                                         </StackPanel>
                                     </Button>
+                                    <TextBlock Name="AdvancedMaintenanceStatus"
+                                               Text=""
+                                               Foreground="{DynamicResource TextAccent}"
+                                               FontSize="12"
+                                               TextWrapping="Wrap"
+                                               IsVisible="False"
+                                               Opacity="0">
+                                        <TextBlock.Transitions>
+                                            <Transitions>
+                                                <DoubleTransition Property="Opacity" Duration="0:0:0.12" Easing="CubicEaseOut" />
+                                            </Transitions>
+                                        </TextBlock.Transitions>
+                                    </TextBlock>
                                 </StackPanel>
                             </StackPanel>
                         </StackPanel>

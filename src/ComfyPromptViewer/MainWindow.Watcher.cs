@@ -9,6 +9,7 @@ namespace ComfyPromptViewer;
 
 public partial class MainWindow
 {
+    private static readonly TimeSpan WatcherDebounceInterval = TimeSpan.FromMilliseconds(300);
     private FileSystemWatcher? _folderWatcher;
     private readonly object _watcherLock = new();
     private readonly HashSet<string> _pendingAddedFiles = new(StringComparer.OrdinalIgnoreCase);
@@ -31,8 +32,9 @@ public partial class MainWindow
             _folderWatcher.Renamed += OnFileRenamed;
             _folderWatcher.EnableRaisingEvents = true;
         }
-        catch
+        catch (Exception ex)
         {
+            DebugLog.Write($"Failed to start folder watcher for {folderPath}: {ex.Message}");
         }
     }
 
@@ -48,8 +50,9 @@ public partial class MainWindow
                 _folderWatcher.Renamed -= OnFileRenamed;
                 _folderWatcher.Dispose();
             }
-            catch
+            catch (Exception ex)
             {
+                DebugLog.Write($"Failed to stop folder watcher: {ex.Message}");
             }
             _folderWatcher = null;
         }
@@ -120,7 +123,7 @@ public partial class MainWindow
         {
             _watcherDebounceTimer = new DispatcherTimer
             {
-                Interval = TimeSpan.FromMilliseconds(300)
+                Interval = WatcherDebounceInterval
             };
             _watcherDebounceTimer.Tick += OnWatcherTimerTick;
         }
@@ -225,7 +228,7 @@ public partial class MainWindow
 
                 await Parallel.ForEachAsync(newItems, new ParallelOptions
                 {
-                    MaxDegreeOfParallelism = 2,
+                    MaxDegreeOfParallelism = MetadataScannerMaxDegreeOfParallelism,
                     CancellationToken = token
                 },
                 async (item, cancellationToken) =>
@@ -239,7 +242,7 @@ public partial class MainWindow
                             var shouldRefresh = false;
                             lock (refreshLock)
                             {
-                                if ((now - lastRefreshTime).TotalMilliseconds > 1000)
+                                if (now - lastRefreshTime > MetadataScannerSearchRefreshInterval)
                                 {
                                     lastRefreshTime = now;
                                     shouldRefresh = true;

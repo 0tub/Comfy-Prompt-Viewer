@@ -22,7 +22,10 @@ public sealed class ImageItem : INotifyPropertyChanged
         {
             Directory.CreateDirectory(ThumbnailCacheRootDir);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            DebugLog.Write($"Failed to create thumbnail cache root {ThumbnailCacheRootDir}: {ex.Message}");
+        }
     }
 
     private string BuildThumbnailCachePath()
@@ -37,7 +40,7 @@ public sealed class ImageItem : INotifyPropertyChanged
                 parentName = "root";
             }
 
-            var folderHash = HashText(parentPath).Substring(0, 8);
+            var folderHash = HashText(parentPath).Substring(0, ThumbnailFolderHashLength);
             var safeParentName = MakeSafePathSegment(parentName);
             var cacheDir = System.IO.Path.Combine(ThumbnailCacheRootDir, $"{safeParentName}_{folderHash}");
             Directory.CreateDirectory(cacheDir);
@@ -91,6 +94,8 @@ public sealed class ImageItem : INotifyPropertyChanged
     private const int LargeThumbnailWidth = 320;
     private const int ThumbnailJpegQuality = 82;
     private const int SelectedPreviewMaxWidth = 1200;
+    private const int ThumbnailFolderHashLength = 8;
+    private const double ThumbnailDecodeScale = 1.5;
     private static readonly char[] InvalidFileNameChars = System.IO.Path.GetInvalidFileNameChars();
     private static readonly SemaphoreSlim ThumbnailCacheWriteLimiter = new(1, 1);
     private static readonly SemaphoreSlim SelectedPreviewLoadLimiter = new(1);
@@ -148,8 +153,9 @@ public sealed class ImageItem : INotifyPropertyChanged
                     var dt = File.GetCreationTime(Path);
                     _creationDateText = dt.ToString("yyyy-MM-dd HH:mm:ss");
                 }
-                catch
+                catch (Exception ex)
                 {
+                    DebugLog.Write($"Failed to read creation time for {Path}: {ex.Message}");
                     _creationDateText = "Unknown";
                 }
             }
@@ -528,7 +534,14 @@ public sealed class ImageItem : INotifyPropertyChanged
                             _hasLoggedThumbnailError = true;
                             DebugLog.Write($"Failed to load cached thumbnail for {Path} at {cachePath}: {ex.Message}. Re-decoding...");
                         }
-                        try { File.Delete(cachePath); } catch { }
+                        try
+                        {
+                            File.Delete(cachePath);
+                        }
+                        catch (Exception deleteEx)
+                        {
+                            DebugLog.Write($"Failed to delete corrupt cached thumbnail {cachePath}: {deleteEx.Message}");
+                        }
                         SetThumbnailCacheState(cachePath, exists: false);
                     }
                 }
@@ -771,8 +784,9 @@ public sealed class ImageItem : INotifyPropertyChanged
         {
             return DeferredThumbnailCacheWritesPaused?.Invoke() == true;
         }
-        catch
+        catch (Exception ex)
         {
+            DebugLog.Write($"Deferred thumbnail cache pause callback failed: {ex.Message}");
             return false;
         }
     }
@@ -812,7 +826,7 @@ public sealed class ImageItem : INotifyPropertyChanged
 
     private int GetThumbnailDecodeWidth()
     {
-        var targetWidth = (int)Math.Ceiling(_tileSize * 1.5);
+        var targetWidth = (int)Math.Ceiling(_tileSize * ThumbnailDecodeScale);
         if (targetWidth <= SmallThumbnailWidth)
         {
             return SmallThumbnailWidth;

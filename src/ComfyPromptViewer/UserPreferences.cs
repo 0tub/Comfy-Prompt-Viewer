@@ -17,21 +17,14 @@ public static class UserPreferences
 
     public static double LoadTileSize(double defaultValue, double minValue, double maxValue)
     {
-        try
+        if (TryReadPreference(TileSizePath, "tile size", out var text) &&
+            double.TryParse(
+                text,
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var savedValue))
         {
-            if (File.Exists(TileSizePath) &&
-                double.TryParse(
-                    File.ReadAllText(TileSizePath).Trim(),
-                    System.Globalization.NumberStyles.Float,
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    out var savedValue))
-            {
-                return Math.Clamp(savedValue, minValue, maxValue);
-            }
-        }
-        catch (Exception ex)
-        {
-            DebugLog.Write($"Failed to load tile size: {ex.Message}");
+            return Math.Clamp(savedValue, minValue, maxValue);
         }
 
         return defaultValue;
@@ -39,45 +32,17 @@ public static class UserPreferences
 
     public static void SaveTileSize(double value)
     {
-        try
-        {
-            Directory.CreateDirectory(AppDataDir);
-            File.WriteAllText(TileSizePath, value.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        }
-        catch (Exception ex)
-        {
-            DebugLog.Write($"Failed to save tile size: {ex.Message}");
-        }
+        SavePreference(TileSizePath, value.ToString(System.Globalization.CultureInfo.InvariantCulture), "tile size");
     }
 
     public static string? LoadLastFolderPath()
     {
-        try
-        {
-            if (File.Exists(LastFolderPath))
-            {
-                return File.ReadAllText(LastFolderPath).Trim();
-            }
-        }
-        catch (Exception ex)
-        {
-            DebugLog.Write($"Failed to load last folder path: {ex.Message}");
-        }
-
-        return null;
+        return TryReadPreference(LastFolderPath, "last folder path", out var text) ? text : null;
     }
 
     public static void SaveLastFolderPath(string folderPath)
     {
-        try
-        {
-            Directory.CreateDirectory(AppDataDir);
-            File.WriteAllText(LastFolderPath, folderPath);
-        }
-        catch (Exception ex)
-        {
-            DebugLog.Write($"Failed to save last folder path: {ex.Message}");
-        }
+        SavePreference(LastFolderPath, folderPath, "last folder path");
     }
 
     public static System.Collections.Generic.List<RecentFolder> LoadRecentFolders()
@@ -105,7 +70,10 @@ public static class UserPreferences
                         {
                             folder.LastOpened = new DateTime(ticks, DateTimeKind.Utc);
                         }
-                        catch {}
+                        catch (Exception ex)
+                        {
+                            DebugLog.Write($"Failed to parse recent folder timestamp for {folder.Path}: {ex.Message}");
+                        }
                     }
                     else
                     {
@@ -116,7 +84,10 @@ public static class UserPreferences
                                 folder.LastOpened = Directory.GetLastWriteTimeUtc(folder.Path);
                             }
                         }
-                        catch {}
+                        catch (Exception ex)
+                        {
+                            DebugLog.Write($"Failed to read recent folder write time for {folder.Path}: {ex.Message}");
+                        }
                     }
 
                     if (list.TrueForAll(x => !string.Equals(x.Path, folder.Path, StringComparison.OrdinalIgnoreCase)))
@@ -177,61 +148,65 @@ public static class UserPreferences
 
     public static bool LoadIncludeSubfolders()
     {
-        try
-        {
-            return File.Exists(IncludeSubfoldersPath) &&
-                   bool.TryParse(File.ReadAllText(IncludeSubfoldersPath).Trim(), out var value) &&
-                   value;
-        }
-        catch (Exception ex)
-        {
-            DebugLog.Write($"Failed to load include-subfolders setting: {ex.Message}");
-            return false;
-        }
+        return TryReadPreference(IncludeSubfoldersPath, "include-subfolders setting", out var text) &&
+               bool.TryParse(text, out var value) &&
+               value;
     }
 
     public static void SaveIncludeSubfolders(bool includeSubfolders)
     {
-        try
-        {
-            Directory.CreateDirectory(AppDataDir);
-            File.WriteAllText(IncludeSubfoldersPath, includeSubfolders.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        }
-        catch (Exception ex)
-        {
-            DebugLog.Write($"Failed to save include-subfolders setting: {ex.Message}");
-        }
+        SavePreference(
+            IncludeSubfoldersPath,
+            includeSubfolders.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            "include-subfolders setting");
     }
 
     public static ThemeMode LoadThemeMode()
     {
-        try
+        if (TryReadPreference(ThemeModePath, "theme mode", out var text) &&
+            Enum.TryParse<ThemeMode>(text, ignoreCase: true, out var value) &&
+            Enum.IsDefined(value))
         {
-            if (File.Exists(ThemeModePath) &&
-                Enum.TryParse<ThemeMode>(File.ReadAllText(ThemeModePath).Trim(), ignoreCase: true, out var value) &&
-                Enum.IsDefined(value))
-            {
-                return value;
-            }
-        }
-        catch (Exception ex)
-        {
-            DebugLog.Write($"Failed to load theme mode: {ex.Message}");
+            return value;
         }
 
-        return ThemeMode.Brown;
+        return ThemeMode.DarkGray;
     }
 
     public static void SaveThemeMode(ThemeMode themeMode)
     {
+        SavePreference(ThemeModePath, themeMode.ToString(), "theme mode");
+    }
+
+    private static bool TryReadPreference(string path, string label, out string text)
+    {
         try
         {
-            Directory.CreateDirectory(AppDataDir);
-            File.WriteAllText(ThemeModePath, themeMode.ToString());
+            if (File.Exists(path))
+            {
+                text = File.ReadAllText(path).Trim();
+                return true;
+            }
         }
         catch (Exception ex)
         {
-            DebugLog.Write($"Failed to save theme mode: {ex.Message}");
+            DebugLog.Write($"Failed to load {label}: {ex.Message}");
+        }
+
+        text = "";
+        return false;
+    }
+
+    private static void SavePreference(string path, string value, string label)
+    {
+        try
+        {
+            Directory.CreateDirectory(AppDataDir);
+            File.WriteAllText(path, value);
+        }
+        catch (Exception ex)
+        {
+            DebugLog.Write($"Failed to save {label}: {ex.Message}");
         }
     }
 }

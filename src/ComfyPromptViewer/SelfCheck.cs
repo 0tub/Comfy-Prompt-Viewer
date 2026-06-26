@@ -84,6 +84,33 @@ internal static class SelfCheck
         Check(extracted.NegativePrompt == "blurry", "Expected negative prompt from parameters.");
         Check(extracted.GenerationSettings.Seed == "123", "Expected seed from settings line.");
         Check(extracted.GenerationSettings.Settings == "Steps 20, CFG 7", "Expected compact settings summary.");
+
+        var comfy = PromptExtractor.ExtractAll(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["prompt"] = """
+            {
+              "1": {"class_type":"CLIPTextEncode","inputs":{"text":"positive landscape"}},
+              "2": {"class_type":"CLIPTextEncode","inputs":{"text":"low quality"}},
+              "3": {"class_type":"KSampler","inputs":{"positive":["1",0],"negative":["2",0],"steps":20}}
+            }
+            """
+        });
+
+        Check(comfy.Prompt == "positive landscape", "Expected ComfyUI positive link extraction.");
+        Check(comfy.NegativePrompt == "low quality", "Expected ComfyUI negative link extraction.");
+
+        var noNegative = PromptExtractor.ExtractAll(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["prompt"] = """
+            {
+              "1": {"class_type":"CLIPTextEncode","inputs":{"text":"positive landscape"}},
+              "3": {"class_type":"KSampler","inputs":{"positive":["1",0],"negative":["99",0],"sampler_name":"er_sde","seed":721861089590642}}
+            }
+            """
+        });
+
+        Check(noNegative.NegativePrompt == "", "Expected sampler_name not to be treated as a negative prompt.");
+        Check(noNegative.GenerationSettings.Sampler == "er_sde", "Expected sampler_name to remain in generation settings.");
     }
 
     private static void CheckPngMetadataRead()
@@ -101,13 +128,7 @@ internal static class SelfCheck
         }
         finally
         {
-            try
-            {
-                File.Delete(path);
-            }
-            catch
-            {
-            }
+            DeleteFileQuietly(path);
         }
     }
 
@@ -126,14 +147,8 @@ internal static class SelfCheck
         }
         finally
         {
-            try
-            {
-                File.Delete(path);
-                File.Delete(databasePath);
-            }
-            catch
-            {
-            }
+            DeleteFileQuietly(path);
+            DeleteFileQuietly(databasePath);
         }
     }
 
@@ -168,17 +183,35 @@ internal static class SelfCheck
         }
         finally
         {
-            try
+            DeleteDirectoryQuietly(folder);
+            DeleteFileQuietly(databasePath);
+        }
+    }
+
+    private static void DeleteFileQuietly(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception ex)
+        {
+            DebugLog.Write($"Self-check cleanup failed to delete file {path}: {ex.Message}");
+        }
+    }
+
+    private static void DeleteDirectoryQuietly(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
             {
-                if (Directory.Exists(folder))
-                {
-                    Directory.Delete(folder, recursive: true);
-                }
-                File.Delete(databasePath);
+                Directory.Delete(path, recursive: true);
             }
-            catch
-            {
-            }
+        }
+        catch (Exception ex)
+        {
+            DebugLog.Write($"Self-check cleanup failed to delete directory {path}: {ex.Message}");
         }
     }
 
