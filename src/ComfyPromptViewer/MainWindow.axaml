@@ -2,6 +2,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:ir="clr-namespace:Avalonia.Controls;assembly=Avalonia.Controls.ItemsRepeater"
         xmlns:layout="clr-namespace:Avalonia.Layout;assembly=Avalonia.Controls.ItemsRepeater"
+        xmlns:primitives="clr-namespace:Avalonia.Controls.Primitives;assembly=Avalonia.Controls"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:ComfyPromptViewer"
@@ -174,16 +175,17 @@
             <Setter Property="FontSize" Value="12" />
         </Style>
         <Style Selector="Button.search-help-btn /template/ ContentPresenter">
-            <Setter Property="Transitions">
-                <Transitions>
-                    <BrushTransition Property="Background" Duration="0:0:0.12" Easing="CubicEaseOut" />
-                    <BrushTransition Property="Foreground" Duration="0:0:0.12" Easing="CubicEaseOut" />
-                </Transitions>
-            </Setter>
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
         </Style>
         <Style Selector="Button.search-help-btn:pointerover /template/ ContentPresenter">
             <Setter Property="Background" Value="{DynamicResource SurfaceElevated}" />
             <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
+        </Style>
+        <Style Selector="Button.search-help-btn:pressed /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource SurfaceInput}" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
         </Style>
 
         <Style Selector="ComboBox.search-scope-combo">
@@ -598,7 +600,10 @@
                                             <TextBlock Text="Keyboard Shortcuts" FontWeight="SemiBold" FontSize="14" Foreground="{DynamicResource TextPrimary}" />
                                             <Separator Background="{DynamicResource BorderSubtle}" Height="1" Margin="0,2" />
                                             
-                                            <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto" RowSpacing="6">
+                                            <Grid ColumnDefinitions="Auto,*"
+                                                  RowDefinitions="Auto,Auto,Auto,Auto,Auto"
+                                                  ColumnSpacing="20"
+                                                  RowSpacing="6">
                                                 <!-- Row 0: Navigation -->
                                                 <TextBlock Grid.Row="0" Grid.Column="0" Text="Navigate gallery" Foreground="{DynamicResource TextSecondary}" FontSize="12" VerticalAlignment="Center" />
                                                 <TextBlock Grid.Row="0" Grid.Column="1" Text="← ↑ ↓ → / Home / End" Foreground="{DynamicResource TextPrimary}" FontWeight="Medium" FontFamily="{DynamicResource FontMono}" FontSize="11" VerticalAlignment="Center" />
@@ -704,17 +709,9 @@
                                     <Button Name="SearchHelpButton"
                                             Classes="search-help-btn"
                                             Content="?"
-                                            Focusable="False">
-                                        <ToolTip.Tip>
-                                            <StackPanel Spacing="6" Margin="4">
-                                                <TextBlock Text="Search Options" FontWeight="SemiBold" FontSize="12" Foreground="{DynamicResource TextPrimary}" />
-                                                <Separator Background="{DynamicResource BorderSubtle}" Height="1" Margin="0,2" />
-                                                <TextBlock Text="• Separate terms with spaces, commas, or semicolons" Foreground="{DynamicResource TextSecondary}" FontSize="11" />
-                                                <TextBlock Text="• Use -term to exclude (e.g., -watermark)" Foreground="{DynamicResource TextSecondary}" FontSize="11" />
-                                                <TextBlock Text="• Use &quot;term&quot; for exact word/phrase (e.g., &quot;ass&quot; won't match &quot;grass&quot;)" Foreground="{DynamicResource TextSecondary}" FontSize="11" />
-                                            </StackPanel>
-                                        </ToolTip.Tip>
-                                    </Button>
+                                            Focusable="False"
+                                            Click="SearchHelpButton_Click"
+                                            ToolTip.Tip="Show search options" />
                                 </StackPanel>
                             </TextBox.InnerRightContent>
                         </TextBox>
@@ -741,6 +738,29 @@
                             </ComboBox>
                             <Rectangle Width="1" Fill="{DynamicResource BorderSubtle}" Height="18" VerticalAlignment="Center" Margin="2,0,0,0" />
                         </StackPanel>
+                        <primitives:Popup Name="SearchHelpPopup"
+                                          Placement="BottomEdgeAlignedRight"
+                                          PlacementConstraintAdjustment="SlideX,SlideY,FlipY"
+                                          IsLightDismissEnabled="True"
+                                          OverlayDismissEventPassThrough="True"
+                                          ShouldUseOverlayLayer="True"
+                                          VerticalOffset="6">
+                            <Border Padding="16"
+                                    Background="{DynamicResource SurfaceCard}"
+                                    BorderBrush="{DynamicResource BorderSubtle}"
+                                    BorderThickness="1"
+                                    CornerRadius="3">
+                                <StackPanel Spacing="10" MinWidth="360">
+                                    <TextBlock Text="Search Options" FontWeight="SemiBold" FontSize="14" Foreground="{DynamicResource TextPrimary}" />
+                                    <Separator Background="{DynamicResource BorderSubtle}" Height="1" Margin="0,2" />
+                                    <StackPanel Spacing="6">
+                                        <TextBlock Text="• Separate terms with spaces, commas, or semicolons" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}" FontSize="12" />
+                                        <TextBlock Text="• Use -term to exclude (e.g., -watermark)" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}" FontSize="12" />
+                                        <TextBlock Text="• Use &quot;term&quot; for exact word/phrase (e.g., &quot;ass&quot; won't match &quot;grass&quot;)" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}" FontSize="12" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+                        </primitives:Popup>
                             </Grid>
                         </Border>
                         <Rectangle Grid.Column="2" Width="1" Fill="{DynamicResource BorderSubtle}" Height="16" VerticalAlignment="Center" />
@@ -905,7 +925,7 @@
                                              BorderThickness="0,1,0,0"
                                              Margin="0,10,0,6"
                                              Padding="0,8,0,0">
-                                         <Grid ColumnDefinitions="*,Auto">
+                                         <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6">
                                          <TextBlock Grid.Column="0"
                                                     Name="SidebarPromptLabel"
                                                     Text="PROMPT"
@@ -935,42 +955,98 @@
                                                         FontWeight="SemiBold"
                                                         FontFamily="{DynamicResource FontUI}" />
                                          </Border>
+                                         <Button Grid.Column="2"
+                                                 Name="SidebarCopyPromptButton"
+                                                 Content="Copy"
+                                                 Padding="6,3"
+                                                 FontSize="10"
+                                                 Background="{DynamicResource SurfaceElevated}"
+                                                 BorderBrush="{DynamicResource BorderSubtle}"
+                                                 BorderThickness="1"
+                                                 Click="CopyPositivePromptButton_Click"
+                                                 Margin="0,0,8,0"
+                                                 VerticalAlignment="Center"
+                                                 AutomationProperties.Name="Copy positive prompt"
+                                                 ToolTip.Tip="Copy positive prompt"
+                                                 IsVisible="False"
+                                                 IsEnabled="False">
+                                             <Button.Styles>
+                                                 <Style Selector="Button">
+                                                     <Setter Property="CornerRadius" Value="4" />
+                                                 </Style>
+                                             </Button.Styles>
+                                         </Button>
                                      </Grid>
                                  </Border>
                                                 
-                                     <TextBox Name="SidebarPrompt"
-                                              IsReadOnly="True"
-                                              AcceptsReturn="True"
-                                              TextWrapping="Wrap"
-                                              Background="{DynamicResource SurfaceInput}"
-                                              Foreground="{DynamicResource PromptText}"
-                                              BorderBrush="{DynamicResource BorderAccent}"
-                                              BorderThickness="3,0,0,0"
-                                              CornerRadius="2"
-                                              Padding="10,8"
-                                              FontFamily="{DynamicResource FontUI}"
-                                              FontSize="12"
-                                              FontWeight="Normal"
-                                              LineHeight="20.4"
-                                              FocusAdorner="{x:Null}"
-                                              AutomationProperties.Name="Positive prompt"
-                                              MinHeight="80"
-                                              PlaceholderText="No prompt found">
-                                         <TextBox.ContextMenu>
-                                             <ContextMenu Opened="ContextMenu_Opened">
-                                                 <MenuItem Header="Copy Selected Text" Name="MenuCopySelection" Click="MenuCopySelection_Click" InputGesture="Ctrl+C" />
-                                                 <MenuItem Header="Copy Full Prompt" Name="MenuCopyFullPrompt" Click="MenuCopyFullPrompt_Click" />
-                                                 <Separator />
-                                                 <MenuItem Header="Select All" Name="MenuSelectAll" Click="MenuSelectAll_Click" InputGesture="Ctrl+A" />
-                                             </ContextMenu>
-                                         </TextBox.ContextMenu>
-                                     </TextBox>
+                                     <Grid Name="SidebarPromptContainer" ClipToBounds="True">
+                                         <TextBox Name="SidebarPrompt"
+                                                  IsReadOnly="True"
+                                                  AcceptsReturn="True"
+                                                  TextWrapping="Wrap"
+                                                  Background="{DynamicResource SurfaceInput}"
+                                                  Foreground="{DynamicResource PromptText}"
+                                                  BorderBrush="{DynamicResource BorderAccent}"
+                                                  BorderThickness="3,0,0,0"
+                                                  CornerRadius="2"
+                                                  Padding="10,8"
+                                                  FontFamily="{DynamicResource FontUI}"
+                                                  FontSize="12"
+                                                  FontWeight="Normal"
+                                                  LineHeight="20.4"
+                                                  FocusAdorner="{x:Null}"
+                                                  AutomationProperties.Name="Positive prompt"
+                                                  MinHeight="80"
+                                                  MaxHeight="168"
+                                                  ScrollViewer.VerticalScrollBarVisibility="Hidden"
+                                                  PlaceholderText="No prompt found">
+                                             <TextBox.ContextMenu>
+                                                 <ContextMenu Opened="ContextMenu_Opened">
+                                                     <MenuItem Header="Copy Selected Text" Name="MenuCopySelection" Click="MenuCopySelection_Click" InputGesture="Ctrl+C" />
+                                                     <MenuItem Header="Copy Full Prompt" Name="MenuCopyFullPrompt" Click="MenuCopyFullPrompt_Click" />
+                                                     <Separator />
+                                                     <MenuItem Header="Select All" Name="MenuSelectAll" Click="MenuSelectAll_Click" InputGesture="Ctrl+A" />
+                                                 </ContextMenu>
+                                             </TextBox.ContextMenu>
+                                         </TextBox>
+                                         <Border Name="SidebarPromptFade"
+                                                 Height="48"
+                                                 Margin="3,0,0,0"
+                                                 VerticalAlignment="Bottom"
+                                                 Background="{DynamicResource SurfaceInput}"
+                                                 IsHitTestVisible="False"
+                                                 IsVisible="False">
+                                             <Border.OpacityMask>
+                                                 <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
+                                                     <GradientStop Offset="0" Color="#00FFFFFF" />
+                                                     <GradientStop Offset="1" Color="#FFFFFFFF" />
+                                                 </LinearGradientBrush>
+                                             </Border.OpacityMask>
+                                         </Border>
+                                     </Grid>
+                                     <ToggleButton Name="SidebarPromptExpandButton"
+                                                   Classes="flat-toggle"
+                                                   IsVisible="False"
+                                                   HorizontalAlignment="Left"
+                                                   Margin="0,6,0,0"
+                                                   Click="SidebarPromptExpandButton_Click"
+                                                   AutomationProperties.Name="Expand positive prompt">
+                                         <ToolTip.Tip>
+                                             <TextBlock Text="Show or hide the full positive prompt"
+                                                        Foreground="{DynamicResource TextSecondary}" />
+                                         </ToolTip.Tip>
+                                         <TextBlock Text="Show more"
+                                                    Foreground="{DynamicResource TextAccent}"
+                                                    FontFamily="{DynamicResource FontUI}"
+                                                    FontSize="11"
+                                                    FontWeight="SemiBold" />
+                                     </ToggleButton>
 
                                      <!-- Collapsible Negative Prompt -->
                                       <StackPanel Name="SidebarNegativePromptContainer"
                                                   Margin="0,14,0,0"
                                                   IsVisible="False">
-                                          <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,8">
+                                          <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6" Margin="0,0,0,8">
                                               <ToggleButton Grid.Column="0"
                                                             Name="SidebarNegativePromptHeader"
                                                             Classes="flat-toggle"
@@ -989,11 +1065,16 @@
                                                                  FontWeight="Medium"
                                                                  LetterSpacing="1.5"
                                                                  VerticalAlignment="Center" />
-                                                      <TextBlock Name="SidebarNegativePromptArrow"
-                                                                 Text="▸"
-                                                                 Foreground="{DynamicResource TextMuted}"
-                                                                 FontSize="10"
-                                                                 VerticalAlignment="Center" />
+                                                      <Grid Width="14" Height="14" VerticalAlignment="Center">
+                                                          <TextBlock Name="SidebarNegativePromptArrow"
+                                                                     Text="▸"
+                                                                     Foreground="{DynamicResource TextAccent}"
+                                                                     FontSize="12"
+                                                                     FontWeight="SemiBold"
+                                                                     HorizontalAlignment="Center"
+                                                                     VerticalAlignment="Center"
+                                                                     Margin="0,-1,0,0" />
+                                                      </Grid>
                                                   </StackPanel>
                                               </ToggleButton>
                                               <!-- "Copied!" Toast Badge for Negative Prompt -->
@@ -1016,6 +1097,26 @@
                                                              FontWeight="SemiBold"
                                                              FontFamily="{DynamicResource FontUI}" />
                                               </Border>
+                                              <Button Grid.Column="2"
+                                                      Name="SidebarCopyNegativePromptButton"
+                                                      Content="Copy"
+                                                      Padding="6,3"
+                                                      FontSize="10"
+                                                      Background="{DynamicResource SurfaceElevated}"
+                                                      BorderBrush="{DynamicResource BorderSubtle}"
+                                                      BorderThickness="1"
+                                                      Click="CopyNegativePromptButton_Click"
+                                                      Margin="0,0,8,0"
+                                                      VerticalAlignment="Center"
+                                                      AutomationProperties.Name="Copy negative prompt"
+                                                      ToolTip.Tip="Copy negative prompt"
+                                                      IsVisible="False">
+                                                  <Button.Styles>
+                                                      <Style Selector="Button">
+                                                          <Setter Property="CornerRadius" Value="4" />
+                                                      </Style>
+                                                  </Button.Styles>
+                                              </Button>
                                           </Grid>
 
                                           <TextBox Name="SidebarNegativePrompt"
@@ -1317,7 +1418,7 @@
         <Border Name="LargePreviewOverlay"
                 Grid.Column="0"
                 IsVisible="False"
-                Background="#D917120D"
+                Background="{DynamicResource LargePreviewOverlayBackground}"
                 PointerPressed="LargePreviewOverlay_PointerPressed">
             <Border Background="{DynamicResource SurfaceCard}"
                     BorderBrush="{DynamicResource BorderSubtle}"

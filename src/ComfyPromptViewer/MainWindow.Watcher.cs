@@ -209,7 +209,6 @@ public partial class MainWindow
             }
 
             ApplyFilter(resetScroll: false);
-            QueueViewportThumbnailSchedule();
         }
     }
 

@@ -16,6 +16,7 @@
             <SolidColorBrush x:Key="AccentFillColorTertiaryBrush" Color="#8B3A2E" />
             <SolidColorBrush x:Key="BackgroundBase" Color="#17120D" />
             <SolidColorBrush x:Key="SurfaceBase" Color="#17120D" />
+            <SolidColorBrush x:Key="LargePreviewOverlayBackground" Color="#17120D" Opacity="0.85" />
             <SolidColorBrush x:Key="SurfaceCard" Color="#272016" />
             <SolidColorBrush x:Key="SurfaceSidebar" Color="#1C1610" />
             <SolidColorBrush x:Key="SurfaceElevated" Color="#261E16" />
@@ -115,7 +116,6 @@
             <Setter Property="Padding" Value="10,8" />
             <Setter Property="CornerRadius" Value="4" />
         </Style>
-
         <Style Selector="ContextMenu">
             <Setter Property="Background" Value="{DynamicResource MenuFlyoutPresenterBackground}" />
             <Setter Property="BorderBrush" Value="{DynamicResource MenuFlyoutPresenterBorderBrush}" />

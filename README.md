@@ -11,7 +11,8 @@ It supports images from ComfyUI, Forge Neo, Draw Things, and Stable Diffusion We
 - Browse large folders of generated images.
 - View prompts, negative prompts, image dimensions, models, samplers, seeds, and common generation settings.
 - Search by filename, positive prompt, negative prompt, or all metadata.
-- Copy prompts, open images in the file manager, and delete images from the gallery.
+- Copy positive and expanded negative prompts from dedicated sidebar buttons; very long positive prompts collapse behind a fade and can be expanded.
+- Open images in the file manager and delete images from the gallery.
 - Watch the active folder for newly created or removed images.
 - Cache thumbnails and parsed metadata locally for faster repeat browsing.
 

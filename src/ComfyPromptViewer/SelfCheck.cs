@@ -11,6 +11,7 @@ internal static class SelfCheck
     public static void Run()
     {
         CheckSearchParsing();
+        CheckGalleryScrollAnchoring();
         CheckThemeModes();
         CheckPromptExtraction();
         CheckPngMetadataRead();
@@ -20,6 +21,19 @@ internal static class SelfCheck
         CheckDeferredThumbnailCacheWriteQueue();
         CheckDeferredThumbnailCacheWritePause();
         CheckThumbnailCacheBudget();
+    }
+
+    private static void CheckGalleryScrollAnchoring()
+    {
+        var offset = MainWindow.CalculateAnchoredGalleryOffset(
+            oldIndex: 20,
+            newIndex: 24,
+            columns: 4,
+            itemExtent: 136,
+            oldOffset: 700,
+            maxOffset: 5000);
+
+        Check(offset == 836, "Expected a new row above the viewport to preserve the visible gallery row.");
     }
 
     private static void CheckSearchParsing()

@@ -1,5 +1,4 @@
 using System;
-using System.Buffers;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
@@ -8,7 +7,6 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
-using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 
@@ -16,7 +14,6 @@ namespace ComfyPromptViewer;
 
 public sealed class ImageItem : INotifyPropertyChanged
 {
-    private static readonly IBrush DefaultCardBorderBrush = new SolidColorBrush(Color.Parse("#2B3038"));
     public static readonly string ThumbnailCacheRootDir = System.IO.Path.Combine(UserPreferences.AppDataDir, "thumbnails");
 
     static ImageItem()
@@ -60,37 +57,7 @@ public sealed class ImageItem : INotifyPropertyChanged
 
     private static string HashText(string value)
     {
-        var byteCount = Encoding.UTF8.GetByteCount(value);
-        byte[]? rentedBytes = null;
-        Span<byte> bytes = byteCount <= 1024
-            ? stackalloc byte[byteCount]
-            : (rentedBytes = ArrayPool<byte>.Shared.Rent(byteCount));
-
-        bytes = bytes[..byteCount];
-        try
-        {
-            Encoding.UTF8.GetBytes(value, bytes);
-            Span<byte> hashBytes = stackalloc byte[16];
-            System.Security.Cryptography.MD5.HashData(bytes, hashBytes);
-
-            const string hex = "0123456789abcdef";
-            Span<char> chars = stackalloc char[32];
-            for (var index = 0; index < hashBytes.Length; index++)
-            {
-                var valueByte = hashBytes[index];
-                chars[index * 2] = hex[valueByte >> 4];
-                chars[(index * 2) + 1] = hex[valueByte & 0xF];
-            }
-
-            return new string(chars);
-        }
-        finally
-        {
-            if (rentedBytes is not null)
-            {
-                ArrayPool<byte>.Shared.Return(rentedBytes, clearArray: true);
-            }
-        }
+        return Convert.ToHexStringLower(System.Security.Cryptography.MD5.HashData(Encoding.UTF8.GetBytes(value)));
     }
 
     private static string MakeSafePathSegment(string value)
@@ -342,16 +309,9 @@ public sealed class ImageItem : INotifyPropertyChanged
         get => _isSelected;
         set
         {
-            if (SetField(ref _isSelected, value))
-            {
-                OnPropertyChanged(nameof(CardBorderBrush));
-                OnPropertyChanged(nameof(CardBorderThickness));
-            }
+            SetField(ref _isSelected, value);
         }
     }
-
-    public IBrush CardBorderBrush => IsSelected ? Brushes.DeepSkyBlue : DefaultCardBorderBrush;
-    public Thickness CardBorderThickness => IsSelected ? new Thickness(2) : new Thickness(1);
 
     public string DimensionsText => _width > 0 && _height > 0 ? $"{_width} x {_height}" : "Unknown size";
 

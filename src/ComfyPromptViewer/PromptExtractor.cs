@@ -94,16 +94,6 @@ public static class PromptExtractor
         };
     }
 
-    public static string Extract(Dictionary<string, string> metadata)
-    {
-        return ExtractAll(metadata).Prompt;
-    }
-
-    public static GenerationSettings ExtractGenerationSettings(Dictionary<string, string> metadata)
-    {
-        return ExtractAll(metadata).GenerationSettings;
-    }
-
     private static ComfyPromptMetadata ExtractComfyPromptJson(string json)
     {
         try
@@ -576,11 +566,6 @@ public static class PromptExtractor
         }
 
         return value.Any(char.IsLetter);
-    }
-
-    public static string ExtractNegative(Dictionary<string, string> metadata)
-    {
-        return ExtractAll(metadata).NegativePrompt;
     }
 
     private static string ExtractNegativeFromParameters(string parameters)

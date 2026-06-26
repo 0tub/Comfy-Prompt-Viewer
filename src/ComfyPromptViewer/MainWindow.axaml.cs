@@ -29,6 +29,9 @@ public partial class MainWindow : Window
     private const double WheelScrollRowsPerNotch = 1.7;
     private const double MinWheelScrollPixels = 180;
     private const double MaxWheelViewportRatio = 0.58;
+    private const double CollapsedPositivePromptMaxHeight = 168;
+    private const int LongPositivePromptCharacterThreshold = 500;
+    private const int LongPositivePromptLineThreshold = 7;
     private static readonly TimeSpan InitialMetadataScannerPollInterval = TimeSpan.FromMilliseconds(100);
     private const int InitialMetadataScannerMaxPolls = 15;
     private readonly GalleryViewModel _viewModel = new();
@@ -51,10 +54,12 @@ public partial class MainWindow : Window
     private double _tileItemExtent;
     private bool _isInitializing = true;
     private bool _isViewportThumbnailScheduleQueued;
+    private int _galleryScrollRestoreGeneration;
     private int _lastPrefetchFirstVisibleRow = -1;
     private int _prefetchDirection = 1;
     private volatile bool _hasSearchQueryActive;
     private TextBox? _activeContextMenuTextBox;
+    private bool _isPositivePromptExpanded;
 
     internal enum SearchScope
     {
@@ -79,6 +84,8 @@ public partial class MainWindow : Window
         string TextMuted,
         string TextAccent,
         string EmptyStateSubtext);
+
+    private readonly record struct GalleryScrollAnchor(ImageItem Item, int OldIndex, double Offset);
 
     public MainWindow()
     {
@@ -106,6 +113,7 @@ public partial class MainWindow : Window
         ApplyTileLayout();
         SortComboBox.SelectedIndex = (int)_sortMode;
         SearchScopeComboBox.SelectedIndex = (int)SearchScope.All;
+        SearchHelpPopup.PlacementTarget = SearchHelpButton;
         ApplyTheme(_themeMode);
         ThemeComboBox.SelectedIndex = (int)_themeMode;
 
@@ -144,6 +152,7 @@ public partial class MainWindow : Window
 
         SetBrush(resources, "BackgroundBase", palette.BackgroundBase);
         SetBrush(resources, "SurfaceBase", palette.BackgroundBase);
+        SetBrush(resources, "LargePreviewOverlayBackground", palette.BackgroundBase);
         SetBrush(resources, "SurfaceCard", palette.SurfaceCard);
         SetBrush(resources, "SurfaceSidebar", palette.SurfaceSidebar);
         SetBrush(resources, "SurfaceElevated", palette.SurfaceElevated);
@@ -1087,6 +1096,7 @@ public partial class MainWindow : Window
             SidebarPrompt.Text = "";
             SidebarPrompt.SelectionStart = 0;
             SidebarPrompt.SelectionEnd = 0;
+            ApplyPositivePromptPresentation("");
             SidebarNegativePrompt.Text = "";
             SidebarNegativePromptContainer.IsVisible = false;
             CollapseNegativePrompt();
@@ -1098,6 +1108,7 @@ public partial class MainWindow : Window
         }
 
         CollapseNegativePrompt();
+        _isPositivePromptExpanded = false;
 
         item.IsSelected = true;
         item.PropertyChanged += SelectedItem_PropertyChanged;
@@ -1141,6 +1152,7 @@ public partial class MainWindow : Window
     {
         bool isVisible = !SidebarNegativePrompt.IsVisible;
         SidebarNegativePrompt.IsVisible = isVisible;
+        SidebarCopyNegativePromptButton.IsVisible = isVisible;
         SidebarNegativePromptArrow.Text = isVisible ? "▾" : "▸";
         SidebarNegativePromptHeader.IsChecked = isVisible;
     }
@@ -1148,10 +1160,38 @@ public partial class MainWindow : Window
     private void CollapseNegativePrompt()
     {
         SidebarNegativePrompt.IsVisible = false;
+        SidebarCopyNegativePromptButton.IsVisible = false;
         SidebarNegativePromptArrow.Text = "▸";
         SidebarNegativePromptHeader.IsChecked = false;
     }
 
+    private void SidebarPromptExpandButton_Click(object? sender, RoutedEventArgs e)
+    {
+        _isPositivePromptExpanded = !_isPositivePromptExpanded;
+        ApplyPositivePromptPresentation(SidebarPrompt.Text ?? "");
+        e.Handled = true;
+    }
+
+    private void ApplyPositivePromptPresentation(string prompt)
+    {
+        // Intentional heuristic: avoids a text layout pass; use measured rendered height if sidebar widths become less predictable.
+        bool isLong = prompt.Length >= LongPositivePromptCharacterThreshold ||
+                      prompt.Count(character => character == '\n') >= LongPositivePromptLineThreshold;
+        if (!isLong)
+        {
+            _isPositivePromptExpanded = false;
+        }
+
+        bool isCollapsed = isLong && !_isPositivePromptExpanded;
+        SidebarPrompt.MaxHeight = isCollapsed ? CollapsedPositivePromptMaxHeight : double.PositiveInfinity;
+        SidebarPromptFade.IsVisible = isCollapsed;
+        SidebarPromptExpandButton.IsVisible = isLong;
+        SidebarPromptExpandButton.IsChecked = _isPositivePromptExpanded;
+        if (SidebarPromptExpandButton.Content is TextBlock label)
+        {
+            label.Text = _isPositivePromptExpanded ? "Show less" : "Show more";
+        }
+    }
 
     private void SelectedItem_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
@@ -1197,6 +1237,9 @@ public partial class MainWindow : Window
         SidebarPrompt.Text = item.HasPrompt ? item.Prompt : "";
         SidebarPrompt.SelectionStart = 0;
         SidebarPrompt.SelectionEnd = 0;
+        SidebarCopyPromptButton.IsVisible = item.HasPrompt;
+        SidebarCopyPromptButton.IsEnabled = item.HasPrompt;
+        ApplyPositivePromptPresentation(SidebarPrompt.Text);
 
         SidebarNegativePrompt.Text = item.HasNegativePrompt ? item.NegativePrompt : "";
         SidebarNegativePrompt.SelectionStart = 0;
@@ -1208,19 +1251,51 @@ public partial class MainWindow : Window
 
     private async void CopySeedButton_Click(object? sender, RoutedEventArgs e)
     {
-        if (_selectedItem is not null && !string.IsNullOrWhiteSpace(_selectedItem.Seed))
+        if (sender is Button button &&
+            _selectedItem is not null &&
+            !string.IsNullOrWhiteSpace(_selectedItem.Seed))
         {
-            await CopyTextAsync(_selectedItem.Seed);
-            if (sender is Button button)
-            {
-                var originalContent = button.Content;
-                button.Content = "Copied!";
-                button.IsEnabled = false;
-                await Task.Delay(1000);
-                button.Content = originalContent;
-                button.IsEnabled = true;
-            }
+            await CopyWithButtonFeedbackAsync(button, _selectedItem.Seed);
         }
+    }
+
+    private async void CopyPositivePromptButton_Click(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button button &&
+            _selectedItem is not null &&
+            _selectedItem.HasPrompt)
+        {
+            await CopyWithButtonFeedbackAsync(button, _selectedItem.Prompt);
+        }
+    }
+
+    private async void CopyNegativePromptButton_Click(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button button &&
+            _selectedItem is not null &&
+            _selectedItem.HasNegativePrompt)
+        {
+            await CopyWithButtonFeedbackAsync(button, _selectedItem.NegativePrompt);
+        }
+    }
+
+    private async Task CopyWithButtonFeedbackAsync(Button button, string text)
+    {
+        if (!await CopyTextAsync(text))
+        {
+            return;
+        }
+
+        var originalContent = button.Content;
+        button.Content = "Copied!";
+        button.IsEnabled = false;
+        await Task.Delay(1000);
+        button.Content = originalContent;
+        button.IsEnabled = button == SidebarCopyPromptButton
+            ? _selectedItem?.HasPrompt == true
+            : button == SidebarCopyNegativePromptButton
+                ? _selectedItem?.HasNegativePrompt == true
+                : _selectedItem is not null && !string.IsNullOrWhiteSpace(_selectedItem.Seed);
     }
 
     private async Task<bool> CopyTextAsync(string text)
@@ -1728,6 +1803,12 @@ public partial class MainWindow : Window
         SearchTextBox.Focus();
     }
 
+    private void SearchHelpButton_Click(object? sender, RoutedEventArgs e)
+    {
+        SearchHelpPopup.IsOpen = !SearchHelpPopup.IsOpen;
+        e.Handled = true;
+    }
+
     private SearchScope GetSearchScope()
     {
         return SearchScopeComboBox.SelectedIndex switch
@@ -1784,13 +1865,16 @@ public partial class MainWindow : Window
 
         if (hasChanges)
         {
+            var scrollAnchor = resetScroll ? null : CaptureGalleryScrollAnchor();
             _viewModel.Items.Clear();
             _viewModel.Items.AddRange(filtered);
             GalleryItems.InvalidateMeasure();
+            RestoreGalleryScrollAnchor(scrollAnchor, filtered);
         }
 
         if (resetScroll)
         {
+            _galleryScrollRestoreGeneration++;
             GalleryScrollViewer.Offset = new Vector(GalleryScrollViewer.Offset.X, 0);
         }
 
@@ -1799,6 +1883,74 @@ public partial class MainWindow : Window
 
         bool showEmpty = filtered.Count == 0 && _allImageItems.Count > 0;
         ToggleGalleryEmptyState(showEmpty);
+    }
+
+    private GalleryScrollAnchor? CaptureGalleryScrollAnchor()
+    {
+        var offset = GalleryScrollViewer.Offset.Y;
+        if (offset <= 0.5 || _viewModel.Items.Count == 0)
+        {
+            return null;
+        }
+
+        var columns = GetGalleryColumnCount();
+        var firstVisibleRow = Math.Max(0, (int)Math.Floor(offset / Math.Max(1, _tileItemExtent)));
+        var index = Math.Min(_viewModel.Items.Count - 1, firstVisibleRow * columns);
+        return new GalleryScrollAnchor(_viewModel.Items[index], index, offset);
+    }
+
+    private void RestoreGalleryScrollAnchor(GalleryScrollAnchor? anchor, List<ImageItem> filtered)
+    {
+        if (anchor is not { } value)
+        {
+            return;
+        }
+
+        var newIndex = filtered.IndexOf(value.Item);
+        if (newIndex < 0)
+        {
+            return;
+        }
+
+        var columns = GetGalleryColumnCount();
+        var viewportHeight = GalleryScrollViewer.Viewport.Height > 0
+            ? GalleryScrollViewer.Viewport.Height
+            : Math.Max(1, GalleryScrollViewer.Bounds.Height);
+        var rowCount = (int)Math.Ceiling(filtered.Count / (double)columns);
+        var maxOffset = Math.Max(
+            0,
+            (rowCount * _tileItemExtent) + GalleryItems.Margin.Top + GalleryItems.Margin.Bottom - viewportHeight);
+        var restoredOffset = CalculateAnchoredGalleryOffset(
+            value.OldIndex,
+            newIndex,
+            columns,
+            _tileItemExtent,
+            value.Offset,
+            maxOffset);
+        var restoreGeneration = ++_galleryScrollRestoreGeneration;
+
+        // Uniform fixed-height rows make a row anchor sufficient. Variable-height tiles would need realized-element anchoring.
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (restoreGeneration == _galleryScrollRestoreGeneration)
+            {
+                GalleryScrollViewer.Offset = new Vector(GalleryScrollViewer.Offset.X, restoredOffset);
+            }
+        }, DispatcherPriority.Loaded);
+    }
+
+    internal static double CalculateAnchoredGalleryOffset(
+        int oldIndex,
+        int newIndex,
+        int columns,
+        double itemExtent,
+        double oldOffset,
+        double maxOffset)
+    {
+        columns = Math.Max(1, columns);
+        itemExtent = Math.Max(1, itemExtent);
+        var offsetWithinRow = oldOffset - ((oldIndex / columns) * itemExtent);
+        return Math.Clamp(((newIndex / columns) * itemExtent) + offsetWithinRow, 0, maxOffset);
     }
 
     internal static bool ItemMatchesSearch(
