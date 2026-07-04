@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
@@ -24,6 +25,7 @@ public static class PromptExtractor
         var prompt = "";
         var negativePrompt = "";
         var generationSettings = new GenerationSettings();
+        var hasComfyMetadata = metadata.ContainsKey("prompt") || metadata.ContainsKey("workflow");
 
         var xmpText = FindDrawThingsXmp(metadata);
         var xmp = xmpText is null ? null : ParseDrawThingsXmp(xmpText);
@@ -35,6 +37,7 @@ public static class PromptExtractor
             {
                 generationSettings = ExtractGenerationFromParameters(xmp.SettingsLine) ?? generationSettings;
             }
+            generationSettings.Tool = "Draw Things";
         }
 
         if (metadata.TryGetValue("prompt", out var promptJson))
@@ -65,6 +68,10 @@ public static class PromptExtractor
             {
                 negativePrompt = workflow.NegativePrompt;
             }
+            if (workflow.GenerationSettings is { IsEmpty: false } workflowSettings)
+            {
+                generationSettings = MergeGenerationSettings(generationSettings, workflowSettings);
+            }
         }
 
         if (metadata.TryGetValue("parameters", out var parameters))
@@ -86,6 +93,13 @@ public static class PromptExtractor
         if (string.IsNullOrWhiteSpace(prompt))
         {
             prompt = LongestPromptLike(metadata.Values);
+        }
+
+        MergePromptResources(generationSettings, prompt);
+        MergePromptResources(generationSettings, negativePrompt);
+        if (hasComfyMetadata && string.IsNullOrWhiteSpace(generationSettings.Tool))
+        {
+            generationSettings.Tool = "ComfyUI";
         }
 
         return new ExtractedPromptMetadata
@@ -115,9 +129,12 @@ public static class PromptExtractor
             var prompt = "";
             var negativePrompt = "";
             GenerationSettings? generationSettings = null;
+            var loras = new List<string>();
 
             foreach (var node in nodes.Values)
             {
+                AddComfyNodeLoras(node, loras);
+
                 if (!IsKSamplerNode(node))
                 {
                     continue;
@@ -145,7 +162,8 @@ public static class PromptExtractor
                         FormatSetting("CFG", TryGetInputScalar(node, "cfg")),
                         FormatSetting("Scheduler", TryGetInputScalar(node, "scheduler")),
                         FormatSetting("Denoise", TryGetInputScalar(node, "denoise"))
-                    ])
+                    ]),
+                    Lora = string.Join(", ", loras)
                 };
             }
 
@@ -168,6 +186,12 @@ public static class PromptExtractor
                 negativePrompt = bestNegativePrompt;
             }
 
+            if (loras.Count > 0)
+            {
+                generationSettings ??= new GenerationSettings();
+                generationSettings.Lora = CombineMetadataStrings(generationSettings.Lora, string.Join(", ", loras));
+            }
+
             return new ComfyPromptMetadata
             {
                 Prompt = prompt,
@@ -181,6 +205,116 @@ public static class PromptExtractor
         }
     }
 
+    private static void AddComfyNodeLoras(JsonElement node, List<string> loras)
+    {
+        var classType = TryGetStringProperty(node, "class_type");
+        var title = "";
+        if (node.TryGetProperty("_meta", out var meta) &&
+            meta.ValueKind == JsonValueKind.Object)
+        {
+            title = TryGetStringProperty(meta, "title");
+        }
+
+        if (!classType.Contains("lora", StringComparison.OrdinalIgnoreCase) &&
+            !title.Contains("lora", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        if (!node.TryGetProperty("inputs", out var inputs) ||
+            inputs.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        if (inputs.TryGetProperty("lora_data", out var loraData) &&
+            loraData.ValueKind == JsonValueKind.String)
+        {
+            AddLoraDataJson(loras, loraData.GetString() ?? "");
+        }
+
+    }
+
+    private static void AddLoraDataJson(List<string> loras, string json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+            {
+                return;
+            }
+
+            foreach (var item in document.RootElement.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                if (item.TryGetProperty("enabled", out var enabled) &&
+                    enabled.ValueKind == JsonValueKind.False)
+                {
+                    continue;
+                }
+
+                var name = TryGetStringProperty(item, "name");
+                var strength = TryGetScalarProperty(item, "strength");
+                AddLora(loras, name, strength);
+            }
+        }
+        catch (JsonException)
+        {
+        }
+    }
+
+    private static string TryGetStringProperty(JsonElement element, string propertyName)
+    {
+        return element.TryGetProperty(propertyName, out var value) &&
+               value.ValueKind == JsonValueKind.String
+            ? value.GetString() ?? ""
+            : "";
+    }
+
+    private static string TryGetScalarProperty(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var value))
+        {
+            return "";
+        }
+
+        return value.ValueKind switch
+        {
+            JsonValueKind.String => value.GetString() ?? "",
+            JsonValueKind.Number => value.GetRawText(),
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            _ => ""
+        };
+    }
+
+    private static void AddLora(List<string> loras, string name, string? strength)
+    {
+        name = CleanResourceName(name);
+        if (name.Length == 0)
+        {
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(strength) &&
+            float.TryParse(strength, NumberStyles.Float, CultureInfo.InvariantCulture, out var weight))
+        {
+            name = $"{name} ({weight.ToString("0.00", CultureInfo.InvariantCulture)})";
+        }
+
+        AddUniqueCleaned(loras, name);
+    }
+
     private static GenerationSettings? ExtractGenerationFromParameters(string parameters)
     {
         var values = ParseParameterSettings(parameters);
@@ -192,15 +326,24 @@ public static class PromptExtractor
         var model = GetFirst(values, "Model", "Checkpoint", "Model hash") ?? "";
         var sampler = GetFirst(values, "Sampler") ?? "";
         var seed = GetFirst(values, "Seed") ?? "";
+        var tool = DetectTool(values);
         var settings = BuildSettingsSummary([
             FormatSetting("Steps", GetFirst(values, "Steps")),
             FormatSetting("CFG", GetFirst(values, "CFG scale", "CFG", "Guidance Scale")),
             FormatSetting("Scheduler", GetFirst(values, "Schedule type", "Scheduler")),
             FormatSetting("Denoise", GetFirst(values, "Denoising strength", "Denoise", "Strength")),
-            FormatSetting("Clip skip", GetFirst(values, "Clip skip"))
+            FormatSetting("Clip skip", GetFirst(values, "Clip skip")),
+            FormatSetting("VAE", GetFirst(values, "VAE")),
+            FormatSetting("Hires", BuildHiresSummary(values)),
+            FormatSetting("Hash", GetFirst(values, "Model hash", "sd_model_hash")),
+            FormatSetting("Variation", BuildVariationSummary(values))
         ]);
 
         var loras = new List<string>();
+        var hypernetworks = new List<string>();
+        var embeddings = new List<string>();
+        var controlNets = new List<string>();
+        var ipAdapters = new List<string>();
         foreach (var entry in values)
         {
             var key = entry.Key;
@@ -218,16 +361,56 @@ public static class PromptExtractor
                     loras.Add(modelName);
                 }
             }
+            else if (key.StartsWith("AddNet Model", StringComparison.OrdinalIgnoreCase))
+            {
+                AddUnique(loras, CleanResourceName(entry.Value.Split('(')[0]));
+            }
+            else if (key.Equals("Lora hashes", StringComparison.OrdinalIgnoreCase))
+            {
+                AddHashListNames(loras, entry.Value);
+            }
+            else if (key.Equals("Hypernet", StringComparison.OrdinalIgnoreCase) ||
+                     key.Equals("Hypernetwork", StringComparison.OrdinalIgnoreCase))
+            {
+                AddUnique(hypernetworks, CleanResourceName(entry.Value.Split('(')[0]));
+            }
+            else if (key.Equals("TI hashes", StringComparison.OrdinalIgnoreCase))
+            {
+                AddValidatedHashListNames(embeddings, entry.Value);
+            }
+            else if (key.StartsWith("ControlNet", StringComparison.OrdinalIgnoreCase))
+            {
+                var controlModel = ExtractControlNetModel(entry.Value);
+                if (controlModel.Length > 0)
+                {
+                    if (LooksLikeIpAdapter(controlModel))
+                    {
+                        AddUnique(ipAdapters, controlModel);
+                    }
+                    else
+                    {
+                        AddUnique(controlNets, controlModel);
+                    }
+                }
+            }
         }
         var lora = string.Join(", ", loras);
+        var resources = BuildResourcesSummary([
+            FormatResourceGroup("Hypernet", hypernetworks),
+            FormatResourceGroup("Embedding", embeddings),
+            FormatResourceGroup("ControlNet", controlNets),
+            FormatResourceGroup("IP-Adapter", ipAdapters)
+        ]);
 
         return new GenerationSettings
         {
+            Tool = tool,
             Model = model,
             Sampler = sampler,
             Seed = seed,
             Settings = settings,
-            Lora = lora
+            Lora = lora,
+            Resources = resources
         };
     }
 
@@ -242,8 +425,11 @@ public static class PromptExtractor
             {
                 var promptCandidates = new List<string>();
                 var negativeCandidates = new List<string>();
+                var loras = new List<string>();
                 foreach (var node in nodes.EnumerateArray())
                 {
+                    AddWorkflowNodeLoras(node, loras);
+
                     if (IsWorkflowSamplerNode(node))
                     {
                         continue;
@@ -261,7 +447,11 @@ public static class PromptExtractor
                 return new WorkflowPromptMetadata
                 {
                     Prompt = LongestPromptLike(promptCandidates),
-                    NegativePrompt = LongestPromptLike(negativeCandidates)
+                    NegativePrompt = LongestPromptLike(negativeCandidates),
+                    GenerationSettings = loras.Count == 0 ? null : new GenerationSettings
+                    {
+                        Lora = string.Join(", ", loras)
+                    }
                 };
             }
         }
@@ -271,6 +461,23 @@ public static class PromptExtractor
         }
 
         return new WorkflowPromptMetadata();
+    }
+
+    private static GenerationSettings MergeGenerationSettings(GenerationSettings current, GenerationSettings extra)
+    {
+        current.Tool = FirstNonEmpty(current.Tool, extra.Tool);
+        current.Model = FirstNonEmpty(current.Model, extra.Model);
+        current.Sampler = FirstNonEmpty(current.Sampler, extra.Sampler);
+        current.Seed = FirstNonEmpty(current.Seed, extra.Seed);
+        current.Settings = CombineMetadataStrings(current.Settings, extra.Settings);
+        current.Lora = CombineMetadataStrings(current.Lora, extra.Lora);
+        current.Resources = CombineMetadataStrings(current.Resources, extra.Resources);
+        return current;
+    }
+
+    private static string FirstNonEmpty(string current, string extra)
+    {
+        return string.IsNullOrWhiteSpace(current) ? extra : current;
     }
 
     private static bool TryGetLinkedText(
@@ -370,6 +577,74 @@ public static class PromptExtractor
         }
     }
 
+    private static void AddWorkflowNodeLoras(JsonElement node, List<string> loras)
+    {
+        if (WorkflowNodeIsDisabled(node))
+        {
+            return;
+        }
+
+        var type = TryGetStringProperty(node, "type");
+        var title = TryGetStringProperty(node, "title");
+        if (node.TryGetProperty("properties", out var properties) &&
+            properties.ValueKind == JsonValueKind.Object)
+        {
+            title = FirstNonEmpty(title, TryGetStringProperty(properties, "Node name for S&R"));
+        }
+
+        if (!type.Contains("lora", StringComparison.OrdinalIgnoreCase) &&
+            !title.Contains("lora", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        if (!node.TryGetProperty("widgets_values", out var widgets) ||
+            widgets.ValueKind != JsonValueKind.Array)
+        {
+            return;
+        }
+
+        var values = widgets.EnumerateArray().ToList();
+        for (var index = 0; index < values.Count; index++)
+        {
+            if (values[index].ValueKind != JsonValueKind.String)
+            {
+                continue;
+            }
+
+            var name = values[index].GetString() ?? "";
+            if (!LooksLikeLoraFileName(name))
+            {
+                continue;
+            }
+
+            var strength = "";
+            if (index + 1 < values.Count && values[index + 1].ValueKind == JsonValueKind.Number)
+            {
+                strength = values[index + 1].GetRawText();
+            }
+
+            AddLora(loras, name, strength);
+        }
+    }
+
+    private static bool WorkflowNodeIsDisabled(JsonElement node)
+    {
+        return node.TryGetProperty("mode", out var mode) &&
+               mode.ValueKind == JsonValueKind.Number &&
+               mode.TryGetInt32(out var modeValue) &&
+               modeValue == 4;
+    }
+
+    private static bool LooksLikeLoraFileName(string value)
+    {
+        return value.Contains("lora", StringComparison.OrdinalIgnoreCase) ||
+               value.EndsWith(".safetensors", StringComparison.OrdinalIgnoreCase) ||
+               value.EndsWith(".ckpt", StringComparison.OrdinalIgnoreCase) ||
+               value.EndsWith(".pt", StringComparison.OrdinalIgnoreCase) ||
+               value.EndsWith(".pth", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string ExtractFromParameters(string parameters)
     {
         var index = parameters.IndexOf("Negative prompt:", StringComparison.OrdinalIgnoreCase);
@@ -411,16 +686,9 @@ public static class PromptExtractor
         var lastLineStart = parameters.LastIndexOf('\n');
         var settingsLine = lastLineStart >= 0 ? parameters[(lastLineStart + 1)..] : parameters;
 
-        var start = 0;
-        while (start < settingsLine.Length)
+        foreach (var partText in SplitParameterParts(settingsLine))
         {
-            var nextComma = settingsLine.IndexOf(',', start);
-            if (nextComma < 0)
-            {
-                nextComma = settingsLine.Length;
-            }
-
-            var part = settingsLine.AsSpan(start, nextComma - start).Trim();
+            var part = partText.AsSpan().Trim();
             var separator = part.IndexOf(':');
             if (separator > 0 && separator < part.Length - 1)
             {
@@ -428,14 +696,63 @@ public static class PromptExtractor
                 var value = part[(separator + 1)..].Trim();
                 if (!key.IsEmpty && !value.IsEmpty)
                 {
-                    values[key.ToString()] = value.ToString();
+                    values[key.ToString()] = value.Trim('"').ToString();
                 }
             }
-
-            start = nextComma + 1;
         }
 
         return values;
+    }
+
+    private static List<string> SplitParameterParts(string settingsLine)
+    {
+        var parts = new List<string>();
+        var builder = new StringBuilder();
+        var inQuotes = false;
+        var depth = 0;
+
+        foreach (var c in settingsLine)
+        {
+            if (c == '"')
+            {
+                inQuotes = !inQuotes;
+                builder.Append(c);
+            }
+            else if (!inQuotes && (c == '(' || c == '[' || c == '{'))
+            {
+                depth++;
+                builder.Append(c);
+            }
+            else if (!inQuotes && (c == ')' || c == ']' || c == '}'))
+            {
+                if (depth > 0)
+                {
+                    depth--;
+                }
+                builder.Append(c);
+            }
+            else if (c == ',' && !inQuotes && depth == 0)
+            {
+                AddParameterPart(parts, builder);
+            }
+            else
+            {
+                builder.Append(c);
+            }
+        }
+
+        AddParameterPart(parts, builder);
+        return parts;
+    }
+
+    private static void AddParameterPart(List<string> parts, StringBuilder builder)
+    {
+        var part = builder.ToString().Trim();
+        if (part.Length > 0)
+        {
+            parts.Add(part);
+        }
+        builder.Clear();
     }
 
     private static string? GetFirst(Dictionary<string, string> values, params string[] keys)
@@ -449,6 +766,270 @@ public static class PromptExtractor
         }
 
         return null;
+    }
+
+    private static string DetectTool(Dictionary<string, string> values)
+    {
+        var text = $"{GetFirst(values, "App") ?? ""} {GetFirst(values, "Version") ?? ""}".ToLowerInvariant();
+        if (text.Contains("sd.next") || text.Contains("sdnext") || text.Contains("vlad"))
+        {
+            return "SD.Next";
+        }
+        if (text.Contains("forge"))
+        {
+            return "Forge";
+        }
+        if (text.Contains("anapnoe"))
+        {
+            return "Anapnoe";
+        }
+        if (text.Contains("comfy"))
+        {
+            return "ComfyUI";
+        }
+
+        return "";
+    }
+
+    private static string BuildHiresSummary(Dictionary<string, string> values)
+    {
+        return BuildSettingsSummary([
+            GetFirst(values, "Hires upscale") ?? "",
+            FormatSetting("steps", GetFirst(values, "Hires steps")),
+            GetFirst(values, "Hires upscaler") ?? ""
+        ]);
+    }
+
+    private static string BuildVariationSummary(Dictionary<string, string> values)
+    {
+        var seed = GetFirst(values, "Variation seed");
+        var strength = GetFirst(values, "Variation seed strength");
+        if (string.IsNullOrWhiteSpace(seed))
+        {
+            return "";
+        }
+
+        return string.IsNullOrWhiteSpace(strength) ? seed : $"{seed}:{strength}";
+    }
+
+    private static string BuildResourcesSummary(IEnumerable<string> groups)
+    {
+        return string.Join(", ", groups.Where(group => !string.IsNullOrWhiteSpace(group)));
+    }
+
+    private static string FormatResourceGroup(string label, List<string> values)
+    {
+        return values.Count == 0 ? "" : $"{label}: {string.Join(", ", values)}";
+    }
+
+    private static void AddHashListNames(List<string> target, string value)
+    {
+        foreach (var part in SplitParameterParts(value))
+        {
+            if (part.Split(':', 2) is [var name, _])
+            {
+                AddUnique(target, CleanResourceName(name));
+            }
+        }
+    }
+
+    private static void AddValidatedHashListNames(List<string> target, string value)
+    {
+        foreach (var part in SplitParameterParts(value))
+        {
+            if (part.Split(':', 2) is not [var name, var hash])
+            {
+                continue;
+            }
+
+            name = CleanResourceName(name);
+            hash = hash.Trim();
+            var validName = name.Length is > 0 and < 100 &&
+                            !name.Contains('(') &&
+                            !name.Contains(')') &&
+                            !name.EndsWith('+') &&
+                            !name.EndsWith('-');
+            var validHash = hash.Length is >= 8 and <= 128 && hash.All(char.IsAsciiLetterOrDigit);
+            if (validName && validHash)
+            {
+                AddUnique(target, name);
+            }
+        }
+    }
+
+    private static string ExtractControlNetModel(string value)
+    {
+        const string marker = "Model: ";
+        var start = value.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (start < 0)
+        {
+            return "";
+        }
+
+        var model = value[(start + marker.Length)..].Split(',')[0].Trim().Trim('"');
+        var hashStart = model.LastIndexOf('[');
+        var hashEnd = model.LastIndexOf(']');
+        if (hashStart > 0 && hashEnd > hashStart)
+        {
+            model = model[..hashStart].Trim();
+        }
+
+        return CleanResourceName(model);
+    }
+
+    private static bool LooksLikeIpAdapter(string value)
+    {
+        return value.Contains("ip-adapter", StringComparison.OrdinalIgnoreCase) ||
+               value.Contains("ip_adapter", StringComparison.OrdinalIgnoreCase) ||
+               value.Contains("ipadapter", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void MergePromptResources(GenerationSettings settings, string prompt)
+    {
+        if (string.IsNullOrWhiteSpace(prompt))
+        {
+            return;
+        }
+
+        var loras = SplitExisting(settings.Lora);
+        ExtractTagResources(prompt, "lora", loras, includeWeight: true);
+        settings.Lora = string.Join(", ", loras);
+
+        var hypernets = new List<string>();
+        ExtractTagResources(prompt, "hypernet", hypernets, includeWeight: true);
+        var embeddings = ExtractPromptEmbeddings(prompt);
+        var promptResources = BuildResourcesSummary([
+            FormatResourceGroup("Hypernet", hypernets),
+            FormatResourceGroup("Embedding", embeddings)
+        ]);
+        settings.Resources = CombineMetadataStrings(settings.Resources, promptResources);
+    }
+
+    private static List<string> SplitExisting(string value)
+    {
+        return string.IsNullOrWhiteSpace(value)
+            ? []
+            : value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).ToList();
+    }
+
+    private static void ExtractTagResources(string prompt, string tag, List<string> target, bool includeWeight)
+    {
+        var marker = "<" + tag + ":";
+        var start = 0;
+        while (start < prompt.Length)
+        {
+            var index = prompt.IndexOf(marker, start, StringComparison.OrdinalIgnoreCase);
+            if (index < 0)
+            {
+                return;
+            }
+
+            var end = prompt.IndexOf('>', index + marker.Length);
+            if (end < 0)
+            {
+                return;
+            }
+
+            var body = prompt.Substring(index + marker.Length, end - index - marker.Length);
+            var pieces = body.Split(':', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+            if (pieces.Length > 0)
+            {
+                var name = CleanResourceName(pieces[0]);
+                if (includeWeight &&
+                    pieces.Length > 1 &&
+                    float.TryParse(pieces[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var weight))
+                {
+                    name = $"{name} ({weight.ToString("0.00", CultureInfo.InvariantCulture)})";
+                }
+                AddUniqueCleaned(target, name);
+            }
+
+            start = end + 1;
+        }
+    }
+
+    private static List<string> ExtractPromptEmbeddings(string prompt)
+    {
+        var embeddings = new List<string>();
+        const string marker = "embedding:";
+        var start = 0;
+        while (start < prompt.Length)
+        {
+            var index = prompt.IndexOf(marker, start, StringComparison.OrdinalIgnoreCase);
+            if (index < 0)
+            {
+                break;
+            }
+
+            var nameStart = index + marker.Length;
+            var nameEnd = nameStart;
+            while (nameEnd < prompt.Length)
+            {
+                var c = prompt[nameEnd];
+                if (!char.IsLetterOrDigit(c) && c != '_' && c != '-' && c != '.')
+                {
+                    break;
+                }
+                nameEnd++;
+            }
+
+            if (nameEnd > nameStart)
+            {
+                AddUnique(embeddings, CleanResourceName(prompt[nameStart..nameEnd]));
+            }
+            start = nameEnd + 1;
+        }
+
+        return embeddings;
+    }
+
+    private static string CombineMetadataStrings(string first, string second)
+    {
+        if (string.IsNullOrWhiteSpace(first))
+        {
+            return second;
+        }
+        if (string.IsNullOrWhiteSpace(second))
+        {
+            return first;
+        }
+
+        return first.Contains(second, StringComparison.OrdinalIgnoreCase) ? first : $"{first}, {second}";
+    }
+
+    private static void AddUnique(List<string> target, string value)
+    {
+        value = CleanResourceName(value);
+        AddUniqueCleaned(target, value);
+    }
+
+    private static void AddUniqueCleaned(List<string> target, string value)
+    {
+        if (value.Length > 0 && !target.Contains(value, StringComparer.OrdinalIgnoreCase))
+        {
+            target.Add(value);
+        }
+    }
+
+    private static string CleanResourceName(string value)
+    {
+        value = CleanCandidate(value).Trim('"');
+        var lastSlash = value.LastIndexOfAny(['/', '\\']);
+        if (lastSlash >= 0 && lastSlash < value.Length - 1)
+        {
+            value = value[(lastSlash + 1)..];
+        }
+
+        foreach (var extension in new[] { ".safetensors", ".ckpt", ".pth", ".pt", ".bin" })
+        {
+            if (value.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+            {
+                value = value[..^extension.Length];
+                break;
+            }
+        }
+
+        return value.ToLowerInvariant().Replace(' ', '_').Replace('-', '_');
     }
 
     private static string? FindModelName(Dictionary<string, JsonElement> nodes, JsonElement node, int depth = 0)
@@ -739,6 +1320,7 @@ public static class PromptExtractor
     {
         public string Prompt { get; set; } = "";
         public string NegativePrompt { get; set; } = "";
+        public GenerationSettings? GenerationSettings { get; set; }
     }
 }
 
@@ -751,15 +1333,19 @@ public class ExtractedPromptMetadata
 
 public class GenerationSettings
 {
+    public string Tool { get; set; } = "";
     public string Model { get; set; } = "";
     public string Sampler { get; set; } = "";
     public string Seed { get; set; } = "";
     public string Settings { get; set; } = "";
     public string Lora { get; set; } = "";
+    public string Resources { get; set; } = "";
 
-    public bool IsEmpty => string.IsNullOrWhiteSpace(Model) &&
+    public bool IsEmpty => string.IsNullOrWhiteSpace(Tool) &&
+                           string.IsNullOrWhiteSpace(Model) &&
                            string.IsNullOrWhiteSpace(Sampler) &&
                            string.IsNullOrWhiteSpace(Seed) &&
                            string.IsNullOrWhiteSpace(Settings) &&
-                           string.IsNullOrWhiteSpace(Lora);
+                           string.IsNullOrWhiteSpace(Lora) &&
+                           string.IsNullOrWhiteSpace(Resources);
 }

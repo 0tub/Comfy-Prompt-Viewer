@@ -51,6 +51,21 @@ public static class SearchEngine
         return IsMatch(firstText, term) || IsMatch(secondText, term);
     }
 
+    public static bool IsSeparatorInsensitiveMatch(string text, SearchTerm term)
+    {
+        if (IsMatch(text, term))
+        {
+            return true;
+        }
+
+        var normalizedText = NormalizeSeparators(text);
+        var normalizedTerm = NormalizeSeparators(term.Text);
+        return (!string.Equals(normalizedText, text, StringComparison.Ordinal) ||
+                !string.Equals(normalizedTerm, term.Text, StringComparison.Ordinal))
+            ? IsMatch(normalizedText, term with { Text = normalizedTerm })
+            : false;
+    }
+
     private static bool IsExactMatch(string text, string term)
     {
         if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(term))
@@ -79,5 +94,10 @@ public static class SearchEngine
     private static bool IsWordChar(char value)
     {
         return char.IsLetterOrDigit(value) || value == '_';
+    }
+
+    private static string NormalizeSeparators(string value)
+    {
+        return value.Replace('-', '_').Replace(' ', '_');
     }
 }

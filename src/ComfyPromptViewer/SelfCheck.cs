@@ -1,6 +1,7 @@
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Text;
 
@@ -34,6 +35,16 @@ internal static class SelfCheck
             maxOffset: 5000);
 
         Check(offset == 836, "Expected a new row above the viewport to preserve the visible gallery row.");
+
+        offset = MainWindow.CalculateAnchoredGalleryOffset(
+            oldIndex: 20,
+            newIndex: -1,
+            columns: 4,
+            itemExtent: 136,
+            oldOffset: 700,
+            maxOffset: 5000);
+
+        Check(offset == 700, "Expected deleting the first visible gallery item to preserve the current scroll offset.");
     }
 
     private static void CheckSearchParsing()
@@ -52,7 +63,9 @@ internal static class SelfCheck
         {
             SourcePath = item.Path,
             Prompt = "sunlit portrait",
-            NegativePrompt = "blurry watermark"
+            NegativePrompt = "blurry watermark",
+            Lora = "cosmos_predict_lora (1.00)",
+            Resources = "Embedding: easynegative"
         });
 
         SearchEngine.ParseQuery("watermark", out positive, out negative);
@@ -60,6 +73,16 @@ internal static class SelfCheck
             "Expected positive prompt search to ignore negative prompt text.");
         Check(MainWindow.ItemMatchesSearch(item, positive, negative, MainWindow.SearchScope.NegativePrompt),
             "Expected negative prompt search to match negative prompt text.");
+
+        SearchEngine.ParseQuery("cosmos-predict", out positive, out negative);
+        Check(MainWindow.ItemMatchesSearch(item, positive, negative, MainWindow.SearchScope.All),
+            "Expected all search to match normalized LoRA metadata.");
+        Check(!MainWindow.ItemMatchesSearch(item, positive, negative, MainWindow.SearchScope.Filename),
+            "Expected filename search to ignore LoRA metadata.");
+
+        SearchEngine.ParseQuery("-easynegative", out positive, out negative);
+        Check(!MainWindow.ItemMatchesSearch(item, positive, negative, MainWindow.SearchScope.All),
+            "Expected all search exclusions to check resource metadata.");
     }
 
     private static void CheckThemeModes()
@@ -85,6 +108,38 @@ internal static class SelfCheck
         Check(extracted.GenerationSettings.Seed == "123", "Expected seed from settings line.");
         Check(extracted.GenerationSettings.Settings == "Steps 20, CFG 7", "Expected compact settings summary.");
 
+        var rich = PromptExtractor.ExtractAll(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["parameters"] = "portrait <lora:ink style:0.8>, embedding:easynegative\nSteps: 30, Sampler: Euler, CFG scale: 6, Seed: 456, Model: rich-model, VAE: vae-ft, Clip skip: 2, ControlNet 0: \"Module: ip-adapter_clip_sd15, Model: ip-adapter_sd15_light [932b88cf], Weight: 0.75\", Lora hashes: \"detailer: abc12345\", Version: Forge"
+        });
+
+        Check(rich.GenerationSettings.Tool == "Forge", "Expected tool detection from version metadata.");
+        Check(rich.GenerationSettings.Settings.Contains("VAE vae-ft", StringComparison.Ordinal), "Expected VAE in settings summary.");
+        Check(rich.GenerationSettings.Lora.Contains("ink_style (0.80)", StringComparison.Ordinal) &&
+              rich.GenerationSettings.Lora.Contains("detailer", StringComparison.Ordinal),
+            $"Expected prompt and hash LoRA extraction, got '{rich.GenerationSettings.Lora}'.");
+        Check(rich.GenerationSettings.Resources.Contains("Embedding: easynegative", StringComparison.Ordinal) &&
+              rich.GenerationSettings.Resources.Contains("IP-Adapter: ip_adapter_sd15_light", StringComparison.Ordinal),
+            "Expected extra resource extraction.");
+
+        var drawThings = PromptExtractor.ExtractAll(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["XML:com.adobe.xmp"] = """
+            <x:xmpmeta xmlns:x="adobe:ns:meta/">
+              <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+                <rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:xmp="http://ns.adobe.com/xap/1.0/">
+                  <dc:description><rdf:Alt><rdf:li xml:lang="x-default">draw prompt
+            -draw negative
+            Steps: 20, Sampler: Euler Ancestral, Guidance Scale: 4.0, Seed: 4279116933, Model: draw_model.ckpt</rdf:li></rdf:Alt></dc:description>
+                  <xmp:CreatorTool>Draw Things</xmp:CreatorTool>
+                </rdf:Description>
+              </rdf:RDF>
+            </x:xmpmeta>
+            """
+        });
+
+        Check(drawThings.GenerationSettings.Tool == "Draw Things", "Expected Draw Things XMP metadata to set the tool.");
+
         var comfy = PromptExtractor.ExtractAll(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["prompt"] = """
@@ -98,6 +153,7 @@ internal static class SelfCheck
 
         Check(comfy.Prompt == "positive landscape", "Expected ComfyUI positive link extraction.");
         Check(comfy.NegativePrompt == "low quality", "Expected ComfyUI negative link extraction.");
+        Check(comfy.GenerationSettings.Tool == "ComfyUI", "Expected ComfyUI prompt metadata to set the tool.");
 
         var noNegative = PromptExtractor.ExtractAll(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -111,6 +167,44 @@ internal static class SelfCheck
 
         Check(noNegative.NegativePrompt == "", "Expected sampler_name not to be treated as a negative prompt.");
         Check(noNegative.GenerationSettings.Sampler == "er_sde", "Expected sampler_name to remain in generation settings.");
+
+        var oldCulture = CultureInfo.CurrentCulture;
+        CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("de-DE");
+        try
+        {
+            var comfyLora = PromptExtractor.ExtractAll(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["prompt"] = """
+                {
+                  "1": {"class_type":"KSampler","inputs":{"steps":20}},
+                  "2": {"class_type":"ExampleLoraNode","inputs":{"lora_data":"[{\"name\":\"unused.safetensors\",\"strength\":1,\"enabled\":false},{\"name\":\"folder/example-style.safetensors\",\"strength\":0.75,\"enabled\":true}]" }}
+                }
+                """
+            });
+
+            Check(comfyLora.GenerationSettings.Lora == "example_style (0.75)",
+                $"Expected culture-invariant ComfyUI lora_data extraction, got '{comfyLora.GenerationSettings.Lora}'.");
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = oldCulture;
+        }
+
+        var workflowLora = PromptExtractor.ExtractAll(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["workflow"] = """
+            {
+              "nodes": [
+                {"id":1,"type":"LoraLoaderModelOnly","mode":0,"properties":{"Node name for S&R":"LoraLoaderModelOnly"},"widgets_values":["anima-preview3\\Cosmos-Predict2.5-2B-base-distilled-LoRA.safetensors",1]},
+                {"id":2,"type":"LoraLoaderModelOnly","mode":4,"widgets_values":["disabled-lora.safetensors",1]}
+              ]
+            }
+            """
+        });
+
+        Check(workflowLora.GenerationSettings.Lora == "cosmos_predict2.5_2b_base_distilled_lora (1.00)",
+            $"Expected workflow widget LoRA extraction, got '{workflowLora.GenerationSettings.Lora}'.");
+        Check(workflowLora.GenerationSettings.Tool == "ComfyUI", "Expected ComfyUI workflow metadata to set the tool.");
     }
 
     private static void CheckPngMetadataRead()

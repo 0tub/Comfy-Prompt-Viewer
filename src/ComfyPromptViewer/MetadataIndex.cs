@@ -8,7 +8,7 @@ namespace ComfyPromptViewer;
 
 internal static class MetadataIndex
 {
-    private const int CurrentVersion = 1;
+    private const int CurrentVersion = 2;
     private const string CollectionName = "metadata";
     private static readonly object Lock = new();
     private static string DatabasePath = Path.Combine(UserPreferences.AppDataDir, "metadata.db");
@@ -121,11 +121,13 @@ internal static class MetadataIndex
                 Height = readResult.Height,
                 Prompt = extracted.Prompt,
                 NegativePrompt = extracted.NegativePrompt,
+                Tool = extracted.GenerationSettings.Tool,
                 Model = extracted.GenerationSettings.Model,
                 Sampler = extracted.GenerationSettings.Sampler,
                 Seed = extracted.GenerationSettings.Seed,
                 Settings = extracted.GenerationSettings.Settings,
-                Lora = extracted.GenerationSettings.Lora
+                Lora = extracted.GenerationSettings.Lora,
+                Resources = extracted.GenerationSettings.Resources
             };
 
             lock (Lock)
@@ -297,7 +299,9 @@ internal static class MetadataIndex
                 Sampler = "sampler",
                 Seed = "123",
                 Settings = "Steps 1",
-                Lora = "lora"
+                Lora = "lora",
+                Tool = "Forge",
+                Resources = "Embedding: easynegative"
             }
         };
 
@@ -311,7 +315,9 @@ internal static class MetadataIndex
                loaded.Sampler == "sampler" &&
                loaded.Seed == "123" &&
                loaded.Settings == "Steps 1" &&
-               loaded.Lora == "lora";
+               loaded.Lora == "lora" &&
+               loaded.Tool == "Forge" &&
+               loaded.Resources == "Embedding: easynegative";
     }
 
     private static ILiteCollection<BsonDocument> GetCollection()
@@ -354,11 +360,13 @@ internal static class MetadataIndex
             ["Height"] = entry.Height,
             ["Prompt"] = entry.Prompt,
             ["NegativePrompt"] = entry.NegativePrompt,
+            ["Tool"] = entry.Tool,
             ["Model"] = entry.Model,
             ["Sampler"] = entry.Sampler,
             ["Seed"] = entry.Seed,
             ["Settings"] = entry.Settings,
-            ["Lora"] = entry.Lora
+            ["Lora"] = entry.Lora,
+            ["Resources"] = entry.Resources
         };
     }
 
@@ -381,11 +389,13 @@ internal static class MetadataIndex
             Height = GetInt32(document, "Height"),
             Prompt = GetString(document, "Prompt"),
             NegativePrompt = GetString(document, "NegativePrompt"),
+            Tool = GetString(document, "Tool"),
             Model = GetString(document, "Model"),
             Sampler = GetString(document, "Sampler"),
             Seed = GetString(document, "Seed"),
             Settings = GetString(document, "Settings"),
-            Lora = GetString(document, "Lora")
+            Lora = GetString(document, "Lora"),
+            Resources = GetString(document, "Resources")
         };
     }
 
@@ -433,9 +443,11 @@ internal sealed class MetadataIndexEntry
     public int Height { get; set; }
     public string Prompt { get; set; } = "";
     public string NegativePrompt { get; set; } = "";
+    public string Tool { get; set; } = "";
     public string Model { get; set; } = "";
     public string Sampler { get; set; } = "";
     public string Seed { get; set; } = "";
     public string Settings { get; set; } = "";
     public string Lora { get; set; } = "";
+    public string Resources { get; set; } = "";
 }

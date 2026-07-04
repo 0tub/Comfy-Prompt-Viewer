@@ -115,6 +115,8 @@ public sealed class ImageItem : INotifyPropertyChanged
     private string _settings = "";
     private string _negativePrompt = "";
     private string _lora = "";
+    private string _tool = "";
+    private string _resources = "";
     private readonly object _thumbnailCacheStateLock = new();
     private string _thumbnailCachePath = "";
     private bool _thumbnailCacheExists;
@@ -227,6 +229,13 @@ public sealed class ImageItem : INotifyPropertyChanged
     }
 
     public bool HasNegativePrompt => !string.IsNullOrWhiteSpace(NegativePrompt);
+
+    public string Tool
+    {
+        get => _tool;
+        private set => SetField(ref _tool, value);
+    }
+
     public string Model
     {
         get => _model;
@@ -294,6 +303,12 @@ public sealed class ImageItem : INotifyPropertyChanged
 
     public bool HasLora => !string.IsNullOrWhiteSpace(Lora);
 
+    public string Resources
+    {
+        get => _resources;
+        private set => SetField(ref _resources, value);
+    }
+
     public double TileSize => _tileSize;
     public double CardHeight => _tileSize;
 
@@ -360,11 +375,13 @@ public sealed class ImageItem : INotifyPropertyChanged
                     Height = result.Height,
                     Prompt = extracted.Prompt,
                     NegativePrompt = extracted.NegativePrompt,
+                    Tool = extracted.GenerationSettings.Tool,
                     Model = extracted.GenerationSettings.Model,
                     Sampler = extracted.GenerationSettings.Sampler,
                     Seed = extracted.GenerationSettings.Seed,
                     Settings = extracted.GenerationSettings.Settings,
-                    Lora = extracted.GenerationSettings.Lora
+                    Lora = extracted.GenerationSettings.Lora,
+                    Resources = extracted.GenerationSettings.Resources
                 };
             }, token);
 
@@ -375,11 +392,13 @@ public sealed class ImageItem : INotifyPropertyChanged
                 _height = entry.Height;
                 Prompt = entry.Prompt;
                 NegativePrompt = entry.NegativePrompt;
+                Tool = entry.Tool;
                 Model = entry.Model;
                 Sampler = entry.Sampler;
                 Seed = entry.Seed;
                 Settings = entry.Settings;
                 Lora = entry.Lora;
+                Resources = entry.Resources;
                 MarkMetadataLoaded();
                 OnPropertyChanged(nameof(DimensionsText));
                 OnPropertyChanged(nameof(IsLoading));
@@ -407,11 +426,13 @@ public sealed class ImageItem : INotifyPropertyChanged
         _height = entry.Height;
         Prompt = entry.Prompt;
         NegativePrompt = entry.NegativePrompt;
+        Tool = entry.Tool;
         Model = entry.Model;
         Sampler = entry.Sampler;
         Seed = entry.Seed;
         Settings = entry.Settings;
         Lora = entry.Lora;
+        Resources = entry.Resources;
         MarkMetadataLoaded();
         OnPropertyChanged(nameof(DimensionsText));
         OnPropertyChanged(nameof(IsLoading));

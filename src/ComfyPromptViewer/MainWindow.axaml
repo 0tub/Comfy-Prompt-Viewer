@@ -1200,10 +1200,22 @@
                                                   <TextBlock Grid.Column="1" Name="SidebarDimensions" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontMono}" FontWeight="Normal" FontSize="11" VerticalAlignment="Center" />
                                               </Grid>
 
+                                             <!-- Tool Row -->
+                                             <Grid ColumnDefinitions="75,*" Name="SidebarToolRow">
+                                                 <TextBlock Grid.Column="0" Name="SidebarToolLabel" Text="TOOL" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontUI}" VerticalAlignment="Center" FontSize="9" FontWeight="Medium" LetterSpacing="1.5" />
+                                                 <TextBlock Grid.Column="1" Name="SidebarTool" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontMono}" TextWrapping="Wrap" FontSize="11" FontWeight="Normal" VerticalAlignment="Center" />
+                                             </Grid>
+
                                              <!-- Model Row -->
                                              <Grid ColumnDefinitions="75,*" Name="SidebarModelRow">
                                                  <TextBlock Grid.Column="0" Name="SidebarModelLabel" Text="MODEL" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontUI}" VerticalAlignment="Center" FontSize="9" FontWeight="Medium" LetterSpacing="1.5" />
                                                  <TextBlock Grid.Column="1" Name="SidebarModel" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontMono}" TextWrapping="Wrap" FontSize="11" FontWeight="Normal" VerticalAlignment="Center" />
+                                             </Grid>
+
+                                             <!-- Lora Row -->
+                                             <Grid ColumnDefinitions="75,*" Name="SidebarLoraRow">
+                                                 <TextBlock Grid.Column="0" Name="SidebarLoraLabel" Text="LORA" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontUI}" VerticalAlignment="Center" FontSize="9" FontWeight="Medium" LetterSpacing="1.5" />
+                                                 <TextBlock Grid.Column="1" Name="SidebarLora" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontMono}" TextWrapping="Wrap" FontSize="11" FontWeight="Normal" VerticalAlignment="Center" />
                                              </Grid>
 
                                              <!-- Sampler Row -->
@@ -1233,10 +1245,10 @@
                                                  <TextBlock Grid.Column="1" Name="SidebarSettings" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontMono}" TextWrapping="Wrap" FontSize="11" FontWeight="Normal" VerticalAlignment="Center" />
                                              </Grid>
 
-                                             <!-- Lora Row -->
-                                             <Grid ColumnDefinitions="75,*" Name="SidebarLoraRow">
-                                                 <TextBlock Grid.Column="0" Name="SidebarLoraLabel" Text="LORA" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontUI}" VerticalAlignment="Center" FontSize="9" FontWeight="Medium" LetterSpacing="1.5" />
-                                                 <TextBlock Grid.Column="1" Name="SidebarLora" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontMono}" TextWrapping="Wrap" FontSize="11" FontWeight="Normal" VerticalAlignment="Center" />
+                                             <!-- Resources Row -->
+                                             <Grid ColumnDefinitions="75,*" Name="SidebarResourcesRow">
+                                                 <TextBlock Grid.Column="0" Name="SidebarResourcesLabel" Text="RESOURCES" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontUI}" VerticalAlignment="Center" FontSize="9" FontWeight="Medium" LetterSpacing="1.5" />
+                                                 <TextBlock Grid.Column="1" Name="SidebarResources" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontMono}" TextWrapping="Wrap" FontSize="11" FontWeight="Normal" VerticalAlignment="Center" />
                                              </Grid>
 
                                              <!-- Date Row -->

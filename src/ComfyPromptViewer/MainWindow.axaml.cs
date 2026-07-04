@@ -1283,6 +1283,9 @@ public partial class MainWindow : Window
         SidebarHeaderDesc.IsVisible = false;
         SidebarDimensions.Text = item.DimensionsText;
 
+        SidebarTool.Text = item.Tool;
+        SidebarToolRow.IsVisible = !string.IsNullOrWhiteSpace(item.Tool);
+
         SidebarModel.Text = item.Model;
         SidebarModelRow.IsVisible = !string.IsNullOrWhiteSpace(item.Model);
 
@@ -1297,6 +1300,9 @@ public partial class MainWindow : Window
 
         SidebarLora.Text = item.Lora;
         SidebarLoraRow.IsVisible = !string.IsNullOrWhiteSpace(item.Lora);
+
+        SidebarResources.Text = item.Resources;
+        SidebarResourcesRow.IsVisible = !string.IsNullOrWhiteSpace(item.Resources);
 
         SidebarDate.Text = item.CreationDateText;
         SidebarPrompt.Text = item.HasPrompt ? item.Prompt : "";
@@ -1978,11 +1984,6 @@ public partial class MainWindow : Window
         }
 
         var newIndex = filtered.IndexOf(value.Item);
-        if (newIndex < 0)
-        {
-            return;
-        }
-
         var columns = GetGalleryColumnCount();
         var viewportHeight = GalleryScrollViewer.Viewport.Height > 0
             ? GalleryScrollViewer.Viewport.Height
@@ -2020,6 +2021,11 @@ public partial class MainWindow : Window
     {
         columns = Math.Max(1, columns);
         itemExtent = Math.Max(1, itemExtent);
+        if (newIndex < 0)
+        {
+            return Math.Clamp(oldOffset, 0, maxOffset);
+        }
+
         var offsetWithinRow = oldOffset - ((oldIndex / columns) * itemExtent);
         return Math.Clamp(((newIndex / columns) * itemExtent) + offsetWithinRow, 0, maxOffset);
     }
@@ -2050,8 +2056,7 @@ public partial class MainWindow : Window
     {
         foreach (var term in negativeTerms)
         {
-            if (SearchEngine.IsMatch(item.FileName, term) ||
-                item.HasLoadedMetadata && SearchEngine.IsMatch(item.Prompt, item.NegativePrompt, term))
+            if (ItemMatchesAnySearchableText(item, term))
             {
                 return false;
             }
@@ -2069,13 +2074,31 @@ public partial class MainWindow : Window
                 return true;
             }
 
-            if (!SearchEngine.IsMatch(item.Prompt, item.NegativePrompt, term))
+            if (!ItemMetadataMatchesTerm(item, term))
             {
                 return false;
             }
         }
 
         return true;
+    }
+
+    private static bool ItemMatchesAnySearchableText(ImageItem item, SearchTerm term)
+    {
+        return SearchEngine.IsMatch(item.FileName, term) ||
+               item.HasLoadedMetadata && ItemMetadataMatchesTerm(item, term);
+    }
+
+    private static bool ItemMetadataMatchesTerm(ImageItem item, SearchTerm term)
+    {
+        return SearchEngine.IsMatch(item.Prompt, item.NegativePrompt, term) ||
+               SearchEngine.IsSeparatorInsensitiveMatch(item.Tool, term) ||
+               SearchEngine.IsSeparatorInsensitiveMatch(item.Model, term) ||
+               SearchEngine.IsSeparatorInsensitiveMatch(item.Sampler, term) ||
+               SearchEngine.IsSeparatorInsensitiveMatch(item.Seed, term) ||
+               SearchEngine.IsSeparatorInsensitiveMatch(item.Settings, term) ||
+               SearchEngine.IsSeparatorInsensitiveMatch(item.Lora, term) ||
+               SearchEngine.IsSeparatorInsensitiveMatch(item.Resources, term);
     }
 
     private static bool TextMatchesTerms(
