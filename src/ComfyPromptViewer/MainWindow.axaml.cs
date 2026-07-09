@@ -40,17 +40,23 @@ public partial class MainWindow : Window
     private const int LongPositivePromptLineThreshold = 7;
     private static readonly TimeSpan InitialMetadataScannerPollInterval = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan MetadataScannerSearchRefreshInterval = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan MetadataCountUpdateInterval = TimeSpan.FromMilliseconds(150);
     private static readonly TimeSpan AdvancedMaintenanceStatusDuration = TimeSpan.FromSeconds(2.5);
     private const int InitialMetadataScannerMaxPolls = 15;
     private const int MetadataScannerMaxDegreeOfParallelism = 2;
+    private const int WarmMetadataUiBatchSize = 64;
+    private const int MaxIncrementalGalleryChanges = 32;
     private readonly GalleryViewModel _viewModel = new();
     private readonly ThumbnailLoadCoordinator _thumbnailLoads = new();
     private readonly List<string> _allImagePaths = [];
     private readonly List<ImageItem> _allImageItems = [];
+    private readonly List<ImageItem> _visibleThumbnailScheduleItems = [];
+    private readonly List<ImageItem> _aheadThumbnailScheduleItems = [];
     private CancellationTokenSource? _loadCancellation;
     private CancellationTokenSource? _scannerCancellation;
     private CancellationTokenSource? _advancedMaintenanceStatusCancellation;
     private DispatcherTimer? _searchDebounceTimer;
+    private DispatcherTimer? _metadataCountUpdateTimer;
     private ImageItem? _selectedItem;
     private SortMode _sortMode = SortMode.NewestFirst;
     private ThemeMode _themeMode = UserPreferences.LoadThemeMode();
@@ -339,6 +345,7 @@ public partial class MainWindow : Window
 
     private void ClearImageItems()
     {
+        _metadataCountUpdateTimer?.Stop();
         GalleryEmptyState.IsVisible = false;
         GalleryEmptyState.Opacity = 0;
 
@@ -350,6 +357,8 @@ public partial class MainWindow : Window
         _viewModel.Items.Clear();
         _allImagePaths.Clear();
         _allImageItems.Clear();
+        _visibleThumbnailScheduleItems.Clear();
+        _aheadThumbnailScheduleItems.Clear();
         _lastPrefetchFirstVisibleRow = -1;
         _prefetchDirection = 1;
     }
@@ -887,8 +896,12 @@ public partial class MainWindow : Window
 
     private int GetGalleryColumnCount()
     {
-        var viewportWidth = GalleryScrollViewer.Viewport.Width > 0 ? GalleryScrollViewer.Viewport.Width : Bounds.Width;
-        return Math.Max(1, (int)Math.Floor(viewportWidth / Math.Max(1, _tileItemExtent)));
+        var availableWidth = GalleryItems.Bounds.Width > 0
+            ? GalleryItems.Bounds.Width
+            : (GalleryScrollViewer.Viewport.Width > 0 ? GalleryScrollViewer.Viewport.Width : Bounds.Width)
+              - GalleryItems.Margin.Left
+              - GalleryItems.Margin.Right;
+        return Math.Max(1, (int)Math.Floor(Math.Max(1, availableWidth) / Math.Max(1, _tileItemExtent)));
     }
 
     private void EnsureIndexVisible(int index)
@@ -1036,13 +1049,14 @@ public partial class MainWindow : Window
         }
 
         var itemExtent = Math.Max(1, _tileItemExtent);
-        var viewportWidth = GalleryScrollViewer.Viewport.Width > 0 ? GalleryScrollViewer.Viewport.Width : Bounds.Width;
         var viewportHeight = GalleryScrollViewer.Viewport.Height > 0 ? GalleryScrollViewer.Viewport.Height : Bounds.Height;
-        var columnCount = Math.Max(1, (int)Math.Floor(Math.Max(itemExtent, viewportWidth) / itemExtent));
+        var columnCount = GetGalleryColumnCount();
         var firstVisibleRow = Math.Max(0, (int)Math.Floor(GalleryScrollViewer.Offset.Y / itemExtent));
         var visibleRowCount = Math.Max(1, (int)Math.Ceiling(viewportHeight / itemExtent) + 1);
-        var visibleItems = new List<ImageItem>(visibleRowCount * columnCount);
-        var aheadItems = new List<ImageItem>(Math.Max(0, 6 * columnCount));
+        var visibleItems = _visibleThumbnailScheduleItems;
+        var aheadItems = _aheadThumbnailScheduleItems;
+        visibleItems.Clear();
+        aheadItems.Clear();
         if (_lastPrefetchFirstVisibleRow >= 0)
         {
             var rowDelta = firstVisibleRow.CompareTo(_lastPrefetchFirstVisibleRow);
@@ -1666,32 +1680,14 @@ public partial class MainWindow : Window
             {
                 var lastRefreshTime = DateTime.UtcNow;
                 var itemsSnapshot = items.ToList();
-                var cachedEntries = await Task.Run(() =>
-                    MetadataIndex.LoadMany(itemsSnapshot.Select(item => item.Path), token), token);
+                var cachedEntries = MetadataIndex.LoadMany(itemsSnapshot.Select(item => item.Path), token);
 
                 if (cachedEntries.Count > 0 && !token.IsCancellationRequested && scannerGeneration == _scannerGeneration)
                 {
-                    await Dispatcher.UIThread.InvokeAsync(() =>
+                    if (!await ApplyWarmMetadataEntriesAsync(itemsSnapshot, cachedEntries, token, scannerGeneration))
                     {
-                        if (token.IsCancellationRequested || scannerGeneration != _scannerGeneration)
-                        {
-                            return;
-                        }
-
-                        foreach (var item in itemsSnapshot)
-                        {
-                            if (!item.HasLoadedMetadata &&
-                                cachedEntries.TryGetValue(item.Path, out var entry))
-                            {
-                                item.ApplyMetadataEntry(entry);
-                            }
-                        }
-
-                        if (HasSearchQueryActive())
-                        {
-                            ApplyFilter();
-                        }
-                    });
+                        return;
+                    }
                 }
 
                 var uncachedItems = itemsSnapshot
@@ -1755,6 +1751,51 @@ public partial class MainWindow : Window
             {
             }
         });
+    }
+
+    private async Task<bool> ApplyWarmMetadataEntriesAsync(
+        List<ImageItem> items,
+        Dictionary<string, MetadataIndexEntry> cachedEntries,
+        CancellationToken token,
+        int scannerGeneration)
+    {
+        for (var startIndex = 0; startIndex < items.Count; startIndex += WarmMetadataUiBatchSize)
+        {
+            token.ThrowIfCancellationRequested();
+            var batchStartIndex = startIndex;
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (token.IsCancellationRequested || scannerGeneration != _scannerGeneration)
+                {
+                    return;
+                }
+
+                var endIndex = Math.Min(items.Count, batchStartIndex + WarmMetadataUiBatchSize);
+                for (var index = batchStartIndex; index < endIndex; index++)
+                {
+                    var item = items[index];
+                    if (!item.HasLoadedMetadata && cachedEntries.TryGetValue(item.Path, out var entry))
+                    {
+                        item.ApplyMetadataEntry(entry);
+                    }
+                }
+            }, DispatcherPriority.Background);
+
+            if (token.IsCancellationRequested || scannerGeneration != _scannerGeneration)
+            {
+                return false;
+            }
+        }
+
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            if (!token.IsCancellationRequested && scannerGeneration == _scannerGeneration && HasSearchQueryActive())
+            {
+                ApplyFilter();
+            }
+        }, DispatcherPriority.Background);
+
+        return !token.IsCancellationRequested && scannerGeneration == _scannerGeneration;
     }
 
     private void QueueInitialMetadataScanner(int loadGeneration)
@@ -1834,7 +1875,28 @@ public partial class MainWindow : Window
     private void ImageItem_MetadataLoaded(ImageItem item)
     {
         _loadedMetadataCount++;
-        UpdateCountText();
+        QueueMetadataCountTextUpdate();
+    }
+
+    private void QueueMetadataCountTextUpdate()
+    {
+        if (_metadataCountUpdateTimer is null)
+        {
+            _metadataCountUpdateTimer = new DispatcherTimer(DispatcherPriority.Background)
+            {
+                Interval = MetadataCountUpdateInterval
+            };
+            _metadataCountUpdateTimer.Tick += (s, e) =>
+            {
+                _metadataCountUpdateTimer.Stop();
+                UpdateCountText();
+            };
+        }
+
+        if (!_metadataCountUpdateTimer.IsEnabled)
+        {
+            _metadataCountUpdateTimer.Start();
+        }
     }
 
     private void SearchTextBox_TextChanged(object? sender, TextChangedEventArgs e)
@@ -1943,8 +2005,15 @@ public partial class MainWindow : Window
         if (hasChanges)
         {
             var scrollAnchor = resetScroll ? null : CaptureGalleryScrollAnchor();
-            _viewModel.Items.Clear();
-            _viewModel.Items.AddRange(filtered);
+            if (resetScroll)
+            {
+                _viewModel.Items.Clear();
+                _viewModel.Items.AddRange(filtered);
+            }
+            else
+            {
+                SynchronizeGalleryItems(filtered);
+            }
             GalleryItems.InvalidateMeasure();
             RestoreGalleryScrollAnchor(scrollAnchor, filtered);
         }
@@ -1956,10 +2025,106 @@ public partial class MainWindow : Window
         }
 
         UpdateCountText();
-        QueueViewportThumbnailSchedule(force: true);
+        QueueViewportThumbnailSchedule();
 
         bool showEmpty = filtered.Count == 0 && _allImageItems.Count > 0;
         ToggleGalleryEmptyState(showEmpty);
+    }
+
+    private void SynchronizeGalleryItems(List<ImageItem> filtered)
+    {
+        if (!CanSynchronizeGalleryItemsIncrementally(_viewModel.Items, filtered, MaxIncrementalGalleryChanges))
+        {
+            _viewModel.Items.Clear();
+            _viewModel.Items.AddRange(filtered);
+            return;
+        }
+
+        var targetItems = new HashSet<ImageItem>(filtered);
+        for (var index = 0; index < filtered.Count;)
+        {
+            var item = filtered[index];
+            if (index == _viewModel.Items.Count)
+            {
+                _viewModel.Items.Insert(index, item);
+                index++;
+                continue;
+            }
+
+            if (ReferenceEquals(_viewModel.Items[index], item))
+            {
+                index++;
+                continue;
+            }
+
+            if (!targetItems.Contains(_viewModel.Items[index]))
+            {
+                _viewModel.Items.RemoveAt(index);
+                continue;
+            }
+
+            _viewModel.Items.Insert(index, item);
+            index++;
+        }
+
+        while (_viewModel.Items.Count > filtered.Count)
+        {
+            _viewModel.Items.RemoveAt(_viewModel.Items.Count - 1);
+        }
+    }
+
+    internal static bool CanSynchronizeGalleryItemsIncrementally(
+        IReadOnlyList<ImageItem> currentItems,
+        IReadOnlyList<ImageItem> targetItems,
+        int maximumChanges)
+    {
+        if (maximumChanges < 0)
+        {
+            return false;
+        }
+
+        var targetSet = new HashSet<ImageItem>(targetItems);
+        if (targetSet.Count != targetItems.Count)
+        {
+            return false;
+        }
+
+        var currentIndexes = new Dictionary<ImageItem, int>(currentItems.Count);
+        var changeCount = 0;
+        for (var index = 0; index < currentItems.Count; index++)
+        {
+            var item = currentItems[index];
+            if (!currentIndexes.TryAdd(item, index))
+            {
+                return false;
+            }
+
+            if (!targetSet.Contains(item) && ++changeCount > maximumChanges)
+            {
+                return false;
+            }
+        }
+
+        var lastCurrentIndex = -1;
+        foreach (var item in targetItems)
+        {
+            if (currentIndexes.TryGetValue(item, out var currentIndex))
+            {
+                if (currentIndex < lastCurrentIndex)
+                {
+                    return false;
+                }
+
+                lastCurrentIndex = currentIndex;
+            }
+            else if (++changeCount > maximumChanges)
+            {
+                return false;
+            }
+        }
+
+        // Small insert/delete batches keep realized cards stable. Larger changes use one reset.
+        return true;
     }
 
     private GalleryScrollAnchor? CaptureGalleryScrollAnchor()
@@ -1985,30 +2150,42 @@ public partial class MainWindow : Window
 
         var newIndex = filtered.IndexOf(value.Item);
         var columns = GetGalleryColumnCount();
-        var viewportHeight = GalleryScrollViewer.Viewport.Height > 0
-            ? GalleryScrollViewer.Viewport.Height
-            : Math.Max(1, GalleryScrollViewer.Bounds.Height);
-        var rowCount = (int)Math.Ceiling(filtered.Count / (double)columns);
-        var maxOffset = Math.Max(
-            0,
-            (rowCount * _tileItemExtent) + GalleryItems.Margin.Top + GalleryItems.Margin.Bottom - viewportHeight);
-        var restoredOffset = CalculateAnchoredGalleryOffset(
+        var desiredOffset = CalculateAnchoredGalleryOffset(
             value.OldIndex,
             newIndex,
             columns,
             _tileItemExtent,
             value.Offset,
-            maxOffset);
-        var restoreGeneration = ++_galleryScrollRestoreGeneration;
+            double.PositiveInfinity);
 
         // Uniform fixed-height rows make a row anchor sufficient. Variable-height tiles would need realized-element anchoring.
+        QueueGalleryScrollRestore(desiredOffset);
+    }
+
+    private void QueueGalleryScrollRestore(double desiredOffset)
+    {
+        var restoreGeneration = ++_galleryScrollRestoreGeneration;
         Dispatcher.UIThread.Post(() =>
         {
-            if (restoreGeneration == _galleryScrollRestoreGeneration)
-            {
-                GalleryScrollViewer.Offset = new Vector(GalleryScrollViewer.Offset.X, restoredOffset);
-            }
+            ApplyGalleryScrollRestore(restoreGeneration, desiredOffset);
         }, DispatcherPriority.Loaded);
+    }
+
+    private void ApplyGalleryScrollRestore(int restoreGeneration, double desiredOffset)
+    {
+        if (restoreGeneration != _galleryScrollRestoreGeneration)
+        {
+            return;
+        }
+
+        var viewportHeight = GalleryScrollViewer.Viewport.Height > 0
+            ? GalleryScrollViewer.Viewport.Height
+            : Math.Max(1, GalleryScrollViewer.Bounds.Height);
+        var maxOffset = GalleryScrollViewer.Extent.Height > 0
+            ? Math.Max(0, GalleryScrollViewer.Extent.Height - viewportHeight)
+            : desiredOffset;
+        var restoredOffset = Math.Clamp(desiredOffset, 0, maxOffset);
+        GalleryScrollViewer.Offset = new Vector(GalleryScrollViewer.Offset.X, restoredOffset);
     }
 
     internal static double CalculateAnchoredGalleryOffset(
@@ -2159,6 +2336,11 @@ public partial class MainWindow : Window
         bool isScanning = _scannerCancellation != null &&
                          !_scannerCancellation.IsCancellationRequested &&
                          _loadedMetadataCount < total;
+
+        if (!isScanning)
+        {
+            _metadataCountUpdateTimer?.Stop();
+        }
 
         CountText.Opacity = 0.2;
 

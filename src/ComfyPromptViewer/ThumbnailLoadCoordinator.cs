@@ -16,10 +16,10 @@ public sealed class ThumbnailLoadCoordinator
     private readonly LinkedList<ImageItem> _aheadQueue = new();
     private readonly Dictionary<ImageItem, QueuedThumbnail> _queuedItems = new();
     private readonly HashSet<ImageItem> _activeItems = [];
+    private readonly HashSet<ImageItem> _retainedViewportItems = [];
     private int _activeVisibleLoads;
     private int _activeAheadLoads;
     private int _generation;
-    private int _viewportGeneration;
     private CancellationToken _currentToken;
     public Action? VisibleWorkDrained { get; set; }
 
@@ -28,11 +28,11 @@ public sealed class ThumbnailLoadCoordinator
         lock (_lock)
         {
             _generation++;
-            _viewportGeneration++;
             _visibleQueue.Clear();
             _aheadQueue.Clear();
             _queuedItems.Clear();
             _activeItems.Clear();
+            _retainedViewportItems.Clear();
             _activeVisibleLoads = 0;
             _activeAheadLoads = 0;
         }
@@ -46,24 +46,24 @@ public sealed class ThumbnailLoadCoordinator
         lock (_lock)
         {
             _currentToken = token;
-            _viewportGeneration++;
             if (token.IsCancellationRequested)
             {
+                _retainedViewportItems.Clear();
                 return;
             }
 
-            var retainedItems = new HashSet<ImageItem>(visibleItems.Count + aheadItems.Count);
+            _retainedViewportItems.Clear();
             foreach (var item in visibleItems)
             {
-                retainedItems.Add(item);
+                _retainedViewportItems.Add(item);
             }
             foreach (var item in aheadItems)
             {
-                retainedItems.Add(item);
+                _retainedViewportItems.Add(item);
             }
 
-            RemoveQueuedItemsNotIn(_visibleQueue, retainedItems);
-            RemoveQueuedItemsNotIn(_aheadQueue, retainedItems);
+            RemoveQueuedItemsNotIn(_visibleQueue, _retainedViewportItems);
+            RemoveQueuedItemsNotIn(_aheadQueue, _retainedViewportItems);
 
             foreach (var item in visibleItems)
             {

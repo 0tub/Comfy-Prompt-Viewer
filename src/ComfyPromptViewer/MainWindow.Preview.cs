@@ -60,6 +60,7 @@ public partial class MainWindow
         LargePreviewTitle.Text = _selectedItem.FileName;
         LargePreviewMeta.Text = _selectedItem.DimensionsText;
         LargePreviewImage.Source = _selectedItem.SelectedPreview ?? _selectedItem.Preview;
+        UpdateLargePreviewNavigationButtons();
 
         if (resetZoom)
         {
@@ -113,6 +114,40 @@ public partial class MainWindow
     private void PreviewActualSizeButton_Click(object? sender, RoutedEventArgs e)
     {
         SetLargePreviewZoom(1.0);
+    }
+
+    private void PreviousPreviewButton_Click(object? sender, RoutedEventArgs e)
+    {
+        MoveLargePreviewSelection(-1);
+    }
+
+    private void NextPreviewButton_Click(object? sender, RoutedEventArgs e)
+    {
+        MoveLargePreviewSelection(1);
+    }
+
+    private void MoveLargePreviewSelection(int delta)
+    {
+        if (_selectedItem is null)
+        {
+            return;
+        }
+
+        var currentIndex = _viewModel.Items.IndexOf(_selectedItem);
+        var nextIndex = currentIndex + delta;
+        if (nextIndex < 0 || nextIndex >= _viewModel.Items.Count)
+        {
+            return;
+        }
+
+        SelectByIndex(nextIndex);
+    }
+
+    private void UpdateLargePreviewNavigationButtons()
+    {
+        var selectedIndex = _selectedItem is null ? -1 : _viewModel.Items.IndexOf(_selectedItem);
+        PreviousPreviewButton.IsEnabled = selectedIndex > 0;
+        NextPreviewButton.IsEnabled = selectedIndex >= 0 && selectedIndex < _viewModel.Items.Count - 1;
     }
 
     private void LargePreviewCanvas_PointerWheelChanged(object? sender, PointerWheelEventArgs e)

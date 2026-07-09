@@ -123,6 +123,8 @@ public sealed class ImageItem : INotifyPropertyChanged
     private bool _hasThumbnailCacheState;
     private bool _isSelected;
     private bool _hasLoadedMetadata;
+    private readonly object _metadataLoadLock = new();
+    private Task? _metadataLoadTask;
     private int _realizedCount;
     private double _tileSize;
     private Task? _selectedPreviewLoadTask;
@@ -352,10 +354,34 @@ public sealed class ImageItem : INotifyPropertyChanged
         }
     }
 
-    public async Task EnsureMetadataLoadedAsync(CancellationToken token)
+    public Task EnsureMetadataLoadedAsync(CancellationToken token)
     {
-        if (_hasLoadedMetadata) return;
+        if (_hasLoadedMetadata)
+        {
+            return Task.CompletedTask;
+        }
 
+        Task loadTask;
+        lock (_metadataLoadLock)
+        {
+            if (_hasLoadedMetadata)
+            {
+                return Task.CompletedTask;
+            }
+
+            if (_metadataLoadTask is not { IsCompleted: false })
+            {
+                _metadataLoadTask = LoadMetadataAsync(token);
+            }
+
+            loadTask = _metadataLoadTask;
+        }
+
+        return loadTask.WaitAsync(token);
+    }
+
+    private async Task LoadMetadataAsync(CancellationToken token)
+    {
         try
         {
             var entry = await Task.Run(() =>
@@ -498,6 +524,11 @@ public sealed class ImageItem : INotifyPropertyChanged
             await SelectedPreviewLoadLimiter.WaitAsync(token);
             try
             {
+                if (!IsSelected)
+                {
+                    return;
+                }
+
                 var bitmap = await Task.Run(() =>
                 {
                     using var stream = File.OpenRead(Path);

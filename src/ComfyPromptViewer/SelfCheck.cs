@@ -13,6 +13,7 @@ internal static class SelfCheck
     {
         CheckSearchParsing();
         CheckGalleryScrollAnchoring();
+        CheckGalleryItemReconciliation();
         CheckThemeModes();
         CheckPromptExtraction();
         CheckPngMetadataRead();
@@ -45,6 +46,21 @@ internal static class SelfCheck
             maxOffset: 5000);
 
         Check(offset == 700, "Expected deleting the first visible gallery item to preserve the current scroll offset.");
+    }
+
+    private static void CheckGalleryItemReconciliation()
+    {
+        var a = new ImageItem(Path.Combine(Path.GetTempPath(), "gallery-a.png"), tileSize: 120);
+        var b = new ImageItem(Path.Combine(Path.GetTempPath(), "gallery-b.png"), tileSize: 120);
+        var c = new ImageItem(Path.Combine(Path.GetTempPath(), "gallery-c.png"), tileSize: 120);
+        var added = new ImageItem(Path.Combine(Path.GetTempPath(), "gallery-added.png"), tileSize: 120);
+
+        Check(MainWindow.CanSynchronizeGalleryItemsIncrementally([a, b, c], [added, a, b, c], maximumChanges: 2),
+            "Expected a small watcher insertion to retain the existing gallery order.");
+        Check(!MainWindow.CanSynchronizeGalleryItemsIncrementally([a, b, c], [c, b, a], maximumChanges: 2),
+            "Expected a reorder to use a gallery reset instead of per-item moves.");
+        Check(!MainWindow.CanSynchronizeGalleryItemsIncrementally([a, b, c], [added, a, b, c], maximumChanges: 0),
+            "Expected the incremental gallery change limit to be enforced.");
     }
 
     private static void CheckSearchParsing()

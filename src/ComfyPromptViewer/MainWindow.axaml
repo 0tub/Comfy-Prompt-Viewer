@@ -71,6 +71,38 @@
             <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
         </Style>
 
+        <Style Selector="Button.preview-nav-btn">
+            <Setter Property="Width" Value="52" />
+            <Setter Property="Height" Value="80" />
+            <Setter Property="Padding" Value="0,0,0,2" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Foreground" Value="{DynamicResource TextMuted}" />
+            <Setter Property="FontSize" Value="32" />
+            <Setter Property="FontWeight" Value="Light" />
+            <Setter Property="Opacity" Value="0.34" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+        </Style>
+        <Style Selector="Button.preview-nav-btn:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+        </Style>
+        <Style Selector="Button.preview-nav-btn:pointerover">
+            <Setter Property="Opacity" Value="0.9" />
+        </Style>
+        <Style Selector="Button.preview-nav-btn:pressed /template/ ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+            <Setter Property="RenderTransform" Value="none" />
+        </Style>
+        <Style Selector="Button.preview-nav-btn:disabled">
+            <Setter Property="Opacity" Value="0" />
+        </Style>
+
         <Style Selector="Border.card">
             <Setter Property="Background" Value="{DynamicResource SurfaceCard}" />
             <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtle}" />
@@ -1560,19 +1592,37 @@
                             Padding="16"
                             MinHeight="300"
                             SizeChanged="LargePreviewImageHost_SizeChanged">
-                        <Canvas Name="LargePreviewCanvas"
-                                ClipToBounds="True"
-                                Background="Transparent"
-                                HorizontalAlignment="Stretch"
-                                VerticalAlignment="Stretch"
-                                PointerWheelChanged="LargePreviewCanvas_PointerWheelChanged"
-                                PointerPressed="LargePreviewCanvas_PointerPressed"
-                                PointerMoved="LargePreviewCanvas_PointerMoved"
-                                PointerReleased="LargePreviewCanvas_PointerReleased"
-                                PointerCaptureLost="LargePreviewCanvas_PointerCaptureLost">
-                            <Image Name="LargePreviewImage"
-                                   Stretch="Fill" />
-                        </Canvas>
+                        <Grid>
+                            <Canvas Name="LargePreviewCanvas"
+                                    ClipToBounds="True"
+                                    Background="Transparent"
+                                    HorizontalAlignment="Stretch"
+                                    VerticalAlignment="Stretch"
+                                    PointerWheelChanged="LargePreviewCanvas_PointerWheelChanged"
+                                    PointerPressed="LargePreviewCanvas_PointerPressed"
+                                    PointerMoved="LargePreviewCanvas_PointerMoved"
+                                    PointerReleased="LargePreviewCanvas_PointerReleased"
+                                    PointerCaptureLost="LargePreviewCanvas_PointerCaptureLost">
+                                <Image Name="LargePreviewImage"
+                                       Stretch="Fill" />
+                            </Canvas>
+                            <Button Name="PreviousPreviewButton"
+                                    Classes="preview-nav-btn"
+                                    Content="&#x2039;"
+                                    HorizontalAlignment="Left"
+                                    VerticalAlignment="Center"
+                                    Margin="12,0,0,0"
+                                    AutomationProperties.Name="Previous image"
+                                    Click="PreviousPreviewButton_Click" />
+                            <Button Name="NextPreviewButton"
+                                    Classes="preview-nav-btn"
+                                    Content="&#x203A;"
+                                    HorizontalAlignment="Right"
+                                    VerticalAlignment="Center"
+                                    Margin="0,0,12,0"
+                                    AutomationProperties.Name="Next image"
+                                    Click="NextPreviewButton_Click" />
+                        </Grid>
                     </Border>
                 </Grid>
             </Border>
