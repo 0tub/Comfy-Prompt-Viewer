@@ -844,8 +844,8 @@
                             <DataTemplate x:DataType="local:ImageItem">
                                 <Border Classes="card"
                                         Classes.selected="{Binding IsSelected}"
-                                        Width="{Binding TileSize}"
-                                        Height="{Binding CardHeight}"
+                                        Width="{DynamicResource GalleryTileSize}"
+                                        Height="{DynamicResource GalleryTileSize}"
                                         Padding="6"
                                         Margin="8"
                                         AttachedToVisualTree="GalleryItem_AttachedToVisualTree"
@@ -853,7 +853,7 @@
                                          DataContextChanged="GalleryItem_DataContextChanged"
                                          PointerPressed="GalleryItem_PointerPressed"
                                          KeyDown="GalleryItem_KeyDown"
-                                         AutomationProperties.Name="{Binding FileName}"
+                                         AutomationProperties.Name="{Binding FileName, Mode=OneTime}"
                                          Focusable="True">
                                     <Border.ContextMenu>
                                         <ContextMenu>
@@ -878,6 +878,7 @@
                                                  </Transitions>
                                              </Border.Transitions>
                                              <Image Source="{Binding Preview}"
+                                                    RenderOptions.BitmapInterpolationMode="LowQuality"
                                                     Stretch="Uniform"
                                                     HorizontalAlignment="Center"
                                                    VerticalAlignment="Center" />

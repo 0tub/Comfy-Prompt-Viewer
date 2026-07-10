@@ -8,6 +8,7 @@
             <FontFamily x:Key="FontHeading">avares://ComfyPromptViewer/Assets/Fonts#Fraunces</FontFamily>
             <FontFamily x:Key="FontMono">avares://ComfyPromptViewer/Assets/Fonts#Geist Mono</FontFamily>
             <FontFamily x:Key="FontUI">avares://ComfyPromptViewer/Assets/Fonts#Noto Sans</FontFamily>
+            <x:Double x:Key="GalleryTileSize">120</x:Double>
 
             <Color x:Key="SystemAccentColor">#8B3A2E</Color>
             <SolidColorBrush x:Key="SystemControlHighlightAccentBrush" Color="#8B3A2E" />

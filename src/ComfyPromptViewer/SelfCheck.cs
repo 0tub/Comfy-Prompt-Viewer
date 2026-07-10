@@ -14,6 +14,7 @@ internal static class SelfCheck
         CheckSearchParsing();
         CheckGalleryScrollAnchoring();
         CheckGalleryItemReconciliation();
+        CheckSortedInsertion();
         CheckThemeModes();
         CheckPromptExtraction();
         CheckPngMetadataRead();
@@ -22,7 +23,19 @@ internal static class SelfCheck
         CheckThumbnailCacheWriteBackpressure();
         CheckDeferredThumbnailCacheWriteQueue();
         CheckDeferredThumbnailCacheWritePause();
+        CheckJpegThumbnailEncoding();
         CheckThumbnailCacheBudget();
+    }
+
+    private static void CheckSortedInsertion()
+    {
+        int[] values = [1, 3, 3, 5];
+        Check(MainWindow.FindSortedInsertIndex(values, 0, static (left, right) => left.CompareTo(right)) == 0,
+            "Expected sorted insertion before the first item.");
+        Check(MainWindow.FindSortedInsertIndex(values, 3, static (left, right) => left.CompareTo(right)) == 3,
+            "Expected sorted insertion after equivalent items.");
+        Check(MainWindow.FindSortedInsertIndex(values, 6, static (left, right) => left.CompareTo(right)) == values.Length,
+            "Expected sorted insertion after the last item.");
     }
 
     private static void CheckGalleryScrollAnchoring()
@@ -393,6 +406,37 @@ internal static class SelfCheck
         Check(!ImageCache.ExceedsBudget(ImageCache.MaxCapacity, ImageCache.MaxEstimatedBytes), "Expected exact thumbnail cache budget to fit.");
         Check(ImageCache.ExceedsBudget(ImageCache.MaxCapacity + 1, 0), "Expected thumbnail count budget overflow.");
         Check(ImageCache.ExceedsBudget(1, ImageCache.MaxEstimatedBytes + 1), "Expected thumbnail byte budget overflow.");
+    }
+
+    private static void CheckJpegThumbnailEncoding()
+    {
+        var sourcePath = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}.png");
+        var cachePath = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}.jpg");
+        try
+        {
+            File.WriteAllBytes(sourcePath, Convert.FromBase64String(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="));
+            ImageItem.SaveJpegThumbnailAtomically(sourcePath, cachePath, thumbnailWidth: 180);
+            var signature = File.ReadAllBytes(cachePath);
+            Check(signature.Length > 3 && signature[0] == 0xff && signature[1] == 0xd8 && signature[2] == 0xff,
+                "Expected thumbnail cache output to contain a JPEG signature.");
+        }
+        finally
+        {
+            TryDelete(sourcePath);
+            TryDelete(cachePath);
+        }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch
+        {
+        }
     }
 
     private static void WriteTinyPng(string path, string key, string value)

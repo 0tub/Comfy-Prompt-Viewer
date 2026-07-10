@@ -57,6 +57,8 @@ public partial class MainWindow
             return;
         }
 
+        _selectedItem.LoadSelectedPreviewSync();
+
         LargePreviewTitle.Text = _selectedItem.FileName;
         LargePreviewMeta.Text = _selectedItem.DimensionsText;
         LargePreviewImage.Source = _selectedItem.SelectedPreview ?? _selectedItem.Preview;

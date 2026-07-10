@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
+using SkiaSharp;
 
 namespace ComfyPromptViewer;
 
@@ -49,7 +50,16 @@ public sealed class ImageItem : INotifyPropertyChanged
             var thumbnailWidth = GetThumbnailDecodeWidth();
             var input = $"{Path}_{lastWriteTime}";
             var hash = HashText(input);
-            return System.IO.Path.Combine(cacheDir, $"w{thumbnailWidth}_{hash}.jpg");
+            var legacyPath = System.IO.Path.Combine(cacheDir, $"w{thumbnailWidth}_{hash}.jpg");
+            try
+            {
+                File.Delete(legacyPath);
+            }
+            catch
+            {
+                // Old cache cleanup is best-effort; the versioned JPEG path remains usable.
+            }
+            return System.IO.Path.Combine(cacheDir, $"j1_w{thumbnailWidth}_{hash}.jpg");
         }
         catch (Exception ex)
         {
@@ -129,8 +139,6 @@ public sealed class ImageItem : INotifyPropertyChanged
     private double _tileSize;
     private Task? _selectedPreviewLoadTask;
     private string? _creationDateText;
-    private int _activeSavesCount;
-    private Bitmap? _disposalPendingBitmap;
     private bool _hasLoggedThumbnailError;
 
     public ImageItem(string path, double tileSize)
@@ -311,9 +319,6 @@ public sealed class ImageItem : INotifyPropertyChanged
         private set => SetField(ref _resources, value);
     }
 
-    public double TileSize => _tileSize;
-    public double CardHeight => _tileSize;
-
     public void SetTileSize(double tileSize)
     {
         if (Math.Abs(_tileSize - tileSize) < 0.1)
@@ -323,8 +328,6 @@ public sealed class ImageItem : INotifyPropertyChanged
 
         _tileSize = tileSize;
         InvalidateThumbnailCacheState();
-        OnPropertyChanged(nameof(TileSize));
-        OnPropertyChanged(nameof(CardHeight));
     }
 
     public bool IsSelected
@@ -474,6 +477,25 @@ public sealed class ImageItem : INotifyPropertyChanged
         _selectedPreviewLoadTask = LoadSelectedPreviewAsync(token);
     }
 
+    public void LoadSelectedPreviewSync()
+    {
+        if (SelectedPreview is not null)
+        {
+            return;
+        }
+
+        try
+        {
+            using var stream = File.OpenRead(Path);
+            var decodeWidth = _width > 0 ? Math.Min(_width, SelectedPreviewMaxWidth) : SelectedPreviewMaxWidth;
+            SelectedPreview = Bitmap.DecodeToWidth(stream, decodeWidth, BitmapInterpolationMode.MediumQuality);
+        }
+        catch (Exception ex)
+        {
+            DebugLog.Write($"Failed to load selected preview synchronously: {ex}");
+        }
+    }
+
     public void ReleasePreview(bool skipIfCached = false)
     {
         if (skipIfCached && CacheNode is not null)
@@ -485,25 +507,8 @@ public sealed class ImageItem : INotifyPropertyChanged
 
         if (Preview is not null)
         {
-            if (_activeSavesCount > 0)
-            {
-                _disposalPendingBitmap = Preview;
-            }
-            else
-            {
-                Preview.Dispose();
-            }
+            Preview.Dispose();
             Preview = null;
-        }
-    }
-
-    private void DecrementActiveSaves()
-    {
-        _activeSavesCount--;
-        if (_activeSavesCount == 0 && _disposalPendingBitmap is not null)
-        {
-            _disposalPendingBitmap.Dispose();
-            _disposalPendingBitmap = null;
         }
     }
 
@@ -538,6 +543,12 @@ public sealed class ImageItem : INotifyPropertyChanged
                 await Dispatcher.UIThread.InvokeAsync(() =>
                 {
                     if (token.IsCancellationRequested || !IsSelected)
+                    {
+                        bitmap.Dispose();
+                        return;
+                    }
+
+                    if (SelectedPreview is not null)
                     {
                         bitmap.Dispose();
                         return;
@@ -598,11 +609,16 @@ public sealed class ImageItem : INotifyPropertyChanged
                     }
                 }
 
+                if (MainWindow.IsFastScrolling)
+                {
+                    return null;
+                }
+
                 using var stream = File.OpenRead(Path);
                 var decoded = Bitmap.DecodeToWidth(stream, GetThumbnailDecodeWidth(), BitmapInterpolationMode.MediumQuality);
                 if (!string.IsNullOrEmpty(cachePath))
                 {
-                    QueueThumbnailCacheWrite(this, decoded, cachePath);
+                    QueueThumbnailCacheWrite(this, cachePath);
                 }
                 return decoded;
             }, token);
@@ -611,14 +627,12 @@ public sealed class ImageItem : INotifyPropertyChanged
             {
                 if (token.IsCancellationRequested)
                 {
-                    if (_activeSavesCount > 0)
-                    {
-                        _disposalPendingBitmap = bitmap;
-                    }
-                    else
-                    {
-                        bitmap.Dispose();
-                    }
+                    bitmap?.Dispose();
+                    return;
+                }
+
+                if (bitmap is null)
+                {
                     return;
                 }
 
@@ -650,54 +664,9 @@ public sealed class ImageItem : INotifyPropertyChanged
         MetadataLoaded?.Invoke(this);
     }
 
-    private static void QueueThumbnailCacheWrite(ImageItem item, Bitmap thumbnail, string cachePath)
+    private static void QueueThumbnailCacheWrite(ImageItem item, string cachePath)
     {
-        if (string.IsNullOrEmpty(cachePath))
-        {
-            return;
-        }
-
-        if (File.Exists(cachePath))
-        {
-            item.SetThumbnailCacheState(cachePath, exists: true);
-            return;
-        }
-
-        if (!TryBeginThumbnailCacheWrite(cachePath))
-        {
-            TryQueueDeferredThumbnailCacheWrite(item, cachePath);
-            return;
-        }
-
-        Interlocked.Increment(ref item._activeSavesCount);
-
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                if (File.Exists(cachePath))
-                {
-                    item.SetThumbnailCacheState(cachePath, exists: true);
-                    return;
-                }
-
-                thumbnail.Save(cachePath, ThumbnailJpegQuality);
-                item.SetThumbnailCacheState(cachePath, exists: true);
-            }
-            catch (Exception ex)
-            {
-                DebugLog.Write($"Failed to write thumbnail cache for {item.Path} to {cachePath}: {ex.Message}");
-            }
-            finally
-            {
-                EndThumbnailCacheWrite(cachePath);
-
-                await Dispatcher.UIThread.InvokeAsync(() =>
-                {
-                    item.DecrementActiveSaves();
-                });
-            }
-        });
+        TryQueueDeferredThumbnailCacheWrite(item, cachePath);
     }
 
     internal static bool TryQueueDeferredThumbnailCacheWrite(ImageItem item, string cachePath)
@@ -811,12 +780,7 @@ public sealed class ImageItem : INotifyPropertyChanged
                     return;
                 }
 
-                using var stream = File.OpenRead(write.Item.Path);
-                using var thumbnail = Bitmap.DecodeToWidth(
-                    stream,
-                    write.ThumbnailWidth,
-                    BitmapInterpolationMode.MediumQuality);
-                thumbnail.Save(write.CachePath, ThumbnailJpegQuality);
+                SaveJpegThumbnailAtomically(write.Item.Path, write.CachePath, write.ThumbnailWidth);
                 write.Item.SetThumbnailCacheState(write.CachePath, exists: true);
             }
             catch (Exception ex)
@@ -840,6 +804,62 @@ public sealed class ImageItem : INotifyPropertyChanged
         {
             DebugLog.Write($"Deferred thumbnail cache pause callback failed: {ex.Message}");
             return false;
+        }
+    }
+
+    internal static void SaveJpegThumbnailAtomically(string sourcePath, string cachePath, int thumbnailWidth)
+    {
+        var temporaryPath = $"{cachePath}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            using var codec = SKCodec.Create(sourcePath)
+                ?? throw new InvalidDataException($"Could not open thumbnail source {sourcePath}.");
+            var sourceInfo = codec.Info;
+            var width = Math.Min(sourceInfo.Width, thumbnailWidth);
+            var height = Math.Max(1, (int)Math.Round(sourceInfo.Height * (width / (double)sourceInfo.Width)));
+            var decodedSize = codec.GetScaledDimensions(width / (float)sourceInfo.Width);
+            var decodedInfo = new SKImageInfo(
+                decodedSize.Width,
+                decodedSize.Height,
+                SKColorType.Bgra8888,
+                SKAlphaType.Premul);
+            using var decoded = SKBitmap.Decode(codec, decodedInfo)
+                ?? throw new InvalidDataException($"Could not decode thumbnail source {sourcePath}.");
+            // Intentional simplification: JPEG drops alpha for maximum decode speed; use WebP if transparent outputs become important.
+            var info = new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Premul);
+            using var resized = new SKBitmap(info);
+            if (!decoded.ScalePixels(resized, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None)))
+            {
+                throw new InvalidDataException($"Could not resize thumbnail source {sourcePath}.");
+            }
+
+            using var image = SKImage.FromBitmap(resized);
+            using var data = image.Encode(SKEncodedImageFormat.Jpeg, ThumbnailJpegQuality)
+                ?? throw new InvalidDataException($"Could not encode JPEG thumbnail for {sourcePath}.");
+            using (var stream = File.Create(temporaryPath))
+            {
+                data.SaveTo(stream);
+            }
+
+            try
+            {
+                File.Move(temporaryPath, cachePath);
+            }
+            catch (IOException) when (File.Exists(cachePath))
+            {
+                // Another writer won the race; its completed cache file is equivalent.
+            }
+        }
+        finally
+        {
+            try
+            {
+                File.Delete(temporaryPath);
+            }
+            catch
+            {
+                // Best-effort cache cleanup must not interrupt image browsing.
+            }
         }
     }
 

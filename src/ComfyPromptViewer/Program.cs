@@ -32,6 +32,7 @@ class Program
             .UsePlatformDetect()
 #if DEBUG
             .WithDeveloperTools()
+            .LogToTrace()
 #endif
-            .LogToTrace();
+            ;
 }

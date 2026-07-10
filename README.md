@@ -44,7 +44,7 @@ dotnet src\ComfyPromptViewer\bin\Debug\net9.0\ComfyPromptViewer.dll --self-check
 
 - [src/ComfyPromptViewer/MainWindow.axaml](src/ComfyPromptViewer/MainWindow.axaml) - Main UI layout and sidebar details.
 - [src/ComfyPromptViewer/MainWindow.axaml.cs](src/ComfyPromptViewer/MainWindow.axaml.cs) - Window initialization, folder loading, sorting, gallery/search/sidebar/menu coordination, and menu/toolbar interactions.
-- [src/ComfyPromptViewer/MainWindow.Watcher.cs](src/ComfyPromptViewer/MainWindow.Watcher.cs) - Active-folder auto-refresh with `FileSystemWatcher`, event batching, and debounce dispatch.
+- [src/ComfyPromptViewer/MainWindow.Watcher.cs](src/ComfyPromptViewer/MainWindow.Watcher.cs) - Active-folder auto-refresh with `FileSystemWatcher`, write-aware event batching, debounce dispatch, and overflow recovery.
 - [src/ComfyPromptViewer/MainWindow.Autoscroll.cs](src/ComfyPromptViewer/MainWindow.Autoscroll.cs) - Middle-click autoscroll loop, velocity smoothing, and pointer capture handlers.
 - [src/ComfyPromptViewer/MainWindow.Preview.cs](src/ComfyPromptViewer/MainWindow.Preview.cs) - Large preview overlay, zoom calculations, pan clamping, and canvas input handlers.
 - [src/ComfyPromptViewer/PromptExtractor.cs](src/ComfyPromptViewer/PromptExtractor.cs) - Metadata parsing logic for ComfyUI.

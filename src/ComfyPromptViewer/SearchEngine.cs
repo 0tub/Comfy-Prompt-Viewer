@@ -7,6 +7,7 @@ namespace ComfyPromptViewer;
 public struct SearchTerm
 {
     public string Text { get; init; }
+    public string NormalizedText { get; init; }
     public bool IsExact { get; init; }
 }
 
@@ -30,7 +31,12 @@ public static class SearchEngine
 
             if (!string.IsNullOrEmpty(text) && text != "-")
             {
-                var term = new SearchTerm { Text = text, IsExact = isExact };
+                var term = new SearchTerm
+                {
+                    Text = text,
+                    NormalizedText = NormalizeSeparators(text),
+                    IsExact = isExact
+                };
                 if (isNegative)
                     negativeTerms.Add(term);
                 else
@@ -59,7 +65,7 @@ public static class SearchEngine
         }
 
         var normalizedText = NormalizeSeparators(text);
-        var normalizedTerm = NormalizeSeparators(term.Text);
+        var normalizedTerm = term.NormalizedText;
         return (!string.Equals(normalizedText, text, StringComparison.Ordinal) ||
                 !string.Equals(normalizedTerm, term.Text, StringComparison.Ordinal))
             ? IsMatch(normalizedText, term with { Text = normalizedTerm })

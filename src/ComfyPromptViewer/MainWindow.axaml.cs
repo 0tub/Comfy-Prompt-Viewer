@@ -41,6 +41,7 @@ public partial class MainWindow : Window
     private static readonly TimeSpan InitialMetadataScannerPollInterval = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan MetadataScannerSearchRefreshInterval = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan MetadataCountUpdateInterval = TimeSpan.FromMilliseconds(150);
+    private static readonly TimeSpan TileSizeSaveInterval = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan AdvancedMaintenanceStatusDuration = TimeSpan.FromSeconds(2.5);
     private const int InitialMetadataScannerMaxPolls = 15;
     private const int MetadataScannerMaxDegreeOfParallelism = 2;
@@ -50,6 +51,7 @@ public partial class MainWindow : Window
     private readonly ThumbnailLoadCoordinator _thumbnailLoads = new();
     private readonly List<string> _allImagePaths = [];
     private readonly List<ImageItem> _allImageItems = [];
+    private readonly Dictionary<string, DateTime> _imageLastWriteTimes = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<ImageItem> _visibleThumbnailScheduleItems = [];
     private readonly List<ImageItem> _aheadThumbnailScheduleItems = [];
     private CancellationTokenSource? _loadCancellation;
@@ -57,7 +59,9 @@ public partial class MainWindow : Window
     private CancellationTokenSource? _advancedMaintenanceStatusCancellation;
     private DispatcherTimer? _searchDebounceTimer;
     private DispatcherTimer? _metadataCountUpdateTimer;
+    private DispatcherTimer? _tileSizeSaveTimer;
     private ImageItem? _selectedItem;
+    private ImageItem? _queuedSelectedItemRefresh;
     private SortMode _sortMode = SortMode.NewestFirst;
     private ThemeMode _themeMode = UserPreferences.LoadThemeMode();
     private string? _currentFolderPath;
@@ -77,6 +81,14 @@ public partial class MainWindow : Window
     private TextBox? _activeContextMenuTextBox;
     private bool _isPositivePromptExpanded;
     private bool _isNegativePromptExpanded;
+    private double _lastScrollOffsetY;
+    private long _lastScrollTimestamp;
+    private long _lastScrollEventTime;
+    private long _lastFastScrollScheduleTime;
+    private static volatile bool _isFastScrollingStatic;
+    public static bool IsFastScrolling => _isFastScrollingStatic;
+    private DispatcherTimer? _scrollMonitorTimer;
+    private const double ScrollVelocityThreshold = 1200.0;
 
     internal enum SearchScope
     {
@@ -180,6 +192,7 @@ public partial class MainWindow : Window
     ];
 
     private readonly record struct GalleryScrollAnchor(ImageItem Item, int OldIndex, double Offset);
+    private readonly record struct ImageFileEntry(string Path, DateTime LastWriteTimeUtc);
 
     public MainWindow()
     {
@@ -306,10 +319,18 @@ public partial class MainWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
+        _scrollMonitorTimer?.Stop();
+        _isFastScrollingStatic = false;
+        _lastFastScrollScheduleTime = 0;
         StopAutoScroll();
         StopLargePreviewPan(releaseCapture: true);
         StopFolderWatcher();
         _searchDebounceTimer?.Stop();
+        if (_tileSizeSaveTimer?.IsEnabled == true)
+        {
+            _tileSizeSaveTimer.Stop();
+            UserPreferences.SaveTileSize(_targetTileSize);
+        }
         CancelAndDispose(ref _scannerCancellation);
         _scannerGeneration++;
         CancelAndDispose(ref _loadCancellation);
@@ -357,6 +378,7 @@ public partial class MainWindow : Window
         _viewModel.Items.Clear();
         _allImagePaths.Clear();
         _allImageItems.Clear();
+        _imageLastWriteTimes.Clear();
         _visibleThumbnailScheduleItems.Clear();
         _aheadThumbnailScheduleItems.Clear();
         _lastPrefetchFirstVisibleRow = -1;
@@ -405,6 +427,11 @@ public partial class MainWindow : Window
         _thumbnailLoads.Clear();
         ImageItem.ClearDeferredThumbnailCacheWrites();
 
+        _scrollMonitorTimer?.Stop();
+        _isFastScrollingStatic = false;
+        _lastFastScrollScheduleTime = 0;
+        _lastScrollOffsetY = 0;
+        _lastScrollTimestamp = 0;
         ImageCache.ClearAndReleaseAll();
         SelectItem(null);
         ClearImageItems();
@@ -418,19 +445,23 @@ public partial class MainWindow : Window
 
         try
         {
-            var imagePaths = await Task.Run(() => EnumerateImagePaths(folderPath, includeSubfolders, token)
-                .Where(ImageFileReader.IsSupportedImage)
-                .ToList(), token);
+            var imageFiles = await Task.Run(
+                () => ReadImageFileEntries(EnumerateImagePaths(folderPath, includeSubfolders, token), token),
+                token);
 
             if (token.IsCancellationRequested || loadGeneration != _loadGeneration)
             {
                 return;
             }
 
-            _allImagePaths.AddRange(imagePaths);
+            foreach (var imageFile in imageFiles)
+            {
+                _allImagePaths.Add(imageFile.Path);
+                _imageLastWriteTimes[imageFile.Path] = imageFile.LastWriteTimeUtc;
+            }
             UserPreferences.SaveLastFolderPath(folderPath);
-            UserPreferences.AddRecentFolder(folderPath, imagePaths.Count);
-            _ = Task.Run(() => MetadataIndex.PruneMissing(imagePaths, includeSubfolders));
+            UserPreferences.AddRecentFolder(folderPath, imageFiles.Count);
+            _ = Task.Run(() => MetadataIndex.PruneMissing(imageFiles.Select(file => file.Path), includeSubfolders));
             ApplySort();
             CountText.Text = $"{_allImagePaths.Count:n0} images";
 
@@ -576,6 +607,33 @@ public partial class MainWindow : Window
         }
     }
 
+    private static List<ImageFileEntry> ReadImageFileEntries(IEnumerable<string> paths, CancellationToken token)
+    {
+        var entries = new List<ImageFileEntry>();
+        foreach (var path in paths)
+        {
+            token.ThrowIfCancellationRequested();
+            if (!ImageFileReader.IsSupportedImage(path))
+            {
+                continue;
+            }
+
+            try
+            {
+                if (File.Exists(path))
+                {
+                    entries.Add(new ImageFileEntry(path, File.GetLastWriteTimeUtc(path)));
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                DebugLog.Write($"Skipped image file {path}: {ex.Message}");
+            }
+        }
+
+        return entries;
+    }
+
     private ImageItem CreateImageItem(string path)
     {
         var item = new ImageItem(path, _tileSize);
@@ -615,8 +673,27 @@ public partial class MainWindow : Window
 
         if (persist && tileSizeChanged)
         {
-            UserPreferences.SaveTileSize(_targetTileSize);
+            QueueTileSizeSave();
         }
+    }
+
+    private void QueueTileSizeSave()
+    {
+        if (_tileSizeSaveTimer is null)
+        {
+            _tileSizeSaveTimer = new DispatcherTimer(DispatcherPriority.Background)
+            {
+                Interval = TileSizeSaveInterval
+            };
+            _tileSizeSaveTimer.Tick += (_, _) =>
+            {
+                _tileSizeSaveTimer.Stop();
+                UserPreferences.SaveTileSize(_targetTileSize);
+            };
+        }
+
+        _tileSizeSaveTimer.Stop();
+        _tileSizeSaveTimer.Start();
     }
 
     private void ApplyTileLayout()
@@ -631,9 +708,9 @@ public partial class MainWindow : Window
             uniformLayout.MinItemHeight = _tileItemExtent;
         }
 
-        foreach (var item in _allImageItems)
+        if (Application.Current is { } application)
         {
-            item.SetTileSize(_tileSize);
+            application.Resources["GalleryTileSize"] = _tileSize;
         }
 
         QueueViewportThumbnailSchedule();
@@ -651,24 +728,7 @@ public partial class MainWindow : Window
 
     private void ApplySort()
     {
-        if (_sortMode == SortMode.Name)
-        {
-            _allImagePaths.Sort(CompareImagePathNames);
-        }
-        else
-        {
-            var lastWriteTimes = new Dictionary<string, DateTime>(_allImagePaths.Count, StringComparer.OrdinalIgnoreCase);
-            var originalOrder = new Dictionary<string, int>(_allImagePaths.Count, StringComparer.OrdinalIgnoreCase);
-            for (var index = 0; index < _allImagePaths.Count; index++)
-            {
-                var path = _allImagePaths[index];
-                lastWriteTimes[path] = File.GetLastWriteTimeUtc(path);
-                originalOrder[path] = index;
-            }
-
-            var descending = _sortMode == SortMode.NewestFirst;
-            _allImagePaths.Sort((left, right) => CompareImagePathDates(left, right, lastWriteTimes, originalOrder, descending));
-        }
+        _allImagePaths.Sort(CompareImagePaths);
 
         if (_allImageItems.Count > 1)
         {
@@ -682,6 +742,24 @@ public partial class MainWindow : Window
         }
     }
 
+    private int CompareImagePaths(string left, string right)
+    {
+        if (_sortMode == SortMode.Name)
+        {
+            return CompareImagePathNames(left, right);
+        }
+
+        var compare = _imageLastWriteTimes[left].CompareTo(_imageLastWriteTimes[right]);
+        if (_sortMode == SortMode.NewestFirst)
+        {
+            compare = -compare;
+        }
+
+        return compare != 0
+            ? compare
+            : StringComparer.OrdinalIgnoreCase.Compare(left, right);
+    }
+
     private static int CompareImagePathNames(string left, string right)
     {
         var fileNameCompare = StringComparer.CurrentCultureIgnoreCase.Compare(Path.GetFileName(left), Path.GetFileName(right));
@@ -690,22 +768,24 @@ public partial class MainWindow : Window
             : StringComparer.CurrentCultureIgnoreCase.Compare(left, right);
     }
 
-    private static int CompareImagePathDates(
-        string left,
-        string right,
-        Dictionary<string, DateTime> lastWriteTimes,
-        Dictionary<string, int> originalOrder,
-        bool descending)
+    internal static int FindSortedInsertIndex<T>(IReadOnlyList<T> sortedItems, T item, Comparison<T> comparison)
     {
-        var compare = lastWriteTimes[left].CompareTo(lastWriteTimes[right]);
-        if (descending)
+        var low = 0;
+        var high = sortedItems.Count;
+        while (low < high)
         {
-            compare = -compare;
+            var middle = low + ((high - low) / 2);
+            if (comparison(sortedItems[middle], item) <= 0)
+            {
+                low = middle + 1;
+            }
+            else
+            {
+                high = middle;
+            }
         }
 
-        return compare != 0
-            ? compare
-            : originalOrder[left].CompareTo(originalOrder[right]);
+        return low;
     }
 
     private void GalleryItem_PointerPressed(object? sender, PointerPressedEventArgs e)
@@ -990,7 +1070,78 @@ public partial class MainWindow : Window
             GalleryScrollViewer.Extent.Height,
             _viewModel.Items.Count,
             _tileItemExtent);
-        QueueViewportThumbnailSchedule();
+
+        var currentOffset = GalleryScrollViewer.Offset.Y;
+        var currentTimestamp = Environment.TickCount64;
+
+        var dt = (currentTimestamp - _lastScrollTimestamp) / 1000.0;
+        var dy = Math.Abs(currentOffset - _lastScrollOffsetY);
+        var velocity = dt > 0.005 ? dy / dt : 0.0;
+
+        _lastScrollOffsetY = currentOffset;
+        _lastScrollTimestamp = currentTimestamp;
+        _lastScrollEventTime = currentTimestamp;
+
+        if (velocity > ScrollVelocityThreshold)
+        {
+            if (!IsFastScrolling)
+            {
+                _isFastScrollingStatic = true;
+                _thumbnailLoads.Clear();
+            }
+
+            var now = Environment.TickCount64;
+            if (now - _lastFastScrollScheduleTime >= 120)
+            {
+                _lastFastScrollScheduleTime = now;
+                QueueViewportThumbnailSchedule();
+            }
+
+            if (_scrollMonitorTimer == null)
+            {
+                _scrollMonitorTimer = new DispatcherTimer(
+                    TimeSpan.FromMilliseconds(50),
+                    DispatcherPriority.Background,
+                    ScrollMonitorTimer_Tick);
+            }
+
+            if (!_scrollMonitorTimer.IsEnabled)
+            {
+                _scrollMonitorTimer.Start();
+            }
+        }
+        else
+        {
+            if (IsFastScrolling)
+            {
+                _isFastScrollingStatic = false;
+                _scrollMonitorTimer?.Stop();
+                QueueViewportThumbnailSchedule(force: true);
+            }
+            else
+            {
+                _scrollMonitorTimer?.Stop();
+                QueueViewportThumbnailSchedule();
+            }
+        }
+    }
+
+    private void ScrollMonitorTimer_Tick(object? sender, EventArgs e)
+    {
+        var elapsed = Environment.TickCount64 - _lastScrollEventTime;
+        if (elapsed >= 150)
+        {
+            _scrollMonitorTimer?.Stop();
+            if (IsFastScrolling)
+            {
+                _isFastScrollingStatic = false;
+                QueueViewportThumbnailSchedule(force: true);
+            }
+            else
+            {
+                QueueViewportThumbnailSchedule();
+            }
+        }
     }
 
     private void GalleryScrollViewer_PointerWheelChanged(object? sender, PointerWheelEventArgs e)
@@ -1098,7 +1249,9 @@ public partial class MainWindow : Window
 
             for (var index = Math.Max(0, startIndex); index <= endIndex; index++)
             {
-                target.Add(_viewModel.Items[index]);
+                var item = _viewModel.Items[index];
+                item.SetTileSize(_tileSize);
+                target.Add(item);
             }
         }
 
@@ -1274,20 +1427,27 @@ public partial class MainWindow : Window
 
     private void SelectedItem_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (sender == _selectedItem)
+        if (sender is not ImageItem item || item != _selectedItem || item == _queuedSelectedItemRefresh)
         {
-            Dispatcher.UIThread.Post(() =>
+            return;
+        }
+
+        _queuedSelectedItemRefresh = item;
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (_queuedSelectedItemRefresh == item)
             {
-                if (_selectedItem is not null)
+                _queuedSelectedItemRefresh = null;
+                if (_selectedItem == item)
                 {
-                    RefreshSidebar(_selectedItem);
+                    RefreshSidebar(item);
                     if (LargePreviewOverlay.IsVisible)
                     {
                         UpdateLargePreview(resetZoom: false);
                     }
                 }
-            });
-        }
+            }
+        }, DispatcherPriority.Background);
     }
 
     private void RefreshSidebar(ImageItem item)
@@ -2005,15 +2165,7 @@ public partial class MainWindow : Window
         if (hasChanges)
         {
             var scrollAnchor = resetScroll ? null : CaptureGalleryScrollAnchor();
-            if (resetScroll)
-            {
-                _viewModel.Items.Clear();
-                _viewModel.Items.AddRange(filtered);
-            }
-            else
-            {
-                SynchronizeGalleryItems(filtered);
-            }
+            SynchronizeGalleryItems(filtered);
             GalleryItems.InvalidateMeasure();
             RestoreGalleryScrollAnchor(scrollAnchor, filtered);
         }
