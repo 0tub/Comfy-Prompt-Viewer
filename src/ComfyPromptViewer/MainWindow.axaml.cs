@@ -1495,33 +1495,24 @@ public partial class MainWindow : Window
         SidebarImage.Source = item.SelectedPreview ?? item.Preview;
     }
 
-    private async void CopySeedButton_Click(object? sender, RoutedEventArgs e)
+    private async void SidebarCopyButton_Click(object? sender, RoutedEventArgs e)
     {
-        if (sender is Button button &&
-            _selectedItem is not null &&
-            !string.IsNullOrWhiteSpace(_selectedItem.Seed))
+        if (sender is not Button { Tag: string field } button || _selectedItem is not { } item)
         {
-            await CopyWithButtonFeedbackAsync(button, _selectedItem.Seed);
+            return;
         }
-    }
 
-    private async void CopyPositivePromptButton_Click(object? sender, RoutedEventArgs e)
-    {
-        if (sender is Button button &&
-            _selectedItem is not null &&
-            _selectedItem.HasPrompt)
+        var text = field switch
         {
-            await CopyWithButtonFeedbackAsync(button, _selectedItem.Prompt);
-        }
-    }
+            "positive" when item.HasPrompt => item.Prompt,
+            "negative" when item.HasNegativePrompt => item.NegativePrompt,
+            "seed" => item.Seed,
+            _ => ""
+        };
 
-    private async void CopyNegativePromptButton_Click(object? sender, RoutedEventArgs e)
-    {
-        if (sender is Button button &&
-            _selectedItem is not null &&
-            _selectedItem.HasNegativePrompt)
+        if (!string.IsNullOrWhiteSpace(text))
         {
-            await CopyWithButtonFeedbackAsync(button, _selectedItem.NegativePrompt);
+            await CopyWithButtonFeedbackAsync(button, text);
         }
     }
 
@@ -1691,32 +1682,44 @@ public partial class MainWindow : Window
         textBox.SelectAll();
     }
 
-    private void MenuOpenInExplorer_Click(object? sender, RoutedEventArgs e)
+    private async void ImageContextMenuItem_Click(object? sender, RoutedEventArgs e)
     {
-        if (sender is Control { DataContext: ImageItem item })
-        {
-            SelectItem(item);
-            OpenInExplorer(item.Path);
-        }
-    }
-
-    private async void MenuCardCopyPrompt_Click(object? sender, RoutedEventArgs e)
-    {
-        if (sender is Control { DataContext: ImageItem item } && item.HasPrompt)
-        {
-            SelectItem(item);
-            await CopyTextAsync(item.Prompt);
-            ShowCopiedToast(SidebarPrompt);
-        }
-    }
-
-    private void MenuDeleteImage_Click(object? sender, RoutedEventArgs e)
-    {
-        if (sender is not Control { DataContext: ImageItem item })
+        if (sender is not MenuItem { Tag: string action } menuItem ||
+            (menuItem.DataContext as ImageItem ?? _selectedItem) is not { } item)
         {
             return;
         }
 
+        SelectItem(item);
+        switch (action)
+        {
+            case "open":
+                OpenInExplorer(item.Path);
+                break;
+            case "prompt":
+                if (item.HasPrompt && await CopyTextAsync(item.Prompt))
+                {
+                    ShowCopiedToast(SidebarPrompt);
+                }
+                break;
+            case "negative":
+                if (item.HasNegativePrompt && await CopyTextAsync(item.NegativePrompt))
+                {
+                    ShowCopiedToast(SidebarNegativePrompt);
+                }
+                break;
+            case "path":
+                await CopyTextAsync(item.Path);
+                break;
+            case "delete":
+                HideLargePreview();
+                DeleteImage(item);
+                break;
+        }
+    }
+
+    private void DeleteImage(ImageItem item)
+    {
         try
         {
             var path = item.Path;
@@ -1735,7 +1738,7 @@ public partial class MainWindow : Window
                 }
             }
 
-            ProcessWatcherChanges([], [path]);
+            ProcessWatcherChanges([], [], [path]);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
         {

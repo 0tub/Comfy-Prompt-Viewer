@@ -571,11 +571,14 @@ public sealed class ImageItem : INotifyPropertyChanged
         }
     }
 
-    public async Task LoadThumbnailAsync(CancellationToken token)
+    public async Task LoadThumbnailAsync(CancellationToken token, Func<bool>? isCurrent = null)
     {
-        if (Preview is not null)
+        if (Preview is not null || token.IsCancellationRequested || isCurrent?.Invoke() == false)
         {
-            ImageCache.Touch(this);
+            if (Preview is not null)
+            {
+                ImageCache.Touch(this);
+            }
             return;
         }
 
@@ -583,6 +586,11 @@ public sealed class ImageItem : INotifyPropertyChanged
         {
             var bitmap = await Task.Run(() =>
             {
+                if (token.IsCancellationRequested || isCurrent?.Invoke() == false)
+                {
+                    return null;
+                }
+
                 var (cachePath, hasCachedThumbnail) = GetThumbnailCacheState();
                 if (hasCachedThumbnail)
                 {
@@ -609,14 +617,16 @@ public sealed class ImageItem : INotifyPropertyChanged
                     }
                 }
 
-                if (MainWindow.IsFastScrolling)
+                if (token.IsCancellationRequested || isCurrent?.Invoke() == false || MainWindow.IsFastScrolling)
                 {
                     return null;
                 }
 
                 using var stream = File.OpenRead(Path);
                 var decoded = Bitmap.DecodeToWidth(stream, GetThumbnailDecodeWidth(), BitmapInterpolationMode.MediumQuality);
-                if (!string.IsNullOrEmpty(cachePath))
+                if (!string.IsNullOrEmpty(cachePath) &&
+                    isCurrent?.Invoke() != false &&
+                    !MainWindow.IsFastScrolling)
                 {
                     QueueThumbnailCacheWrite(this, cachePath);
                 }
@@ -625,7 +635,7 @@ public sealed class ImageItem : INotifyPropertyChanged
 
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                if (token.IsCancellationRequested)
+                if (token.IsCancellationRequested || isCurrent?.Invoke() == false)
                 {
                     bitmap?.Dispose();
                     return;
@@ -633,6 +643,13 @@ public sealed class ImageItem : INotifyPropertyChanged
 
                 if (bitmap is null)
                 {
+                    return;
+                }
+
+                if (Preview is not null)
+                {
+                    bitmap.Dispose();
+                    ImageCache.Touch(this);
                     return;
                 }
 

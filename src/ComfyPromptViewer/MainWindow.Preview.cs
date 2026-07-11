@@ -62,6 +62,7 @@ public partial class MainWindow
         LargePreviewTitle.Text = _selectedItem.FileName;
         LargePreviewMeta.Text = _selectedItem.DimensionsText;
         LargePreviewImage.Source = _selectedItem.SelectedPreview ?? _selectedItem.Preview;
+        PreviewCopyNegativePromptMenuItem.IsEnabled = _selectedItem.HasNegativePrompt;
         UpdateLargePreviewNavigationButtons();
 
         if (resetZoom)
@@ -96,14 +97,7 @@ public partial class MainWindow
         ResetLargePreviewPan();
         ApplyLargePreviewZoom(resetScroll: true);
 
-        if (_selectedItem is not null)
-        {
-            var index = _viewModel.Items.IndexOf(_selectedItem);
-            if (index >= 0 && GalleryItems.TryGetElement(index) is Control control)
-            {
-                control.Focus();
-            }
-        }
+        // Keep the current gallery offset; focusing the selected card scrolls it back into view.
     }
 
     private void PreviewFitButton_Click(object? sender, RoutedEventArgs e)
@@ -118,14 +112,9 @@ public partial class MainWindow
         SetLargePreviewZoom(1.0);
     }
 
-    private void PreviousPreviewButton_Click(object? sender, RoutedEventArgs e)
+    private void PreviewNavigationButton_Click(object? sender, RoutedEventArgs e)
     {
-        MoveLargePreviewSelection(-1);
-    }
-
-    private void NextPreviewButton_Click(object? sender, RoutedEventArgs e)
-    {
-        MoveLargePreviewSelection(1);
+        MoveLargePreviewSelection(sender == PreviousPreviewButton ? -1 : 1);
     }
 
     private void MoveLargePreviewSelection(int delta)

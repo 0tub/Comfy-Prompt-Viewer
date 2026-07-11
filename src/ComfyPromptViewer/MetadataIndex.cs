@@ -27,21 +27,18 @@ internal static class MetadataIndex
                 return false;
             }
 
-            var key = BuildKey(path, fileInfo.LastWriteTimeUtc.Ticks, fileInfo.Length);
+            var lastWriteTicks = fileInfo.LastWriteTimeUtc.Ticks;
+            var fileLength = fileInfo.Length;
             lock (Lock)
             {
                 var collection = GetCollection();
-                var loaded = FromDocument(collection.FindById(key));
-                if (loaded is null ||
-                    loaded.Version != CurrentVersion ||
-                    !string.Equals(loaded.SourcePath, path, StringComparison.OrdinalIgnoreCase) ||
-                    loaded.LastWriteTimeUtcTicks != fileInfo.LastWriteTimeUtc.Ticks ||
-                    loaded.FileLength != fileInfo.Length)
+                var loaded = FromDocument(collection.FindById(BuildKey(path, lastWriteTicks, fileLength)));
+                if (!IsCurrent(loaded, path, lastWriteTicks, fileLength))
                 {
                     return false;
                 }
 
-                entry = loaded;
+                entry = loaded!;
                 return true;
             }
         }
@@ -72,17 +69,15 @@ internal static class MetadataIndex
                         continue;
                     }
 
-                    var loaded = FromDocument(collection.FindById(BuildKey(path, fileInfo.LastWriteTimeUtc.Ticks, fileInfo.Length)));
-                    if (loaded is null ||
-                        loaded.Version != CurrentVersion ||
-                        !string.Equals(loaded.SourcePath, path, StringComparison.OrdinalIgnoreCase) ||
-                        loaded.LastWriteTimeUtcTicks != fileInfo.LastWriteTimeUtc.Ticks ||
-                        loaded.FileLength != fileInfo.Length)
+                    var lastWriteTicks = fileInfo.LastWriteTimeUtc.Ticks;
+                    var fileLength = fileInfo.Length;
+                    var loaded = FromDocument(collection.FindById(BuildKey(path, lastWriteTicks, fileLength)));
+                    if (!IsCurrent(loaded, path, lastWriteTicks, fileLength))
                     {
                         continue;
                     }
 
-                    entries[path] = loaded;
+                    entries[path] = loaded!;
                 }
             }
         }
@@ -423,6 +418,15 @@ internal static class MetadataIndex
     private static string BuildKey(string path, long lastWriteTimeUtcTicks, long fileLength)
     {
         return $"{path}|{lastWriteTimeUtcTicks}|{fileLength}";
+    }
+
+    private static bool IsCurrent(MetadataIndexEntry? entry, string path, long lastWriteTimeUtcTicks, long fileLength)
+    {
+        return entry is not null &&
+               entry.Version == CurrentVersion &&
+               string.Equals(entry.SourcePath, path, StringComparison.OrdinalIgnoreCase) &&
+               entry.LastWriteTimeUtcTicks == lastWriteTimeUtcTicks &&
+               entry.FileLength == fileLength;
     }
 
     private sealed class RestoreDatabasePath(Action restore) : IDisposable

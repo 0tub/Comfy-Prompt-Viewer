@@ -1,27 +1,29 @@
 using System;
+using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 
 namespace ComfyPromptViewer;
 
 public static class UserPreferences
 {
-    public static readonly string AppDataDir = System.IO.Path.Combine(
+    public static readonly string AppDataDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "ComfyPromptViewer");
 
-    private static readonly string TileSizePath = System.IO.Path.Combine(AppDataDir, "tile-size.txt");
-    private static readonly string LastFolderPath = System.IO.Path.Combine(AppDataDir, "last-folder.txt");
-    private static readonly string RecentFoldersPath = System.IO.Path.Combine(AppDataDir, "recent-folders.txt");
-    private static readonly string IncludeSubfoldersPath = System.IO.Path.Combine(AppDataDir, "include-subfolders.txt");
-    private static readonly string ThemeModePath = System.IO.Path.Combine(AppDataDir, "theme-mode.txt");
+    private static readonly string TileSizePath = Path.Combine(AppDataDir, "tile-size.txt");
+    private static readonly string LastFolderPath = Path.Combine(AppDataDir, "last-folder.txt");
+    private static readonly string RecentFoldersPath = Path.Combine(AppDataDir, "recent-folders.txt");
+    private static readonly string IncludeSubfoldersPath = Path.Combine(AppDataDir, "include-subfolders.txt");
+    private static readonly string ThemeModePath = Path.Combine(AppDataDir, "theme-mode.txt");
 
     public static double LoadTileSize(double defaultValue, double minValue, double maxValue)
     {
         if (TryReadPreference(TileSizePath, "tile size", out var text) &&
             double.TryParse(
                 text,
-                System.Globalization.NumberStyles.Float,
-                System.Globalization.CultureInfo.InvariantCulture,
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
                 out var savedValue))
         {
             return Math.Clamp(savedValue, minValue, maxValue);
@@ -32,7 +34,7 @@ public static class UserPreferences
 
     public static void SaveTileSize(double value)
     {
-        SavePreference(TileSizePath, value.ToString(System.Globalization.CultureInfo.InvariantCulture), "tile size");
+        SavePreference(TileSizePath, value.ToString(CultureInfo.InvariantCulture), "tile size");
     }
 
     public static string? LoadLastFolderPath()
@@ -45,55 +47,57 @@ public static class UserPreferences
         SavePreference(LastFolderPath, folderPath, "last folder path");
     }
 
-    public static System.Collections.Generic.List<RecentFolder> LoadRecentFolders()
+    public static List<RecentFolder> LoadRecentFolders()
     {
-        var list = new System.Collections.Generic.List<RecentFolder>();
+        var list = new List<RecentFolder>();
         try
         {
-            if (File.Exists(RecentFoldersPath))
+            if (!File.Exists(RecentFoldersPath))
             {
-                foreach (var line in File.ReadLines(RecentFoldersPath))
-                {
-                    var trimmed = line.Trim();
-                    if (string.IsNullOrWhiteSpace(trimmed)) continue;
+                return list;
+            }
 
-                    var parts = trimmed.Split('|');
-                    var folder = new RecentFolder { Path = parts[0] };
+            foreach (var line in File.ReadLines(RecentFoldersPath))
+            {
+                var trimmed = line.Trim();
+                if (trimmed.Length == 0) continue;
+
+                var parts = trimmed.Split('|');
+                var folder = new RecentFolder { Path = parts[0] };
                     
-                    if (parts.Length > 1 && int.TryParse(parts[1], out var count))
+                if (parts.Length > 1 && int.TryParse(parts[1], out var count))
+                {
+                    folder.ImageCount = count;
+                }
+                if (parts.Length > 2 && long.TryParse(parts[2], out var ticks))
+                {
+                    try
                     {
-                        folder.ImageCount = count;
+                        folder.LastOpened = new DateTime(ticks, DateTimeKind.Utc);
                     }
-                    if (parts.Length > 2 && long.TryParse(parts[2], out var ticks))
+                    catch (ArgumentOutOfRangeException ex)
                     {
-                        try
-                        {
-                            folder.LastOpened = new DateTime(ticks, DateTimeKind.Utc);
-                        }
-                        catch (Exception ex)
-                        {
-                            DebugLog.Write($"Failed to parse recent folder timestamp for {folder.Path}: {ex.Message}");
-                        }
+                        DebugLog.Write($"Failed to parse recent folder timestamp for {folder.Path}: {ex.Message}");
                     }
-                    else
+                }
+                else
+                {
+                    try
                     {
-                        try
+                        if (Directory.Exists(folder.Path))
                         {
-                            if (Directory.Exists(folder.Path))
-                            {
-                                folder.LastOpened = Directory.GetLastWriteTimeUtc(folder.Path);
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            DebugLog.Write($"Failed to read recent folder write time for {folder.Path}: {ex.Message}");
+                            folder.LastOpened = Directory.GetLastWriteTimeUtc(folder.Path);
                         }
                     }
+                    catch (Exception ex)
+                    {
+                        DebugLog.Write($"Failed to read recent folder write time for {folder.Path}: {ex.Message}");
+                    }
+                }
 
-                    if (list.TrueForAll(x => !string.Equals(x.Path, folder.Path, StringComparison.OrdinalIgnoreCase)))
-                    {
-                        list.Add(folder);
-                    }
+                if (list.TrueForAll(x => !string.Equals(x.Path, folder.Path, StringComparison.OrdinalIgnoreCase)))
+                {
+                    list.Add(folder);
                 }
             }
         }
@@ -104,12 +108,12 @@ public static class UserPreferences
         return list;
     }
 
-    public static void SaveRecentFolders(System.Collections.Generic.List<RecentFolder> folders)
+    public static void SaveRecentFolders(List<RecentFolder> folders)
     {
         try
         {
             Directory.CreateDirectory(AppDataDir);
-            var lines = new System.Collections.Generic.List<string>();
+            var lines = new List<string>(folders.Count);
             foreach (var f in folders)
             {
                 lines.Add($"{f.Path}|{f.ImageCount}|{f.LastOpened.Ticks}");
@@ -124,26 +128,19 @@ public static class UserPreferences
 
     public static void AddRecentFolder(string folderPath, int imageCount)
     {
-        try
+        var list = LoadRecentFolders();
+        list.RemoveAll(x => string.Equals(x.Path, folderPath, StringComparison.OrdinalIgnoreCase));
+        list.Insert(0, new RecentFolder
         {
-            var list = LoadRecentFolders();
-            list.RemoveAll(x => string.Equals(x.Path, folderPath, StringComparison.OrdinalIgnoreCase));
-            list.Insert(0, new RecentFolder
-            {
-                Path = folderPath,
-                ImageCount = imageCount,
-                LastOpened = DateTime.UtcNow
-            });
-            if (list.Count > 10)
-            {
-                list.RemoveRange(10, list.Count - 10);
-            }
-            SaveRecentFolders(list);
-        }
-        catch (Exception ex)
+            Path = folderPath,
+            ImageCount = imageCount,
+            LastOpened = DateTime.UtcNow
+        });
+        if (list.Count > 10)
         {
-            DebugLog.Write($"Failed to add recent folder: {ex.Message}");
+            list.RemoveRange(10, list.Count - 10);
         }
+        SaveRecentFolders(list);
     }
 
     public static bool LoadIncludeSubfolders()
@@ -157,7 +154,7 @@ public static class UserPreferences
     {
         SavePreference(
             IncludeSubfoldersPath,
-            includeSubfolders.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            includeSubfolders.ToString(CultureInfo.InvariantCulture),
             "include-subfolders setting");
     }
 

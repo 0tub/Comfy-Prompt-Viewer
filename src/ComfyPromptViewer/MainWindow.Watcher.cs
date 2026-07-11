@@ -13,6 +13,7 @@ public partial class MainWindow
     private FileSystemWatcher? _folderWatcher;
     private readonly object _watcherLock = new();
     private readonly HashSet<string> _pendingAddedFiles = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _pendingChangedFiles = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _pendingDeletedFiles = new(StringComparer.OrdinalIgnoreCase);
     private DispatcherTimer? _watcherDebounceTimer;
     private bool _watcherRecoveryQueued;
@@ -29,7 +30,7 @@ public partial class MainWindow
             };
 
             _folderWatcher.Created += OnFileCreated;
-            _folderWatcher.Changed += OnFileCreated;
+            _folderWatcher.Changed += OnFileChanged;
             _folderWatcher.Deleted += OnFileDeleted;
             _folderWatcher.Renamed += OnFileRenamed;
             _folderWatcher.Error += OnWatcherError;
@@ -49,7 +50,7 @@ public partial class MainWindow
             {
                 _folderWatcher.EnableRaisingEvents = false;
                 _folderWatcher.Created -= OnFileCreated;
-                _folderWatcher.Changed -= OnFileCreated;
+                _folderWatcher.Changed -= OnFileChanged;
                 _folderWatcher.Deleted -= OnFileDeleted;
                 _folderWatcher.Renamed -= OnFileRenamed;
                 _folderWatcher.Error -= OnWatcherError;
@@ -71,6 +72,7 @@ public partial class MainWindow
         lock (_watcherLock)
         {
             _pendingAddedFiles.Clear();
+            _pendingChangedFiles.Clear();
             _pendingDeletedFiles.Clear();
             _watcherRecoveryQueued = false;
         }
@@ -122,7 +124,24 @@ public partial class MainWindow
         lock (_watcherLock)
         {
             _pendingAddedFiles.Remove(e.FullPath);
+            _pendingChangedFiles.Remove(e.FullPath);
             _pendingDeletedFiles.Add(e.FullPath);
+        }
+
+        Dispatcher.UIThread.Post(() => StartWatcherTimer());
+    }
+
+    private void OnFileChanged(object sender, FileSystemEventArgs e)
+    {
+        if (!ImageFileReader.IsSupportedImage(e.FullPath)) return;
+
+        lock (_watcherLock)
+        {
+            _pendingDeletedFiles.Remove(e.FullPath);
+            if (!_pendingAddedFiles.Contains(e.FullPath))
+            {
+                _pendingChangedFiles.Add(e.FullPath);
+            }
         }
 
         Dispatcher.UIThread.Post(() => StartWatcherTimer());
@@ -135,6 +154,7 @@ public partial class MainWindow
             lock (_watcherLock)
             {
                 _pendingAddedFiles.Remove(e.OldFullPath);
+                _pendingChangedFiles.Remove(e.OldFullPath);
                 _pendingDeletedFiles.Add(e.OldFullPath);
             }
         }
@@ -144,6 +164,7 @@ public partial class MainWindow
             lock (_watcherLock)
             {
                 _pendingDeletedFiles.Remove(e.FullPath);
+                _pendingChangedFiles.Remove(e.FullPath);
                 _pendingAddedFiles.Add(e.FullPath);
             }
         }
@@ -171,31 +192,56 @@ public partial class MainWindow
         _watcherDebounceTimer?.Stop();
 
         List<string> added;
+        List<string> modified;
         List<string> deleted;
 
         lock (_watcherLock)
         {
             added = new List<string>(_pendingAddedFiles);
+            modified = new List<string>(_pendingChangedFiles);
             deleted = new List<string>(_pendingDeletedFiles);
             _pendingAddedFiles.Clear();
+            _pendingChangedFiles.Clear();
             _pendingDeletedFiles.Clear();
         }
 
-        if (added.Count == 0 && deleted.Count == 0) return;
+        if (added.Count == 0 && modified.Count == 0 && deleted.Count == 0) return;
 
         var loadGeneration = _loadGeneration;
-        var addedFiles = await Task.Run(() => ReadImageFileEntries(added, CancellationToken.None));
+        var addedPaths = new HashSet<string>(added, StringComparer.OrdinalIgnoreCase);
+        addedPaths.UnionWith(modified);
+        var imageFiles = await Task.Run(() => ReadImageFileEntries(addedPaths, CancellationToken.None));
         if (loadGeneration != _loadGeneration)
         {
             return;
         }
 
-        ProcessWatcherChanges(addedFiles, deleted);
+        var addedFiles = new List<ImageFileEntry>();
+        var changedFiles = new List<ImageFileEntry>();
+        var addedSet = new HashSet<string>(added, StringComparer.OrdinalIgnoreCase);
+        foreach (var imageFile in imageFiles)
+        {
+            if (addedSet.Contains(imageFile.Path))
+            {
+                addedFiles.Add(imageFile);
+            }
+            else
+            {
+                changedFiles.Add(imageFile);
+            }
+        }
+
+        ProcessWatcherChanges(addedFiles, changedFiles, deleted);
     }
 
-    private void ProcessWatcherChanges(List<ImageFileEntry> addedFiles, List<string> deletedPaths)
+    private void ProcessWatcherChanges(
+        List<ImageFileEntry> addedFiles,
+        List<ImageFileEntry> changedFiles,
+        List<string> deletedPaths)
     {
         bool changed = false;
+        bool needsSort = false;
+        var itemsToScan = new List<ImageItem>();
 
         if (deletedPaths.Count > 0)
         {
@@ -229,22 +275,58 @@ public partial class MainWindow
             }
         }
 
-        List<ImageItem>? newItems = null;
-        if (addedFiles.Count > 0)
+        if (addedFiles.Count > 0 || changedFiles.Count > 0)
         {
-            var existingPaths = new HashSet<string>(_allImagePaths, StringComparer.OrdinalIgnoreCase);
-            var uniqueAddedFiles = new List<ImageFileEntry>(addedFiles.Count);
-            foreach (var addedFile in addedFiles)
+            var existingIndexes = new Dictionary<string, int>(_allImagePaths.Count, StringComparer.OrdinalIgnoreCase);
+            for (var index = 0; index < _allImagePaths.Count; index++)
             {
-                if (existingPaths.Add(addedFile.Path))
-                {
-                    uniqueAddedFiles.Add(addedFile);
-                }
+                existingIndexes[_allImagePaths[index]] = index;
             }
 
-            newItems = new List<ImageItem>(uniqueAddedFiles.Count);
-            var useSortedInsertion = uniqueAddedFiles.Count <= MaxIncrementalGalleryChanges;
-            foreach (var addedFile in uniqueAddedFiles)
+            var newFiles = new List<ImageFileEntry>(addedFiles.Count + changedFiles.Count);
+            var processedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            void ProcessChangedFile(ImageFileEntry imageFile)
+            {
+                if (!processedPaths.Add(imageFile.Path))
+                {
+                    return;
+                }
+
+                if (!existingIndexes.TryGetValue(imageFile.Path, out var index))
+                {
+                    newFiles.Add(imageFile);
+                    return;
+                }
+
+                var previousItem = _allImageItems[index];
+                var replacementItem = CreateImageItem(imageFile.Path);
+                _allImageItems[index] = replacementItem;
+                _imageLastWriteTimes[imageFile.Path] = imageFile.LastWriteTimeUtc;
+                previousItem.MetadataLoaded -= ImageItem_MetadataLoaded;
+                previousItem.ReleasePreview();
+                if (_selectedItem == previousItem)
+                {
+                    SelectItem(replacementItem);
+                }
+
+                itemsToScan.Add(replacementItem);
+                changed = true;
+                needsSort = true;
+            }
+
+            foreach (var imageFile in changedFiles)
+            {
+                ProcessChangedFile(imageFile);
+            }
+
+            foreach (var imageFile in addedFiles)
+            {
+                ProcessChangedFile(imageFile);
+            }
+
+            var useSortedInsertion = !needsSort && newFiles.Count <= MaxIncrementalGalleryChanges;
+            foreach (var addedFile in newFiles)
             {
                 var path = addedFile.Path;
 
@@ -262,11 +344,11 @@ public partial class MainWindow
                     _allImageItems.Add(item);
                 }
 
-                newItems.Add(item);
+                itemsToScan.Add(item);
                 changed = true;
             }
 
-            if (!useSortedInsertion && newItems.Count > 0)
+            if ((!useSortedInsertion && newFiles.Count > 0) || needsSort)
             {
                 ApplySort();
             }
@@ -274,9 +356,9 @@ public partial class MainWindow
 
         if (changed)
         {
-            if (newItems is { Count: > 0 })
+            if (itemsToScan.Count > 0)
             {
-                ScanNewItemsMetadata(newItems);
+                ScanNewItemsMetadata(itemsToScan);
             }
 
             ApplyFilter(resetScroll: false);

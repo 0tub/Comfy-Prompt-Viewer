@@ -857,10 +857,12 @@
                                          Focusable="True">
                                     <Border.ContextMenu>
                                         <ContextMenu>
-                                            <MenuItem Header="Open in File Explorer" Click="MenuOpenInExplorer_Click" />
-                                            <MenuItem Header="Copy Prompt" Click="MenuCardCopyPrompt_Click" IsEnabled="{Binding HasPrompt}" />
+                                            <MenuItem Header="Open in File Explorer" Tag="open" Click="ImageContextMenuItem_Click" />
+                                            <MenuItem Header="Copy Prompt" Tag="prompt" Click="ImageContextMenuItem_Click" IsEnabled="{Binding HasPrompt}" />
+                                            <MenuItem Header="Copy Negative Prompt" Tag="negative" Click="ImageContextMenuItem_Click" IsEnabled="{Binding HasNegativePrompt}" />
+                                            <MenuItem Header="Copy Image Path" Tag="path" Click="ImageContextMenuItem_Click" />
                                             <Separator />
-                                            <MenuItem Header="Delete Image" Click="MenuDeleteImage_Click" />
+                                            <MenuItem Header="Delete Image" Tag="delete" Click="ImageContextMenuItem_Click" />
                                         </ContextMenu>
                                     </Border.ContextMenu>
                                     <Panel>
@@ -997,7 +999,8 @@
                                                  Background="{DynamicResource SurfaceElevated}"
                                                  BorderBrush="{DynamicResource BorderSubtle}"
                                                  BorderThickness="1"
-                                                 Click="CopyPositivePromptButton_Click"
+                                                 Tag="positive"
+                                                 Click="SidebarCopyButton_Click"
                                                  Margin="0,0,8,0"
                                                  VerticalAlignment="Center"
                                                  AutomationProperties.Name="Copy positive prompt"
@@ -1139,7 +1142,8 @@
                                                       Background="{DynamicResource SurfaceElevated}"
                                                       BorderBrush="{DynamicResource BorderSubtle}"
                                                       BorderThickness="1"
-                                                      Click="CopyNegativePromptButton_Click"
+                                                      Tag="negative"
+                                                      Click="SidebarCopyButton_Click"
                                                       Margin="0,0,8,0"
                                                       VerticalAlignment="Center"
                                                       AutomationProperties.Name="Copy negative prompt"
@@ -1262,7 +1266,7 @@
                                                  <TextBlock Grid.Column="0" Name="SidebarSeedLabel" Text="SEED" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontUI}" VerticalAlignment="Center" FontSize="9" FontWeight="Medium" LetterSpacing="1.5" />
                                                  <Grid Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="6" VerticalAlignment="Center">
                                                      <TextBlock Grid.Column="0" Name="SidebarSeed" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontMono}" FontSize="11" FontWeight="Normal" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                                                     <Button Grid.Column="1" Name="SidebarCopySeedButton" Content="Copy" Padding="6,3" FontSize="10" Background="{DynamicResource SurfaceElevated}" BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="1" Click="CopySeedButton_Click" VerticalAlignment="Center" AutomationProperties.Name="Copy seed" ToolTip.Tip="Copy seed">
+                                                     <Button Grid.Column="1" Name="SidebarCopySeedButton" Content="Copy" Padding="6,3" FontSize="10" Background="{DynamicResource SurfaceElevated}" BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="1" Tag="seed" Click="SidebarCopyButton_Click" VerticalAlignment="Center" AutomationProperties.Name="Copy seed" ToolTip.Tip="Copy seed">
                                                          <Button.Styles>
                                                              <Style Selector="Button">
                                                                  <Setter Property="CornerRadius" Value="4" />
@@ -1604,6 +1608,16 @@
                                     PointerMoved="LargePreviewCanvas_PointerMoved"
                                     PointerReleased="LargePreviewCanvas_PointerReleased"
                                     PointerCaptureLost="LargePreviewCanvas_PointerCaptureLost">
+                                <Canvas.ContextMenu>
+                                    <ContextMenu>
+                                        <MenuItem Header="Open in File Explorer" Tag="open" Click="ImageContextMenuItem_Click" />
+                                        <MenuItem Header="Copy Prompt" Tag="prompt" Click="ImageContextMenuItem_Click" />
+                                        <MenuItem Name="PreviewCopyNegativePromptMenuItem" Header="Copy Negative Prompt" Tag="negative" Click="ImageContextMenuItem_Click" />
+                                        <MenuItem Header="Copy Image Path" Tag="path" Click="ImageContextMenuItem_Click" />
+                                        <Separator />
+                                        <MenuItem Header="Delete Image" Tag="delete" Click="ImageContextMenuItem_Click" />
+                                    </ContextMenu>
+                                </Canvas.ContextMenu>
                                 <Image Name="LargePreviewImage"
                                        Stretch="Fill" />
                             </Canvas>
@@ -1614,7 +1628,7 @@
                                     VerticalAlignment="Center"
                                     Margin="12,0,0,0"
                                     AutomationProperties.Name="Previous image"
-                                    Click="PreviousPreviewButton_Click" />
+                                    Click="PreviewNavigationButton_Click" />
                             <Button Name="NextPreviewButton"
                                     Classes="preview-nav-btn"
                                     Content="&#x203A;"
@@ -1622,7 +1636,7 @@
                                     VerticalAlignment="Center"
                                     Margin="0,0,12,0"
                                     AutomationProperties.Name="Next image"
-                                    Click="NextPreviewButton_Click" />
+                                    Click="PreviewNavigationButton_Click" />
                         </Grid>
                     </Border>
                 </Grid>

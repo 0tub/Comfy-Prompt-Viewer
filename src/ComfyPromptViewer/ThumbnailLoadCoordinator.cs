@@ -194,7 +194,7 @@ public sealed class ThumbnailLoadCoordinator
         Action? visibleWorkDrained = null;
         try
         {
-            await item.LoadThumbnailAsync(token);
+            await item.LoadThumbnailAsync(token, () => IsCurrentGeneration(generation));
         }
         finally
         {
@@ -240,6 +240,14 @@ public sealed class ThumbnailLoadCoordinator
 
     private int ActiveLoadCount => _activeVisibleLoads + _activeAheadLoads;
     private bool HasVisibleWorkLocked => _visibleQueue.Count > 0 || _activeVisibleLoads > 0;
+
+    private bool IsCurrentGeneration(int generation)
+    {
+        lock (_lock)
+        {
+            return generation == _generation;
+        }
+    }
 
     private enum ThumbnailQueueKind
     {
