@@ -22,6 +22,7 @@ public partial class MainWindow
     private double _largePreviewPanStartX;
     private double _largePreviewPanStartY;
     private IPointer? _largePreviewPanPointer;
+    private Key _heldPreviewNavigationKey = Key.None;
 
     private readonly record struct PreviewZoomAnchor(double XRatio, double YRatio, double ViewportX, double ViewportY);
 
@@ -40,11 +41,6 @@ public partial class MainWindow
             return;
         }
 
-        if (_loadCancellation?.Token is { } token)
-        {
-            _selectedItem.EnsureSelectedPreviewLoaded(token);
-        }
-
         LargePreviewOverlay.Opacity = 1;
         LargePreviewOverlay.IsVisible = true;
         UpdateLargePreview(resetZoom: true);
@@ -61,7 +57,11 @@ public partial class MainWindow
 
         LargePreviewTitle.Text = _selectedItem.FileName;
         LargePreviewMeta.Text = _selectedItem.DimensionsText;
-        LargePreviewImage.Source = _selectedItem.SelectedPreview ?? _selectedItem.Preview;
+        var preview = _selectedItem.SelectedPreview;
+        if (!ReferenceEquals(LargePreviewImage.Source, preview))
+        {
+            LargePreviewImage.Source = preview;
+        }
         PreviewCopyNegativePromptMenuItem.IsEnabled = _selectedItem.HasNegativePrompt;
         UpdateLargePreviewNavigationButtons();
 
@@ -90,6 +90,7 @@ public partial class MainWindow
     private void HideLargePreview()
     {
         StopLargePreviewPan(releaseCapture: true);
+        _heldPreviewNavigationKey = Key.None;
         LargePreviewOverlay.IsVisible = false;
         LargePreviewOverlay.Opacity = 0;
         LargePreviewImage.Source = null;
@@ -132,6 +133,22 @@ public partial class MainWindow
         }
 
         SelectByIndex(nextIndex);
+    }
+
+    private bool MoveLargePreviewSelectionFromKey(Key key, int delta)
+    {
+        if (_selectedItem is null || _viewModel.Items.Count == 0)
+        {
+            return false;
+        }
+
+        if (_heldPreviewNavigationKey == Key.None)
+        {
+            _heldPreviewNavigationKey = key;
+            return MoveSelection(delta);
+        }
+
+        return true;
     }
 
     private void UpdateLargePreviewNavigationButtons()

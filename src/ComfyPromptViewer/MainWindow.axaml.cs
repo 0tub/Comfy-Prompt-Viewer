@@ -889,10 +889,10 @@ public partial class MainWindow : Window
             var columns = GetGalleryColumnCount();
             var moved = e.Key switch
             {
-                Key.Left => MoveSelection(-1),
-                Key.Right => MoveSelection(1),
-                Key.Up => MoveSelection(-columns),
-                Key.Down => MoveSelection(columns),
+                Key.Left => MoveLargePreviewSelectionFromKey(e.Key, -1),
+                Key.Right => MoveLargePreviewSelectionFromKey(e.Key, 1),
+                Key.Up => MoveLargePreviewSelectionFromKey(e.Key, -columns),
+                Key.Down => MoveLargePreviewSelectionFromKey(e.Key, columns),
                 Key.Home => SelectByIndex(0),
                 Key.End => SelectByIndex(_viewModel.Items.Count - 1),
                 _ => false
@@ -943,6 +943,17 @@ public partial class MainWindow : Window
         {
             e.Handled = true;
         }
+    }
+
+    protected override void OnKeyUp(KeyEventArgs e)
+    {
+        if (LargePreviewOverlay.IsVisible && e.Key == _heldPreviewNavigationKey)
+        {
+            _heldPreviewNavigationKey = Key.None;
+            e.Handled = true;
+        }
+
+        base.OnKeyUp(e);
     }
 
     private static bool IsTextInputFocused(object? source)
@@ -1335,7 +1346,10 @@ public partial class MainWindow : Window
         {
             _thumbnailLoads.EnqueueVisible(item, token);
             _ = item.EnsureMetadataLoadedAsync(token);
-            item.EnsureSelectedPreviewLoaded(token);
+            if (!LargePreviewOverlay.IsVisible)
+            {
+                item.EnsureSelectedPreviewLoaded(token);
+            }
         }
 
         SidebarEmpty.IsVisible = false;

@@ -436,7 +436,10 @@ public sealed class ImageItem : INotifyPropertyChanged
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            DebugLog.Write($"Failed to load metadata for {Path}: {ex}");
+            if (ex is not InvalidDataException { Message: "Invalid PNG signature." })
+            {
+                DebugLog.Write($"Failed to load metadata for {Path}: {ex}");
+            }
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 MarkMetadataLoaded();
@@ -479,7 +482,7 @@ public sealed class ImageItem : INotifyPropertyChanged
 
     public void LoadSelectedPreviewSync()
     {
-        if (SelectedPreview is not null)
+        if (SelectedPreview is not null || _selectedPreviewLoadTask is { IsCompleted: false })
         {
             return;
         }

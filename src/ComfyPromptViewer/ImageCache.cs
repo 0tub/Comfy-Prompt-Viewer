@@ -1,15 +1,39 @@
+using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using Avalonia.Threading;
 
 namespace ComfyPromptViewer;
 
 public static class ImageCache
 {
+    private const int LinuxMallocTrimThreshold = -1;
+    private const int LinuxMallocArenaMax = -8;
+    private const int LinuxTrimThresholdBytes = 64 * 1024;
+    private const int LinuxMaxMallocArenas = 4;
     private static readonly LinkedList<ImageItem> _lruList = new();
     private static readonly object _lock = new();
     private static long _estimatedBytes;
     internal const int MaxCapacity = 512;
     internal const long MaxEstimatedBytes = 128L * 1024 * 1024;
+
+    internal static void ConfigureLinuxNativeAllocator()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        try
+        {
+            mallopt(LinuxMallocArenaMax, LinuxMaxMallocArenas);
+            mallopt(LinuxMallocTrimThreshold, LinuxTrimThresholdBytes);
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
+        {
+            // These allocator controls are glibc-specific. Other Linux libc implementations keep their defaults.
+        }
+    }
 
     public static void Touch(ImageItem item)
     {
@@ -104,6 +128,31 @@ public static class ImageCache
             {
                 item.ReleasePreview();
             }
+
+            TrimLinuxNativeHeap();
         });
     }
+
+    private static void TrimLinuxNativeHeap()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        try
+        {
+            malloc_trim(0);
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
+        {
+            // malloc_trim is a glibc optimization and is not available on every Linux libc.
+        }
+    }
+
+    [DllImport("libc", EntryPoint = "malloc_trim")]
+    private static extern int malloc_trim(nuint padding);
+
+    [DllImport("libc", EntryPoint = "mallopt")]
+    private static extern int mallopt(int parameter, int value);
 }

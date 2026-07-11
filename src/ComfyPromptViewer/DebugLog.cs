@@ -18,6 +18,19 @@ public static class DebugLog
 
     public static void InstallGlobalHandlers()
     {
+        try
+        {
+            Directory.CreateDirectory(UserPreferences.AppDataDir);
+            lock (Lock)
+            {
+                File.WriteAllText(LogPath, string.Empty);
+            }
+        }
+        catch
+        {
+            // Intentionally silent: debug logging must never break app startup.
+        }
+
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
         {
             WriteException("AppDomain.UnhandledException", e.ExceptionObject as Exception);
