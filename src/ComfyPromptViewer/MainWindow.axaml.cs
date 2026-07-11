@@ -206,6 +206,7 @@ public partial class MainWindow : Window
         GalleryScrollViewer.AddHandler(InputElement.PointerReleasedEvent, GalleryScrollViewer_PointerReleased, RoutingStrategies.Bubble, true);
         GalleryScrollViewer.AddHandler(InputElement.PointerCaptureLostEvent, GalleryScrollViewer_PointerCaptureLost, RoutingStrategies.Bubble, true);
         GalleryScrollViewer.AddHandler(InputElement.PointerWheelChangedEvent, GalleryScrollViewer_PointerWheelChanged, RoutingStrategies.Tunnel, true);
+        GalleryItems.AddHandler(Control.RequestBringIntoViewEvent, (_, e) => e.Handled = true, RoutingStrategies.Bubble, true);
         
         SidebarPrompt.AddHandler(TextBox.CopyingToClipboardEvent, TextBox_CopyingToClipboard, RoutingStrategies.Bubble, true);
         SidebarNegativePrompt.AddHandler(TextBox.CopyingToClipboardEvent, TextBox_CopyingToClipboard, RoutingStrategies.Bubble, true);
@@ -793,8 +794,27 @@ public partial class MainWindow : Window
         if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed &&
             sender is Control control && control.DataContext is ImageItem item)
         {
-            control.Focus();
+            var scrollOffset = GalleryScrollViewer.Offset.Y;
             SelectItem(item);
+            var index = _viewModel.Items.IndexOf(item);
+            if (index >= 0)
+            {
+                var row = index / GetGalleryColumnCount();
+                var rowTop = GalleryItems.Margin.Top + (row * _tileItemExtent);
+                var rowBottom = rowTop + _tileItemExtent;
+                var viewportHeight = GalleryScrollViewer.Viewport.Height > 0
+                    ? GalleryScrollViewer.Viewport.Height
+                    : Math.Max(1, GalleryScrollViewer.Bounds.Height);
+
+                if (rowTop < scrollOffset || rowBottom > scrollOffset + viewportHeight)
+                {
+                    EnsureIndexVisible(index);
+                }
+                else
+                {
+                    QueueGalleryScrollRestore(scrollOffset);
+                }
+            }
             if (e.ClickCount >= 2)
             {
                 ShowLargePreview();
@@ -988,7 +1008,7 @@ public partial class MainWindow : Window
     {
         var columns = GetGalleryColumnCount();
         var row = index / columns;
-        var rowTop = row * _tileItemExtent;
+        var rowTop = GalleryItems.Margin.Top + (row * _tileItemExtent);
         var rowBottom = rowTop + _tileItemExtent;
         var viewportHeight = GalleryScrollViewer.Viewport.Height > 0
             ? GalleryScrollViewer.Viewport.Height

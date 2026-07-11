@@ -106,7 +106,7 @@
         <Style Selector="Border.card">
             <Setter Property="Background" Value="{DynamicResource SurfaceCard}" />
             <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtle}" />
-            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="BorderThickness" Value="2" />
             <Setter Property="CornerRadius" Value="3" />
             <Setter Property="RenderTransform" Value="none" />
             <Setter Property="BoxShadow" Value="0 0 0 0 #00000000" />
