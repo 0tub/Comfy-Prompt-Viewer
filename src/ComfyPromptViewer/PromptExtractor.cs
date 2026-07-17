@@ -233,6 +233,11 @@ public static class PromptExtractor
             AddLoraDataJson(loras, loraData.GetString() ?? "");
         }
 
+        AddLora(
+            loras,
+            TryGetStringProperty(inputs, "lora_name"),
+            TryGetScalarProperty(inputs, "strength_model"));
+
     }
 
     private static void AddLoraDataJson(List<string> loras, string json)

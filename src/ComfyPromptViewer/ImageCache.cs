@@ -15,7 +15,7 @@ public static class ImageCache
     private static readonly object _lock = new();
     private static long _estimatedBytes;
     internal const int MaxCapacity = 512;
-    internal const long MaxEstimatedBytes = 128L * 1024 * 1024;
+    internal const long MaxEstimatedBytes = 64L * 1024 * 1024;
 
     internal static void ConfigureLinuxNativeAllocator()
     {
@@ -122,7 +122,7 @@ public static class ImageCache
             _estimatedBytes = 0;
         }
 
-        Dispatcher.UIThread.Post(() =>
+        void ReleaseItems()
         {
             foreach (var item in itemsToRelease)
             {
@@ -130,7 +130,16 @@ public static class ImageCache
             }
 
             TrimLinuxNativeHeap();
-        });
+        }
+
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            ReleaseItems();
+        }
+        else
+        {
+            Dispatcher.UIThread.Post(ReleaseItems);
+        }
     }
 
     private static void TrimLinuxNativeHeap()

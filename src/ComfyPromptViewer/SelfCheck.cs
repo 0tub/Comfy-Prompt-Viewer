@@ -3,6 +3,7 @@ using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.IO.Compression;
 using System.Text;
 
 namespace ComfyPromptViewer;
@@ -15,9 +16,11 @@ internal static class SelfCheck
         CheckGalleryScrollAnchoring();
         CheckGalleryItemReconciliation();
         CheckSortedInsertion();
+        CheckFolderLoadSessions();
         CheckThemeModes();
         CheckPromptExtraction();
         CheckPngMetadataRead();
+        CheckPngMetadataLimit();
         CheckMetadataIndexRoundTrip();
         CheckMetadataIndexCleanup();
         CheckThumbnailCacheWriteBackpressure();
@@ -36,6 +39,22 @@ internal static class SelfCheck
             "Expected sorted insertion after equivalent items.");
         Check(MainWindow.FindSortedInsertIndex(values, 6, static (left, right) => left.CompareTo(right)) == values.Length,
             "Expected sorted insertion after the last item.");
+    }
+
+    private static void CheckFolderLoadSessions()
+    {
+        var coordinator = new FolderLoadCoordinator();
+        var first = coordinator.Restart();
+        Check(coordinator.IsCurrent(first), "Expected the new folder load session to be current.");
+
+        var second = coordinator.Restart();
+        Check(!coordinator.IsCurrent(first), "Expected restarting folder loading to invalidate the previous session.");
+        Check(first.Token.IsCancellationRequested, "Expected restarting folder loading to cancel the previous token.");
+        Check(coordinator.IsCurrent(second), "Expected the replacement folder load session to be current.");
+
+        coordinator.Cancel();
+        Check(!coordinator.IsCurrent(second), "Expected canceling folder loading to invalidate the active session.");
+        Check(second.Token.IsCancellationRequested, "Expected canceling folder loading to cancel the active token.");
     }
 
     private static void CheckGalleryScrollAnchoring()
@@ -255,6 +274,24 @@ internal static class SelfCheck
         }
     }
 
+    private static void CheckPngMetadataLimit()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}.png");
+        try
+        {
+            WritePngWithOversizedCompressedText(path);
+            var result = ImageFileReader.Read(path);
+            Check(result.TextMetadata.TryGetValue("parameters", out var parameters) && parameters == "searchable prompt",
+                "Expected valid PNG metadata to remain searchable when another chunk exceeds the safety limit.");
+            Check(!result.TextMetadata.ContainsKey("oversized"),
+                "Expected oversized compressed PNG metadata to be skipped.");
+        }
+        finally
+        {
+            DeleteFileQuietly(path);
+        }
+    }
+
     private static void CheckMetadataIndexRoundTrip()
     {
         var path = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}.png");
@@ -457,6 +494,37 @@ internal static class SelfCheck
         keyword.CopyTo(textData, 0);
         text.CopyTo(textData, keyword.Length + 1);
         WriteChunk(stream, "tEXt", textData);
+        WriteChunk(stream, "IEND", []);
+    }
+
+    private static void WritePngWithOversizedCompressedText(string path)
+    {
+        using var stream = File.Create(path);
+        stream.Write([137, 80, 78, 71, 13, 10, 26, 10]);
+
+        Span<byte> ihdr = stackalloc byte[13];
+        BinaryPrimitives.WriteInt32BigEndian(ihdr[..4], 1);
+        BinaryPrimitives.WriteInt32BigEndian(ihdr.Slice(4, 4), 1);
+        ihdr[8] = 8;
+        ihdr[9] = 2;
+        WriteChunk(stream, "IHDR", ihdr);
+
+        WriteChunk(stream, "tEXt", Encoding.UTF8.GetBytes("parameters\0searchable prompt"));
+        using var compressed = new MemoryStream();
+        using (var zlib = new ZLibStream(compressed, CompressionLevel.SmallestSize, leaveOpen: true))
+        {
+            var zeros = new byte[8192];
+            for (var remaining = 3 * 1024 * 1024; remaining > 0; remaining -= zeros.Length)
+            {
+                zlib.Write(zeros, 0, Math.Min(zeros.Length, remaining));
+            }
+        }
+
+        var compressedBytes = compressed.ToArray();
+        var textData = new byte["oversized".Length + 2 + compressedBytes.Length];
+        Encoding.Latin1.GetBytes("oversized").CopyTo(textData, 0);
+        compressedBytes.CopyTo(textData, "oversized".Length + 2);
+        WriteChunk(stream, "zTXt", textData);
         WriteChunk(stream, "IEND", []);
     }
 

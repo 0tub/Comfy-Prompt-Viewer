@@ -10,7 +10,9 @@ public sealed record ImageReadResult(int Width, int Height, Dictionary<string, s
 
 public static class ImageFileReader
 {
-    private const int MaxTextChunkBytes = 16 * 1024 * 1024;
+    private const int MaxTextChunkBytes = 2 * 1024 * 1024;
+    private const int MaxInflatedTextBytes = 2 * 1024 * 1024;
+    private const int MaxTotalTextMetadataBytes = 4 * 1024 * 1024;
     private const ushort ExifIfdPointerTag = 0x8769;
     private const ushort UserCommentTag = 0x9286;
     private static readonly Encoding StrictUtf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
@@ -85,6 +87,7 @@ public static class ImageFileReader
         }
 
         var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var metadataBytes = 0;
         var width = 0;
         var height = 0;
         Span<byte> typeBytes = stackalloc byte[4];
@@ -118,34 +121,58 @@ public static class ImageFileReader
             {
                 if (dataLength > MaxTextChunkBytes)
                 {
-                    throw new InvalidDataException("PNG text chunk is too large.");
+                    SkipChunk(stream, dataLength);
+                    continue;
                 }
 
                 var data = ReadChunkData(stream, dataLength);
                 SkipCrc(stream);
-                ReadTextChunk(data, metadata);
+                try
+                {
+                    ReadTextChunk(data, metadata, ref metadataBytes);
+                }
+                catch (MetadataLimitExceededException)
+                {
+                    // Keep other valid metadata searchable when one text chunk exceeds the safety budget.
+                }
             }
             else if (typeBytes.SequenceEqual(PngInternationalTextChunk))
             {
                 if (dataLength > MaxTextChunkBytes)
                 {
-                    throw new InvalidDataException("PNG text chunk is too large.");
+                    SkipChunk(stream, dataLength);
+                    continue;
                 }
 
                 var data = ReadChunkData(stream, dataLength);
                 SkipCrc(stream);
-                ReadInternationalTextChunk(data, metadata);
+                try
+                {
+                    ReadInternationalTextChunk(data, metadata, ref metadataBytes);
+                }
+                catch (MetadataLimitExceededException)
+                {
+                    // Keep other valid metadata searchable when one text chunk exceeds the safety budget.
+                }
             }
             else if (typeBytes.SequenceEqual(PngCompressedTextChunk))
             {
                 if (dataLength > MaxTextChunkBytes)
                 {
-                    throw new InvalidDataException("PNG text chunk is too large.");
+                    SkipChunk(stream, dataLength);
+                    continue;
                 }
 
                 var data = ReadChunkData(stream, dataLength);
                 SkipCrc(stream);
-                ReadCompressedTextChunk(data, metadata);
+                try
+                {
+                    ReadCompressedTextChunk(data, metadata, ref metadataBytes);
+                }
+                catch (MetadataLimitExceededException)
+                {
+                    // Keep other valid metadata searchable when one text chunk exceeds the safety budget.
+                }
             }
             else if (typeBytes.SequenceEqual(PngEndChunk))
             {
@@ -368,7 +395,7 @@ public static class ImageFileReader
         return (width, height);
     }
 
-    private static void ReadTextChunk(byte[] data, Dictionary<string, string> metadata)
+    private static void ReadTextChunk(byte[] data, Dictionary<string, string> metadata, ref int metadataBytes)
     {
         var separator = Array.IndexOf(data, (byte)0);
         if (separator <= 0)
@@ -378,10 +405,13 @@ public static class ImageFileReader
 
         var key = Encoding.Latin1.GetString(data, 0, separator);
         var value = Encoding.UTF8.GetString(data, separator + 1, data.Length - separator - 1);
-        metadata[key] = value;
+        StorePngText(metadata, key, value, ref metadataBytes);
     }
 
-    private static void ReadInternationalTextChunk(byte[] data, Dictionary<string, string> metadata)
+    private static void ReadInternationalTextChunk(
+        byte[] data,
+        Dictionary<string, string> metadata,
+        ref int metadataBytes)
     {
         var cursor = 0;
         var keywordEnd = Array.IndexOf(data, (byte)0, cursor);
@@ -409,12 +439,16 @@ public static class ImageFileReader
         }
 
         cursor = translatedEnd + 1;
-        metadata[key] = compressionFlag == 1
+        var value = compressionFlag == 1
             ? Inflate(data, cursor, data.Length - cursor)
             : Encoding.UTF8.GetString(data, cursor, data.Length - cursor);
+        StorePngText(metadata, key, value, ref metadataBytes);
     }
 
-    private static void ReadCompressedTextChunk(byte[] data, Dictionary<string, string> metadata)
+    private static void ReadCompressedTextChunk(
+        byte[] data,
+        Dictionary<string, string> metadata,
+        ref int metadataBytes)
     {
         var separator = Array.IndexOf(data, (byte)0);
         if (separator <= 0 || separator + 2 >= data.Length)
@@ -423,7 +457,30 @@ public static class ImageFileReader
         }
 
         var key = Encoding.Latin1.GetString(data, 0, separator);
-        metadata[key] = Inflate(data, separator + 2, data.Length - separator - 2);
+        StorePngText(
+            metadata,
+            key,
+            Inflate(data, separator + 2, data.Length - separator - 2),
+            ref metadataBytes);
+    }
+
+    private static void StorePngText(
+        Dictionary<string, string> metadata,
+        string key,
+        string value,
+        ref int metadataBytes)
+    {
+        var previousBytes = metadata.TryGetValue(key, out var previousValue)
+            ? Encoding.UTF8.GetByteCount(key) + Encoding.UTF8.GetByteCount(previousValue)
+            : 0;
+        var newBytes = Encoding.UTF8.GetByteCount(key) + Encoding.UTF8.GetByteCount(value);
+        if (metadataBytes - previousBytes > MaxTotalTextMetadataBytes - newBytes)
+        {
+            throw new MetadataLimitExceededException("PNG text metadata exceeds the allowed total size.");
+        }
+
+        metadata[key] = value;
+        metadataBytes = metadataBytes - previousBytes + newBytes;
     }
 
     private static void ReadExifMetadata(ReadOnlySpan<byte> data, Dictionary<string, string> metadata)
@@ -683,8 +740,20 @@ public static class ImageFileReader
     {
         using var input = new MemoryStream(data, offset, count, writable: false);
         using var zlib = new ZLibStream(input, CompressionMode.Decompress);
-        using var reader = new StreamReader(zlib, Encoding.UTF8);
-        return reader.ReadToEnd();
+        using var output = new MemoryStream();
+        var buffer = new byte[8192];
+        int bytesRead;
+        while ((bytesRead = zlib.Read(buffer)) > 0)
+        {
+            if (output.Length > MaxInflatedTextBytes - bytesRead)
+            {
+                throw new MetadataLimitExceededException("Compressed PNG text exceeds the allowed size.");
+            }
+
+            output.Write(buffer, 0, bytesRead);
+        }
+
+        return Encoding.UTF8.GetString(output.GetBuffer(), 0, checked((int)output.Length));
     }
 
     private static byte[] ReadChunkData(Stream stream, int length)
@@ -776,4 +845,6 @@ public static class ImageFileReader
             throw new EndOfStreamException();
         }
     }
+
+    private sealed class MetadataLimitExceededException(string message) : Exception(message);
 }

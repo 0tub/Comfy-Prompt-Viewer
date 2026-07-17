@@ -186,7 +186,9 @@ public sealed class ThumbnailLoadCoordinator
 
         var token = _currentToken;
         var generation = _generation;
-        _ = RunLoadAsync(item, kind, token, generation);
+        DebugLog.Observe(
+            RunLoadAsync(item, kind, token, generation),
+            $"Thumbnail load for {item.Path}");
     }
 
     private async Task RunLoadAsync(ImageItem item, ThumbnailQueueKind kind, CancellationToken token, int generation)

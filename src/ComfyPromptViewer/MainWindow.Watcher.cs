@@ -16,51 +16,77 @@ public partial class MainWindow
     private readonly HashSet<string> _pendingChangedFiles = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _pendingDeletedFiles = new(StringComparer.OrdinalIgnoreCase);
     private DispatcherTimer? _watcherDebounceTimer;
-    private bool _watcherRecoveryQueued;
+    private FileSystemWatcher? _watcherRecoverySource;
+    private bool _watcherBatchProcessing;
+    private bool _watcherBatchRerunRequested;
 
     private void StartFolderWatcher(string folderPath, bool includeSubfolders)
     {
         StopFolderWatcher();
+        FileSystemWatcher? watcher = null;
         try
         {
-            _folderWatcher = new FileSystemWatcher(folderPath)
+            watcher = new FileSystemWatcher(folderPath)
             {
                 NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite,
                 IncludeSubdirectories = includeSubfolders
             };
 
-            _folderWatcher.Created += OnFileCreated;
-            _folderWatcher.Changed += OnFileChanged;
-            _folderWatcher.Deleted += OnFileDeleted;
-            _folderWatcher.Renamed += OnFileRenamed;
-            _folderWatcher.Error += OnWatcherError;
-            _folderWatcher.EnableRaisingEvents = true;
+            watcher.Created += OnFileCreated;
+            watcher.Changed += OnFileChanged;
+            watcher.Deleted += OnFileDeleted;
+            watcher.Renamed += OnFileRenamed;
+            watcher.Error += OnWatcherError;
+            lock (_watcherLock)
+            {
+                _folderWatcher = watcher;
+            }
+            watcher.EnableRaisingEvents = true;
         }
         catch (Exception ex)
         {
+            lock (_watcherLock)
+            {
+                if (ReferenceEquals(watcher, _folderWatcher))
+                {
+                    _folderWatcher = null;
+                }
+            }
+            watcher?.Dispose();
             DebugLog.Write($"Failed to start folder watcher for {folderPath}: {ex.Message}");
         }
     }
 
     private void StopFolderWatcher()
     {
-        if (_folderWatcher != null)
+        FileSystemWatcher? watcher;
+        lock (_watcherLock)
+        {
+            watcher = _folderWatcher;
+            _folderWatcher = null;
+            _pendingAddedFiles.Clear();
+            _pendingChangedFiles.Clear();
+            _pendingDeletedFiles.Clear();
+            _watcherRecoverySource = null;
+            _watcherBatchRerunRequested = false;
+        }
+
+        if (watcher != null)
         {
             try
             {
-                _folderWatcher.EnableRaisingEvents = false;
-                _folderWatcher.Created -= OnFileCreated;
-                _folderWatcher.Changed -= OnFileChanged;
-                _folderWatcher.Deleted -= OnFileDeleted;
-                _folderWatcher.Renamed -= OnFileRenamed;
-                _folderWatcher.Error -= OnWatcherError;
-                _folderWatcher.Dispose();
+                watcher.EnableRaisingEvents = false;
+                watcher.Created -= OnFileCreated;
+                watcher.Changed -= OnFileChanged;
+                watcher.Deleted -= OnFileDeleted;
+                watcher.Renamed -= OnFileRenamed;
+                watcher.Error -= OnWatcherError;
+                watcher.Dispose();
             }
             catch (Exception ex)
             {
                 DebugLog.Write($"Failed to stop folder watcher: {ex.Message}");
             }
-            _folderWatcher = null;
         }
 
         if (_watcherDebounceTimer != null)
@@ -69,39 +95,48 @@ public partial class MainWindow
             _watcherDebounceTimer = null;
         }
 
-        lock (_watcherLock)
-        {
-            _pendingAddedFiles.Clear();
-            _pendingChangedFiles.Clear();
-            _pendingDeletedFiles.Clear();
-            _watcherRecoveryQueued = false;
-        }
     }
 
     private void OnWatcherError(object sender, ErrorEventArgs e)
     {
         DebugLog.Write($"Folder watcher failed: {e.GetException()}");
+        if (sender is not FileSystemWatcher watcher)
+        {
+            return;
+        }
+
+        int loadGeneration;
+        string? folderPath;
         lock (_watcherLock)
         {
-            if (_watcherRecoveryQueued)
+            if (!ReferenceEquals(watcher, _folderWatcher) ||
+                ReferenceEquals(watcher, _watcherRecoverySource))
             {
                 return;
             }
 
-            _watcherRecoveryQueued = true;
+            _watcherRecoverySource = watcher;
+            loadGeneration = _folderLoader.Generation;
+            folderPath = _currentFolderPath;
         }
 
-        Dispatcher.UIThread.Post(async () =>
+        Dispatcher.UIThread.Post(() =>
         {
             lock (_watcherLock)
             {
-                _watcherRecoveryQueued = false;
+                if (ReferenceEquals(watcher, _watcherRecoverySource))
+                {
+                    _watcherRecoverySource = null;
+                }
             }
 
-            if (!string.IsNullOrEmpty(_currentFolderPath))
+            if (_folderLoader.IsCurrent(loadGeneration) &&
+                ReferenceEquals(watcher, _folderWatcher) &&
+                !string.IsNullOrEmpty(folderPath) &&
+                string.Equals(folderPath, _currentFolderPath, StringComparison.OrdinalIgnoreCase))
             {
                 CountText.Text = "Folder changed rapidly; refreshing...";
-                await LoadFolderAsync(_currentFolderPath);
+                DebugLog.Observe(LoadFolderAsync(folderPath), "Folder watcher recovery reload");
             }
         }, DispatcherPriority.Background);
     }
@@ -112,6 +147,7 @@ public partial class MainWindow
 
         lock (_watcherLock)
         {
+            if (!ReferenceEquals(sender, _folderWatcher)) return;
             _pendingDeletedFiles.Remove(e.FullPath);
             _pendingAddedFiles.Add(e.FullPath);
         }
@@ -123,6 +159,7 @@ public partial class MainWindow
     {
         lock (_watcherLock)
         {
+            if (!ReferenceEquals(sender, _folderWatcher)) return;
             _pendingAddedFiles.Remove(e.FullPath);
             _pendingChangedFiles.Remove(e.FullPath);
             _pendingDeletedFiles.Add(e.FullPath);
@@ -137,6 +174,7 @@ public partial class MainWindow
 
         lock (_watcherLock)
         {
+            if (!ReferenceEquals(sender, _folderWatcher)) return;
             _pendingDeletedFiles.Remove(e.FullPath);
             if (!_pendingAddedFiles.Contains(e.FullPath))
             {
@@ -149,19 +187,18 @@ public partial class MainWindow
 
     private void OnFileRenamed(object sender, RenamedEventArgs e)
     {
-        if (ImageFileReader.IsSupportedImage(e.OldFullPath))
+        lock (_watcherLock)
         {
-            lock (_watcherLock)
+            if (!ReferenceEquals(sender, _folderWatcher)) return;
+
+            if (ImageFileReader.IsSupportedImage(e.OldFullPath))
             {
                 _pendingAddedFiles.Remove(e.OldFullPath);
                 _pendingChangedFiles.Remove(e.OldFullPath);
                 _pendingDeletedFiles.Add(e.OldFullPath);
             }
-        }
 
-        if (ImageFileReader.IsSupportedImage(e.FullPath))
-        {
-            lock (_watcherLock)
+            if (ImageFileReader.IsSupportedImage(e.FullPath))
             {
                 _pendingDeletedFiles.Remove(e.FullPath);
                 _pendingChangedFiles.Remove(e.FullPath);
@@ -190,48 +227,81 @@ public partial class MainWindow
     private async void OnWatcherTimerTick(object? sender, EventArgs e)
     {
         _watcherDebounceTimer?.Stop();
-
-        List<string> added;
-        List<string> modified;
-        List<string> deleted;
-
-        lock (_watcherLock)
+        if (_watcherBatchProcessing)
         {
-            added = new List<string>(_pendingAddedFiles);
-            modified = new List<string>(_pendingChangedFiles);
-            deleted = new List<string>(_pendingDeletedFiles);
-            _pendingAddedFiles.Clear();
-            _pendingChangedFiles.Clear();
-            _pendingDeletedFiles.Clear();
-        }
-
-        if (added.Count == 0 && modified.Count == 0 && deleted.Count == 0) return;
-
-        var loadGeneration = _loadGeneration;
-        var addedPaths = new HashSet<string>(added, StringComparer.OrdinalIgnoreCase);
-        addedPaths.UnionWith(modified);
-        var imageFiles = await Task.Run(() => ReadImageFileEntries(addedPaths, CancellationToken.None));
-        if (loadGeneration != _loadGeneration)
-        {
+            _watcherBatchRerunRequested = true;
             return;
         }
 
-        var addedFiles = new List<ImageFileEntry>();
-        var changedFiles = new List<ImageFileEntry>();
-        var addedSet = new HashSet<string>(added, StringComparer.OrdinalIgnoreCase);
-        foreach (var imageFile in imageFiles)
+        _watcherBatchProcessing = true;
+
+        try
         {
-            if (addedSet.Contains(imageFile.Path))
+            List<string> added;
+            List<string> modified;
+            List<string> deleted;
+            FileSystemWatcher? watcher;
+
+            lock (_watcherLock)
             {
-                addedFiles.Add(imageFile);
+                watcher = _folderWatcher;
+                added = new List<string>(_pendingAddedFiles);
+                modified = new List<string>(_pendingChangedFiles);
+                deleted = new List<string>(_pendingDeletedFiles);
+                _pendingAddedFiles.Clear();
+                _pendingChangedFiles.Clear();
+                _pendingDeletedFiles.Clear();
             }
-            else
+
+            if (watcher is null || (added.Count == 0 && modified.Count == 0 && deleted.Count == 0)) return;
+
+            var loadGeneration = _folderLoader.Generation;
+            var addedPaths = new HashSet<string>(added, StringComparer.OrdinalIgnoreCase);
+            addedPaths.UnionWith(modified);
+            var imageFiles = await FolderLoadCoordinator.ReadEntriesAsync(addedPaths, CancellationToken.None);
+            if (!_folderLoader.IsCurrent(loadGeneration) || !ReferenceEquals(watcher, _folderWatcher))
             {
-                changedFiles.Add(imageFile);
+                return;
+            }
+
+            var addedFiles = new List<ImageFileEntry>();
+            var changedFiles = new List<ImageFileEntry>();
+            var addedSet = new HashSet<string>(added, StringComparer.OrdinalIgnoreCase);
+            foreach (var imageFile in imageFiles)
+            {
+                if (addedSet.Contains(imageFile.Path))
+                {
+                    addedFiles.Add(imageFile);
+                }
+                else
+                {
+                    changedFiles.Add(imageFile);
+                }
+            }
+
+            ProcessWatcherChanges(addedFiles, changedFiles, deleted);
+        }
+        catch (Exception ex)
+        {
+            DebugLog.WriteException("Folder watcher batch", ex);
+        }
+        finally
+        {
+            _watcherBatchProcessing = false;
+            bool hasPendingChanges;
+            lock (_watcherLock)
+            {
+                hasPendingChanges = _pendingAddedFiles.Count > 0 ||
+                                    _pendingChangedFiles.Count > 0 ||
+                                    _pendingDeletedFiles.Count > 0;
+            }
+
+            if (_watcherBatchRerunRequested || hasPendingChanges)
+            {
+                _watcherBatchRerunRequested = false;
+                StartWatcherTimer();
             }
         }
-
-        ProcessWatcherChanges(addedFiles, changedFiles, deleted);
     }
 
     private void ProcessWatcherChanges(
@@ -245,7 +315,9 @@ public partial class MainWindow
 
         if (deletedPaths.Count > 0)
         {
-            _ = Task.Run(() => MetadataIndex.DeletePaths(deletedPaths));
+            DebugLog.Observe(
+                Task.Run(() => MetadataIndex.DeletePaths(deletedPaths)),
+                "MetadataIndex.DeletePaths");
             var deletedSet = new HashSet<string>(deletedPaths, StringComparer.OrdinalIgnoreCase);
             var pathCount = _allImagePaths.RemoveAll(path => deletedSet.Contains(path));
             foreach (var path in deletedSet)
@@ -358,80 +430,14 @@ public partial class MainWindow
         {
             if (itemsToScan.Count > 0)
             {
-                ScanNewItemsMetadata(itemsToScan);
+                _metadataScanner.ScanAdded(
+                    itemsToScan,
+                    HasSearchQueryActive,
+                    () => ApplyFilter(resetScroll: false));
             }
 
             ApplyFilter(resetScroll: false);
         }
     }
 
-    private void ScanNewItemsMetadata(List<ImageItem> newItems)
-    {
-        var token = _scannerCancellation?.Token ?? CancellationToken.None;
-        var scannerGeneration = _scannerGeneration;
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                var lastRefreshTime = DateTime.UtcNow;
-                var refreshLock = new object();
-
-                await Parallel.ForEachAsync(newItems, new ParallelOptions
-                {
-                    MaxDegreeOfParallelism = MetadataScannerMaxDegreeOfParallelism,
-                    CancellationToken = token
-                },
-                async (item, cancellationToken) =>
-                {
-                    try
-                    {
-                        await item.EnsureMetadataLoadedAsync(cancellationToken);
-                        if (HasSearchQueryActive())
-                        {
-                            var now = DateTime.UtcNow;
-                            var shouldRefresh = false;
-                            lock (refreshLock)
-                            {
-                                if (now - lastRefreshTime > MetadataScannerSearchRefreshInterval)
-                                {
-                                    lastRefreshTime = now;
-                                    shouldRefresh = true;
-                                }
-                            }
-
-                            if (shouldRefresh)
-                            {
-                                Dispatcher.UIThread.Post(() =>
-                                {
-                                    if (!token.IsCancellationRequested && scannerGeneration == _scannerGeneration)
-                                    {
-                                        ApplyFilter(resetScroll: false);
-                                    }
-                                });
-                            }
-                        }
-                    }
-                    catch (OperationCanceledException) {}
-                    catch (Exception ex)
-                    {
-                        DebugLog.Write($"Failed to scan metadata for watcher-added file {item.Path}: {ex}");
-                    }
-                });
-
-                if (HasSearchQueryActive())
-                {
-                    Dispatcher.UIThread.Post(() =>
-                    {
-                        if (!token.IsCancellationRequested && scannerGeneration == _scannerGeneration)
-                        {
-                            ApplyFilter(resetScroll: false);
-                        }
-                    });
-                }
-            }
-            catch (OperationCanceledException)
-            {
-            }
-        });
-    }
 }

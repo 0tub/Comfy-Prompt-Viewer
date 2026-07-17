@@ -66,6 +66,21 @@ public static class DebugLog
         Write($"{source}{Environment.NewLine}LastScroll: {scrollState}{Environment.NewLine}{exception}");
     }
 
+    public static async void Observe(Task task, string source)
+    {
+        try
+        {
+            await task;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            WriteException(source, ex);
+        }
+    }
+
     public static void SetScrollState(double offsetY, double viewportHeight, double extentHeight, int itemCount, double tileExtent)
     {
         _lastScrollOffsetY = offsetY;

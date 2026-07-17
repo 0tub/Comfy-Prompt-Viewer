@@ -113,6 +113,7 @@ public sealed class ImageItem : INotifyPropertyChanged
     private static readonly HashSet<string> PendingThumbnailCacheWrites = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Queue<DeferredThumbnailCacheWrite> DeferredThumbnailCacheWrites = new();
     private static Func<bool>? DeferredThumbnailCacheWritesPaused;
+    private static bool ThumbnailCacheMaintenancePaused;
 
     private Bitmap? _preview;
     private Bitmap? _selectedPreview;
@@ -704,6 +705,11 @@ public sealed class ImageItem : INotifyPropertyChanged
 
         lock (PendingThumbnailCacheWritesLock)
         {
+            if (ThumbnailCacheMaintenancePaused)
+            {
+                return false;
+            }
+
             if (!PendingThumbnailCacheWrites.Add(cachePath))
             {
                 return false;
@@ -772,8 +778,41 @@ public sealed class ImageItem : INotifyPropertyChanged
         }
     }
 
+    internal static async Task PauseAndDrainThumbnailCacheWritesAsync()
+    {
+        lock (PendingThumbnailCacheWritesLock)
+        {
+            ThumbnailCacheMaintenancePaused = true;
+            while (DeferredThumbnailCacheWrites.TryDequeue(out var write))
+            {
+                PendingThumbnailCacheWrites.Remove(write.CachePath);
+            }
+        }
+
+        await ThumbnailCacheWriteLimiter.WaitAsync();
+        ThumbnailCacheWriteLimiter.Release();
+    }
+
+    internal static void ResumeThumbnailCacheWrites()
+    {
+        lock (PendingThumbnailCacheWritesLock)
+        {
+            ThumbnailCacheMaintenancePaused = false;
+        }
+
+        StartDeferredThumbnailCacheWriter();
+    }
+
     private static void StartDeferredThumbnailCacheWriter()
     {
+        lock (PendingThumbnailCacheWritesLock)
+        {
+            if (ThumbnailCacheMaintenancePaused)
+            {
+                return;
+            }
+        }
+
         if (ShouldPauseDeferredThumbnailCacheWrites())
         {
             return;
@@ -790,7 +829,7 @@ public sealed class ImageItem : INotifyPropertyChanged
             return;
         }
 
-        _ = Task.Run(() =>
+        DebugLog.Observe(Task.Run(() =>
         {
             try
             {
@@ -811,7 +850,7 @@ public sealed class ImageItem : INotifyPropertyChanged
             {
                 EndThumbnailCacheWrite(write.CachePath);
             }
-        });
+        }), "Deferred thumbnail cache writer");
     }
 
     private static bool ShouldPauseDeferredThumbnailCacheWrites()
@@ -927,7 +966,7 @@ public sealed class ImageItem : INotifyPropertyChanged
         return targetWidth <= MediumThumbnailWidth ? MediumThumbnailWidth : LargeThumbnailWidth;
     }
 
-    private void InvalidateThumbnailCacheState()
+    internal void InvalidateThumbnailCacheState()
     {
         lock (_thumbnailCacheStateLock)
         {

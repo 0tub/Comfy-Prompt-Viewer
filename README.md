@@ -67,19 +67,6 @@ After a Debug build, run the built-in self-check:
 dotnet src\ComfyPromptViewer\bin\Debug\net9.0\ComfyPromptViewer.dll --self-check
 ```
 
-## Project Structure
-
-- [src/ComfyPromptViewer/MainWindow.axaml](src/ComfyPromptViewer/MainWindow.axaml) - Main UI layout and sidebar details.
-- [src/ComfyPromptViewer/MainWindow.axaml.cs](src/ComfyPromptViewer/MainWindow.axaml.cs) - Window initialization, folder loading, sorting, gallery/search/sidebar/menu coordination, and menu/toolbar interactions.
-- [src/ComfyPromptViewer/MainWindow.Watcher.cs](src/ComfyPromptViewer/MainWindow.Watcher.cs) - Active-folder auto-refresh with `FileSystemWatcher`, write-aware event batching, debounce dispatch, and overflow recovery.
-- [src/ComfyPromptViewer/MainWindow.Autoscroll.cs](src/ComfyPromptViewer/MainWindow.Autoscroll.cs) - Middle-click autoscroll loop, velocity smoothing, and pointer capture handlers.
-- [src/ComfyPromptViewer/MainWindow.Preview.cs](src/ComfyPromptViewer/MainWindow.Preview.cs) - Large preview overlay, zoom calculations, pan clamping, and canvas input handlers.
-- [src/ComfyPromptViewer/PromptExtractor.cs](src/ComfyPromptViewer/PromptExtractor.cs) - Metadata parsing logic for ComfyUI.
-- [src/ComfyPromptViewer/MetadataIndex.cs](src/ComfyPromptViewer/MetadataIndex.cs) - LiteDB-backed app-local metadata cache.
-- [src/ComfyPromptViewer/ImageFileReader.cs](src/ComfyPromptViewer/ImageFileReader.cs) - Low-allocation image header and size reader.
-- [src/ComfyPromptViewer/ThumbnailLoadCoordinator.cs](src/ComfyPromptViewer/ThumbnailLoadCoordinator.cs) - Viewport-aware thumbnail loading scheduling.
-- [src/ComfyPromptViewer/ImageCache.cs](src/ComfyPromptViewer/ImageCache.cs) - LRU cache for decoded bitmap memory.
-
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
