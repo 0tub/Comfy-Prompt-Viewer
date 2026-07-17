@@ -171,7 +171,33 @@ public partial class MainWindow
             sender is Control control && control.DataContext is ImageItem item)
         {
             var scrollOffset = GalleryScrollViewer.Offset.Y;
-            SelectItem(item);
+            var hasSelectionModifier = (e.KeyModifiers & (KeyModifiers.Control | KeyModifiers.Shift)) != 0;
+            if (e.ClickCount >= 2)
+            {
+                if (hasSelectionModifier)
+                {
+                    AddSelectedItem(item);
+                    SetActiveItem(item);
+                    UpdateCountText();
+                }
+                else
+                {
+                    SelectItem(item);
+                }
+            }
+            else if ((e.KeyModifiers & KeyModifiers.Shift) != 0)
+            {
+                SelectRange(item);
+            }
+            else if ((e.KeyModifiers & KeyModifiers.Control) != 0)
+            {
+                ToggleSelectedItem(item);
+            }
+            else
+            {
+                SelectItem(item);
+            }
+
             var index = _viewModel.Items.IndexOf(item);
             if (index >= 0)
             {
@@ -191,11 +217,54 @@ public partial class MainWindow
                     QueueGalleryScrollRestore(scrollOffset);
                 }
             }
-            if (e.ClickCount >= 2)
+            if (e.ClickCount >= 2 && !hasSelectionModifier)
             {
                 ShowLargePreview();
             }
         }
+    }
+
+    private void ToggleSelectedItem(ImageItem item)
+    {
+        _selectionAnchor = item;
+        if (_selectedItems.Contains(item))
+        {
+            RemoveSelectedItem(item);
+            if (_selectedItem == item)
+            {
+                SetActiveItem(_viewModel.Items.FirstOrDefault(_selectedItems.Contains));
+            }
+        }
+        else
+        {
+            AddSelectedItem(item);
+            SetActiveItem(item);
+        }
+
+        UpdateCountText();
+    }
+
+    private void SelectRange(ImageItem item)
+    {
+        var anchorIndex = _selectionAnchor is null ? -1 : _viewModel.Items.IndexOf(_selectionAnchor);
+        var itemIndex = _viewModel.Items.IndexOf(item);
+        if (anchorIndex < 0 || itemIndex < 0)
+        {
+            SelectItem(item);
+            return;
+        }
+
+        ClearSelectedItems();
+
+        var start = Math.Min(anchorIndex, itemIndex);
+        var end = Math.Max(anchorIndex, itemIndex);
+        for (var index = start; index <= end; index++)
+        {
+            AddSelectedItem(_viewModel.Items[index]);
+        }
+
+        SetActiveItem(item);
+        UpdateCountText();
     }
 
     private void GalleryItem_KeyDown(object? sender, KeyEventArgs e)
@@ -253,6 +322,18 @@ public partial class MainWindow
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
+        if (DeleteConfirmationOverlay.IsVisible)
+        {
+            if (e.Key == Key.Escape)
+            {
+                CompleteDeleteConfirmation(false);
+                e.Handled = true;
+            }
+
+            base.OnKeyDown(e);
+            return;
+        }
+
         if (LargePreviewOverlay.IsVisible)
         {
             if (e.Key is Key.Escape or Key.Enter or Key.Space)
@@ -738,25 +819,28 @@ public partial class MainWindow
         }
         else
         {
-            if (total == filtered)
-            {
-                CountText.Text = $"{total:n0} images";
-            }
-            else
-            {
-                CountText.Text = $"{filtered:n0} of {total} images";
-            }
+            CountText.Text = total == filtered
+                ? $"{total:n0} images"
+                : $"{filtered:n0} of {total} images";
+        }
+
+        if (_selectedItems.Count > 1)
+        {
+            CountText.Text += $" | {_selectedItems.Count:n0} selected";
         }
 
         Dispatcher.UIThread.Post(() => {
             CountText.Opacity = 1.0;
         }, DispatcherPriority.Render);
     }
+
     private void ClearImageItems()
     {
         _metadataCountUpdateTimer?.Stop();
         GalleryEmptyState.IsVisible = false;
         GalleryEmptyState.Opacity = 0;
+        ClearSelectedItems();
+        _selectionAnchor = null;
 
         foreach (var item in _allImageItems)
         {

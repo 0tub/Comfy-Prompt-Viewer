@@ -14,6 +14,7 @@ It supports images from ComfyUI, Forge Neo, Draw Things, and Stable Diffusion We
 - Copy positive and expanded negative prompts from dedicated sidebar buttons; very long positive prompts collapse behind a fade and can be expanded.
 - Open a zoomable, pannable preview and move between images without closing it.
 - Right-click gallery cards or the large preview to copy prompts, negative prompts, or image paths; open the file location; or delete the image.
+- Multi-select cards to copy their positive prompts together or delete them as one confirmed batch.
 - Sort by date or filename, switch color themes, and quickly reopen recent folders.
 - Watch the active folder for created, modified, renamed, or removed images.
 - Cache thumbnails and parsed metadata locally for faster repeat browsing.
@@ -35,6 +36,7 @@ portrait cinematic -watermark
 ## Keyboard and Mouse Controls
 
 - Arrow keys, `Home`, and `End`: navigate the gallery or large preview.
+- `Ctrl+click`: toggle a card in the selection; `Shift+click`: select a range.
 - `Space`, `Enter`, or double-click: open the selected image preview.
 - `Esc`, `Space`, or `Enter`: close the large preview.
 - Mouse wheel: scroll the gallery; zoom the large preview.

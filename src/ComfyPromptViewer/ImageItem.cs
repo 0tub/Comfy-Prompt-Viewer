@@ -133,6 +133,7 @@ public sealed class ImageItem : INotifyPropertyChanged
     private bool _thumbnailCacheExists;
     private bool _hasThumbnailCacheState;
     private bool _isSelected;
+    private bool _isMarkedSelected;
     private bool _hasLoadedMetadata;
     private readonly object _metadataLoadLock = new();
     private Task? _metadataLoadTask;
@@ -338,6 +339,12 @@ public sealed class ImageItem : INotifyPropertyChanged
         {
             SetField(ref _isSelected, value);
         }
+    }
+
+    public bool IsMarkedSelected
+    {
+        get => _isMarkedSelected;
+        set => SetField(ref _isMarkedSelected, value);
     }
 
     public string DimensionsText => _width > 0 && _height > 0 ? $"{_width} x {_height}" : "Unknown size";

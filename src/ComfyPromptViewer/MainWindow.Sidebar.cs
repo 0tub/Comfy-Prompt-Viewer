@@ -15,6 +15,19 @@ public partial class MainWindow
 {
     private void SelectItem(ImageItem? item)
     {
+        ClearSelectedItems();
+        if (item is not null)
+        {
+            AddSelectedItem(item);
+        }
+
+        _selectionAnchor = item;
+        SetActiveItem(item);
+        UpdateCountText();
+    }
+
+    private void SetActiveItem(ImageItem? item)
+    {
         if (_selectedItem == item)
         {
             return;
@@ -75,6 +88,32 @@ public partial class MainWindow
         {
             UpdateLargePreview(resetZoom: true);
         }
+    }
+
+    private void AddSelectedItem(ImageItem item)
+    {
+        if (_selectedItems.Add(item))
+        {
+            item.IsMarkedSelected = true;
+        }
+    }
+
+    private void RemoveSelectedItem(ImageItem item)
+    {
+        if (_selectedItems.Remove(item))
+        {
+            item.IsMarkedSelected = false;
+        }
+    }
+
+    private void ClearSelectedItems()
+    {
+        foreach (var selectedItem in _selectedItems)
+        {
+            selectedItem.IsMarkedSelected = false;
+        }
+
+        _selectedItems.Clear();
     }
 
     private void FadeInSidebarContent()
@@ -437,14 +476,29 @@ public partial class MainWindow
             return;
         }
 
-        SelectItem(item);
+        ImageItem[] actionItems;
+        if (_selectedItems.Contains(item))
+        {
+            actionItems = _allImageItems.Where(_selectedItems.Contains).ToArray();
+            SetActiveItem(item);
+        }
+        else
+        {
+            SelectItem(item);
+            actionItems = [item];
+        }
+
         switch (action)
         {
             case "open":
                 OpenInExplorer(item.Path);
                 break;
             case "prompt":
-                if (item.HasPrompt && await CopyTextAsync(item.Prompt))
+                var prompts = actionItems
+                    .Where(selectedItem => selectedItem.HasPrompt)
+                    .Select(selectedItem => selectedItem.Prompt);
+                var promptText = string.Join(Environment.NewLine + Environment.NewLine, prompts);
+                if (!string.IsNullOrEmpty(promptText) && await CopyTextAsync(promptText))
                 {
                     ShowCopiedToast(SidebarPrompt);
                 }
@@ -460,36 +514,118 @@ public partial class MainWindow
                 break;
             case "delete":
                 HideLargePreview();
-                DeleteImage(item);
+                if (actionItems.Length == 1 || await ConfirmBulkDeleteAsync(actionItems.Length))
+                {
+                    DeleteImages(actionItems);
+                }
                 break;
         }
     }
 
-    private void DeleteImage(ImageItem item)
+    private void ImageContextMenu_Opened(object? sender, RoutedEventArgs e)
     {
-        try
+        if (sender is not ContextMenu contextMenu ||
+            (contextMenu.DataContext as ImageItem ?? _selectedItem) is not { } item)
         {
-            var path = item.Path;
-            if (File.Exists(path))
-            {
-                if (OperatingSystem.IsWindows())
-                {
-                    Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(
-                        path,
-                        Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
-                        Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
-                }
-                else
-                {
-                    File.Delete(path);
-                }
-            }
-
-            ProcessWatcherChanges([], [], [path]);
+            return;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+
+        var selectedCount = _selectedItems.Contains(item) ? _selectedItems.Count : 1;
+        foreach (var menuItem in contextMenu.Items.OfType<MenuItem>())
         {
-            CountText.Text = $"Could not delete image: {ex.Message}";
+            switch (menuItem.Tag)
+            {
+                case "open":
+                case "negative":
+                case "path":
+                    menuItem.IsVisible = selectedCount == 1;
+                    break;
+                case "prompt":
+                    menuItem.Header = selectedCount > 1 ? "Copy Selected Prompts" : "Copy Prompt";
+                    menuItem.IsEnabled = selectedCount > 1
+                        ? _selectedItems.Any(selectedItem => selectedItem.HasPrompt)
+                        : item.HasPrompt;
+                    break;
+                case "delete":
+                    menuItem.Header = selectedCount > 1 ? $"Delete {selectedCount:n0} Images" : "Delete Image";
+                    break;
+            }
+        }
+    }
+
+    private async Task<bool> ConfirmBulkDeleteAsync(int count)
+    {
+        CompleteDeleteConfirmation(false);
+        _deleteConfirmationCompletion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        DeleteConfirmationTitle.Text = $"Delete {count:n0} images?";
+        DeleteConfirmationText.Text = OperatingSystem.IsWindows()
+            ? "The selected images will be moved to the Recycle Bin."
+            : "The selected images will be permanently deleted.";
+        DeleteConfirmationOverlay.IsVisible = true;
+        Dispatcher.UIThread.Post(() => ConfirmDeleteButton.Focus(), DispatcherPriority.Input);
+        return await _deleteConfirmationCompletion.Task;
+    }
+
+    private void DeleteConfirmationButton_Click(object? sender, RoutedEventArgs e)
+    {
+        CompleteDeleteConfirmation(sender is Button { Tag: "delete" });
+    }
+
+    private void CompleteDeleteConfirmation(bool confirmed)
+    {
+        if (_deleteConfirmationCompletion is not { } completion)
+        {
+            return;
+        }
+
+        _deleteConfirmationCompletion = null;
+        DeleteConfirmationOverlay.IsVisible = false;
+        completion.TrySetResult(confirmed);
+    }
+
+    private void DeleteImages(ImageItem[] items)
+    {
+        var deletedPaths = new System.Collections.Generic.List<string>(items.Length);
+        var failedCount = 0;
+        foreach (var item in items)
+        {
+            try
+            {
+                var path = item.Path;
+                if (File.Exists(path))
+                {
+                    if (OperatingSystem.IsWindows())
+                    {
+                        Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(
+                            path,
+                            Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
+                            Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+                    }
+                    else
+                    {
+                        File.Delete(path);
+                    }
+                }
+
+                deletedPaths.Add(path);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+            {
+                failedCount++;
+                DebugLog.Write($"Could not delete image '{item.Path}': {ex.Message}");
+            }
+        }
+
+        if (deletedPaths.Count > 0)
+        {
+            ProcessWatcherChanges([], [], deletedPaths);
+        }
+
+        if (failedCount > 0)
+        {
+            CountText.Text = failedCount == 1
+                ? "Could not delete 1 image"
+                : $"Could not delete {failedCount:n0} images";
         }
     }
 

@@ -70,6 +70,19 @@
             <Setter Property="Background" Value="{DynamicResource SurfaceInput}" />
             <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
         </Style>
+        <Style Selector="Button.danger-action">
+            <Setter Property="Background" Value="{DynamicResource DangerSurface}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource DangerBorder}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="{DynamicResource DangerText}" />
+            <Setter Property="CornerRadius" Value="3" />
+            <Setter Property="Padding" Value="12,8" />
+        </Style>
+        <Style Selector="Button.danger-action:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource DangerBorder}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderAccent}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+        </Style>
 
         <Style Selector="Button.preview-nav-btn">
             <Setter Property="Width" Value="52" />
@@ -634,7 +647,7 @@
                                             <Separator Background="{DynamicResource BorderSubtle}" Height="1" Margin="0,2" />
                                             
                                             <Grid ColumnDefinitions="Auto,*"
-                                                  RowDefinitions="Auto,Auto,Auto,Auto,Auto"
+                                                  RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto"
                                                   ColumnSpacing="20"
                                                   RowSpacing="6">
                                                 <!-- Row 0: Navigation -->
@@ -656,6 +669,12 @@
                                                 <!-- Row 4: Mouse Scroll (zooming) -->
                                                 <TextBlock Grid.Row="4" Grid.Column="0" Text="Zoom / Pan preview" Foreground="{DynamicResource TextSecondary}" FontSize="12" VerticalAlignment="Center" />
                                                 <TextBlock Grid.Row="4" Grid.Column="1" Text="Wheel / Drag" Foreground="{DynamicResource TextPrimary}" FontWeight="Medium" FontFamily="{DynamicResource FontMono}" FontSize="11" VerticalAlignment="Center" />
+
+                                                <TextBlock Grid.Row="5" Grid.Column="0" Text="Toggle selection" Foreground="{DynamicResource TextSecondary}" FontSize="12" VerticalAlignment="Center" />
+                                                <TextBlock Grid.Row="5" Grid.Column="1" Text="Ctrl + Click" Foreground="{DynamicResource TextPrimary}" FontWeight="Medium" FontFamily="{DynamicResource FontMono}" FontSize="11" VerticalAlignment="Center" />
+
+                                                <TextBlock Grid.Row="6" Grid.Column="0" Text="Select range" Foreground="{DynamicResource TextSecondary}" FontSize="12" VerticalAlignment="Center" />
+                                                <TextBlock Grid.Row="6" Grid.Column="1" Text="Shift + Click" Foreground="{DynamicResource TextPrimary}" FontWeight="Medium" FontFamily="{DynamicResource FontMono}" FontSize="11" VerticalAlignment="Center" />
                                             </Grid>
                                         </StackPanel>
                                     </Border>
@@ -843,7 +862,7 @@
                         <ir:ItemsRepeater.ItemTemplate>
                             <DataTemplate x:DataType="local:ImageItem">
                                 <Border Classes="card"
-                                        Classes.selected="{Binding IsSelected}"
+                                        Classes.selected="{Binding IsMarkedSelected}"
                                         Width="{DynamicResource GalleryTileSize}"
                                         Height="{DynamicResource GalleryTileSize}"
                                         Padding="6"
@@ -856,7 +875,7 @@
                                          AutomationProperties.Name="{Binding FileName, Mode=OneTime}"
                                          Focusable="True">
                                     <Border.ContextMenu>
-                                        <ContextMenu>
+                                        <ContextMenu Opened="ImageContextMenu_Opened">
                                             <MenuItem Header="Open in File Explorer" Tag="open" Click="ImageContextMenuItem_Click" />
                                             <MenuItem Header="Copy Prompt" Tag="prompt" Click="ImageContextMenuItem_Click" IsEnabled="{Binding HasPrompt}" />
                                             <MenuItem Header="Copy Negative Prompt" Tag="negative" Click="ImageContextMenuItem_Click" IsEnabled="{Binding HasNegativePrompt}" />
@@ -1609,7 +1628,7 @@
                                     PointerReleased="LargePreviewCanvas_PointerReleased"
                                     PointerCaptureLost="LargePreviewCanvas_PointerCaptureLost">
                                 <Canvas.ContextMenu>
-                                    <ContextMenu>
+                                    <ContextMenu Opened="ImageContextMenu_Opened">
                                         <MenuItem Header="Open in File Explorer" Tag="open" Click="ImageContextMenuItem_Click" />
                                         <MenuItem Header="Copy Prompt" Tag="prompt" Click="ImageContextMenuItem_Click" />
                                         <MenuItem Name="PreviewCopyNegativePromptMenuItem" Header="Copy Negative Prompt" Tag="negative" Click="ImageContextMenuItem_Click" />
@@ -1639,6 +1658,54 @@
                                     Click="PreviewNavigationButton_Click" />
                         </Grid>
                     </Border>
+                </Grid>
+            </Border>
+        </Border>
+
+        <Border Name="DeleteConfirmationOverlay"
+                Grid.ColumnSpan="2"
+                IsVisible="False"
+                Background="{DynamicResource LargePreviewOverlayBackground}">
+            <Border Width="390"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Background="{DynamicResource SurfaceCard}"
+                    BorderBrush="{DynamicResource BorderSubtle}"
+                    BorderThickness="1"
+                    CornerRadius="3"
+                    BoxShadow="0 8 24 0 #60000000"
+                    ClipToBounds="True">
+                <Grid RowDefinitions="Auto,Auto">
+                    <Border Grid.Row="0"
+                            Padding="16,12"
+                            Background="{DynamicResource SurfaceElevated}"
+                            BorderBrush="{DynamicResource BorderSubtle}"
+                            BorderThickness="0,0,0,1">
+                        <TextBlock Name="DeleteConfirmationTitle"
+                                   Foreground="{DynamicResource TextPrimary}"
+                                   FontSize="15"
+                                   FontWeight="SemiBold" />
+                    </Border>
+                    <StackPanel Grid.Row="1" Margin="16" Spacing="14">
+                        <TextBlock Name="DeleteConfirmationText"
+                                   Foreground="{DynamicResource TextSecondary}"
+                                   FontSize="12"
+                                   LineHeight="18"
+                                   TextWrapping="Wrap" />
+                        <StackPanel Orientation="Horizontal"
+                                    HorizontalAlignment="Right"
+                                    Spacing="8">
+                            <Button Content="Cancel"
+                                    Classes="secondary-action"
+                                    Tag="cancel"
+                                    Click="DeleteConfirmationButton_Click" />
+                            <Button Name="ConfirmDeleteButton"
+                                    Content="Delete"
+                                    Classes="danger-action"
+                                    Tag="delete"
+                                    Click="DeleteConfirmationButton_Click" />
+                        </StackPanel>
+                    </StackPanel>
                 </Grid>
             </Border>
         </Border>

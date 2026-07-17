@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Threading;
@@ -339,10 +340,16 @@ public partial class MainWindow
 
                 _allImageItems.RemoveAt(index);
                 item.MetadataLoaded -= ImageItem_MetadataLoaded;
+                RemoveSelectedItem(item);
+                if (_selectionAnchor == item)
+                {
+                    _selectionAnchor = null;
+                }
 
                 if (_selectedItem == item)
                 {
-                    SelectItem(null);
+                    SetActiveItem(_viewModel.Items.FirstOrDefault(candidate =>
+                        _selectedItems.Contains(candidate) && !deletedSet.Contains(candidate.Path)));
                 }
             }
         }
@@ -377,9 +384,18 @@ public partial class MainWindow
                 _imageLastWriteTimes[imageFile.Path] = imageFile.LastWriteTimeUtc;
                 previousItem.MetadataLoaded -= ImageItem_MetadataLoaded;
                 previousItem.ReleasePreview();
+                if (_selectedItems.Contains(previousItem))
+                {
+                    RemoveSelectedItem(previousItem);
+                    AddSelectedItem(replacementItem);
+                }
+                if (_selectionAnchor == previousItem)
+                {
+                    _selectionAnchor = replacementItem;
+                }
                 if (_selectedItem == previousItem)
                 {
-                    SelectItem(replacementItem);
+                    SetActiveItem(replacementItem);
                 }
 
                 itemsToScan.Add(replacementItem);

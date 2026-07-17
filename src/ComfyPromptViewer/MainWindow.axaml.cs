@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading;
+using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -39,6 +40,7 @@ public partial class MainWindow : Window
     private readonly FolderLoadCoordinator _folderLoader = new();
     private readonly List<string> _allImagePaths = [];
     private readonly List<ImageItem> _allImageItems = [];
+    private readonly HashSet<ImageItem> _selectedItems = [];
     private readonly Dictionary<string, DateTime> _imageLastWriteTimes = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<ImageItem> _visibleThumbnailScheduleItems = [];
     private readonly List<ImageItem> _aheadThumbnailScheduleItems = [];
@@ -47,6 +49,8 @@ public partial class MainWindow : Window
     private DispatcherTimer? _metadataCountUpdateTimer;
     private DispatcherTimer? _tileSizeSaveTimer;
     private ImageItem? _selectedItem;
+    private ImageItem? _selectionAnchor;
+    private TaskCompletionSource<bool>? _deleteConfirmationCompletion;
     private ImageItem? _queuedSelectedItemRefresh;
     private SortMode _sortMode = SortMode.NewestFirst;
     private ThemeMode _themeMode = UserPreferences.LoadThemeMode();
@@ -139,6 +143,7 @@ public partial class MainWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
+        CompleteDeleteConfirmation(false);
         _scrollMonitorTimer?.Stop();
         _isFastScrollingStatic = false;
         _lastFastScrollScheduleTime = 0;
