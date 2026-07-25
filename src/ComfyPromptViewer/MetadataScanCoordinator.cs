@@ -13,11 +13,10 @@ internal sealed class MetadataScanCoordinator
     private const int WarmLoadBatchSize = 256;
     private const int ColdUiBatchSize = 64;
     private static readonly TimeSpan SearchRefreshInterval = TimeSpan.FromSeconds(1);
-    private readonly object _stateLock = new();
+    // Scanner staleness is one SessionGate; see Staleness.cs. Do not add a second counter here.
+    private readonly SessionGate _gate = new();
     private readonly MetadataRepository _metadataRepository;
     private readonly IUiScheduler _uiScheduler;
-    private CancellationTokenSource? _cancellation;
-    private int _generation;
 
     public MetadataScanCoordinator(
         MetadataRepository metadataRepository,
@@ -27,53 +26,28 @@ internal sealed class MetadataScanCoordinator
         _uiScheduler = uiScheduler;
     }
 
-    public bool HasActiveSession
-    {
-        get
-        {
-            lock (_stateLock)
-            {
-                return _cancellation is { IsCancellationRequested: false };
-            }
-        }
-    }
+    public bool HasActiveSession => _gate.IsActive;
 
     public void Cancel()
     {
-        CancellationTokenSource? cancellation;
-        lock (_stateLock)
-        {
-            cancellation = _cancellation;
-            _cancellation = null;
-            _generation++;
-        }
-
-        if (cancellation is null)
-        {
-            return;
-        }
-
-        try
-        {
-            cancellation.Cancel();
-        }
-        catch (ObjectDisposedException)
-        {
-        }
-        cancellation.Dispose();
+        _gate.Cancel();
     }
 
-    public void Start(IReadOnlyList<ImageItem> items, Func<bool> hasSearchQuery, Action applyFilter)
+    public void Start(
+        IReadOnlyList<ImageItem> items,
+        Func<bool> hasSearchQuery,
+        Action applyFilter,
+        Action? onCompleted = null)
     {
-        var session = Restart();
+        var session = _gate.Restart();
         DebugLog.Observe(Task.Run(
-            () => ScanInitialAsync(items.ToList(), session, hasSearchQuery, applyFilter)),
+            () => ScanInitialAsync(items.ToList(), session, hasSearchQuery, applyFilter, onCompleted)),
             "Initial metadata scanner");
     }
 
     public void ScanAdded(List<ImageItem> items, Func<bool> hasSearchQuery, Action applyFilter)
     {
-        var session = Snapshot();
+        var session = _gate.Snapshot();
         DebugLog.Observe(Task.Run(
             () => ScanAddedAsync(items, session, hasSearchQuery, applyFilter)),
             "Watcher metadata scanner");
@@ -81,9 +55,10 @@ internal sealed class MetadataScanCoordinator
 
     private async Task ScanInitialAsync(
         List<ImageItem> items,
-        ScanSession session,
+        Session session,
         Func<bool> hasSearchQuery,
-        Action applyFilter)
+        Action applyFilter,
+        Action? onCompleted)
     {
         try
         {
@@ -100,13 +75,14 @@ internal sealed class MetadataScanCoordinator
                 hasSearchQuery,
                 applyFilter);
 
-            if (IsCurrent(session))
+            if (session.IsCurrent)
             {
                 await _uiScheduler.InvokeAsync(() =>
                 {
-                    if (IsCurrent(session))
+                    if (session.IsCurrent)
                     {
                         applyFilter();
+                        onCompleted?.Invoke();
                     }
                 });
             }
@@ -118,7 +94,7 @@ internal sealed class MetadataScanCoordinator
 
     private async Task<bool> ApplyWarmEntriesAsync(
         List<ImageItem> items,
-        ScanSession session,
+        Session session,
         Func<bool> hasSearchQuery,
         Action applyFilter)
     {
@@ -136,7 +112,7 @@ internal sealed class MetadataScanCoordinator
                 var batchStart = uiStart;
                 await _uiScheduler.InvokeBackgroundAsync(() =>
                 {
-                    if (!IsCurrent(session))
+                    if (!session.IsCurrent)
                     {
                         return;
                     }
@@ -152,7 +128,7 @@ internal sealed class MetadataScanCoordinator
                     }
                 });
 
-                if (!IsCurrent(session))
+                if (!session.IsCurrent)
                 {
                     return false;
                 }
@@ -161,17 +137,17 @@ internal sealed class MetadataScanCoordinator
 
         await _uiScheduler.InvokeBackgroundAsync(() =>
         {
-            if (IsCurrent(session) && hasSearchQuery())
+            if (session.IsCurrent && hasSearchQuery())
             {
                 applyFilter();
             }
         });
-        return IsCurrent(session);
+        return session.IsCurrent;
     }
 
     private async Task ScanAddedAsync(
         List<ImageItem> items,
-        ScanSession session,
+        Session session,
         Func<bool> hasSearchQuery,
         Action applyFilter)
     {
@@ -188,7 +164,7 @@ internal sealed class MetadataScanCoordinator
             {
                 _uiScheduler.Post(() =>
                 {
-                    if (IsCurrent(session))
+                    if (session.IsCurrent)
                     {
                         applyFilter();
                     }
@@ -202,7 +178,7 @@ internal sealed class MetadataScanCoordinator
 
     private async Task ScanItemsAsync(
         List<ImageItem> items,
-        ScanSession session,
+        Session session,
         bool skipCacheLookup,
         Func<bool> hasSearchQuery,
         Action applyFilter)
@@ -246,7 +222,7 @@ internal sealed class MetadataScanCoordinator
                     {
                         _uiScheduler.Post(() =>
                         {
-                            if (IsCurrent(session))
+                            if (session.IsCurrent)
                             {
                                 applyFilter();
                             }
@@ -271,9 +247,9 @@ internal sealed class MetadataScanCoordinator
         await ApplyColdBatchAsync(finalBatch, session);
     }
 
-    private async Task ApplyColdBatchAsync(List<PendingMetadataResult> batch, ScanSession session)
+    private async Task ApplyColdBatchAsync(List<PendingMetadataResult> batch, Session session)
     {
-        if (batch.Count == 0 || !IsCurrent(session))
+        if (batch.Count == 0 || !session.IsCurrent)
         {
             return;
         }
@@ -290,7 +266,7 @@ internal sealed class MetadataScanCoordinator
 
         await _uiScheduler.InvokeBackgroundAsync(() =>
         {
-            if (!IsCurrent(session))
+            if (!session.IsCurrent)
             {
                 return;
             }
@@ -300,32 +276,6 @@ internal sealed class MetadataScanCoordinator
                 pending.Item.ApplyMetadataResult(pending.Result);
             }
         });
-    }
-
-    private bool IsCurrent(ScanSession session)
-    {
-        lock (_stateLock)
-        {
-            return session.Generation == _generation && !session.Token.IsCancellationRequested;
-        }
-    }
-
-    private ScanSession Restart()
-    {
-        Cancel();
-        lock (_stateLock)
-        {
-            _cancellation = new CancellationTokenSource();
-            return new ScanSession(_cancellation.Token, ++_generation);
-        }
-    }
-
-    private ScanSession Snapshot()
-    {
-        lock (_stateLock)
-        {
-            return new ScanSession(_cancellation?.Token ?? CancellationToken.None, _generation);
-        }
     }
 
     private static bool TryClaimRefresh(ref DateTime lastRefreshTime, object refreshLock)
@@ -343,6 +293,5 @@ internal sealed class MetadataScanCoordinator
         }
     }
 
-    private readonly record struct ScanSession(CancellationToken Token, int Generation);
     private readonly record struct PendingMetadataResult(ImageItem Item, MetadataLoadResult Result);
 }

@@ -52,26 +52,6 @@ public static class SearchEngine
             : text.Contains(term.Text, StringComparison.OrdinalIgnoreCase);
     }
 
-    public static bool IsMatch(string firstText, string secondText, SearchTerm term)
-    {
-        return IsMatch(firstText, term) || IsMatch(secondText, term);
-    }
-
-    public static bool IsSeparatorInsensitiveMatch(string text, SearchTerm term)
-    {
-        if (IsMatch(text, term))
-        {
-            return true;
-        }
-
-        var normalizedText = NormalizeSeparators(text);
-        var normalizedTerm = term.NormalizedText;
-        return (!string.Equals(normalizedText, text, StringComparison.Ordinal) ||
-                !string.Equals(normalizedTerm, term.Text, StringComparison.Ordinal))
-            ? IsMatch(normalizedText, term with { Text = normalizedTerm })
-            : false;
-    }
-
     private static bool IsExactMatch(string text, string term)
     {
         if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(term))

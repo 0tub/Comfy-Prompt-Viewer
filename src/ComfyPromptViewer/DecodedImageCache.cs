@@ -17,6 +17,10 @@ internal sealed class DecodedImageCache
     internal const int MaxCapacity = 512;
     internal const long MaxEstimatedBytes = 64L * 1024 * 1024;
 
+    // Touch adds at most one item, so a small scan keeps eviction ahead of growth. Unbounded, a cache of
+    // all-protected visible tiles walks the whole list, frees nothing, and repeats per tile per scroll.
+    internal const int MaxEvictionScanPerTouch = 16;
+
     internal static void ConfigureLinuxNativeAllocator()
     {
         if (!OperatingSystem.IsLinux())
@@ -45,7 +49,9 @@ internal sealed class DecodedImageCache
             _estimatedBytes += item.CachedPreviewBytes;
             item.CacheNode = _lruList.AddLast(item);
 
-            var attemptsRemaining = _lruList.Count;
+            // Protected items are moved to the tail as they are examined, so consecutive calls keep
+            // advancing through the list instead of rescanning the same protected run.
+            var attemptsRemaining = Math.Min(_lruList.Count, MaxEvictionScanPerTouch);
             while (ExceedsBudget(_lruList.Count, _estimatedBytes) && attemptsRemaining > 0)
             {
                 attemptsRemaining--;

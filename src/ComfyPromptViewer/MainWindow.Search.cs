@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
@@ -84,7 +83,8 @@ public partial class MainWindow
         }
 
         SearchEngine.ParseQuery(query, out var positiveTerms, out var negativeTerms);
-        if (positiveTerms.Count == 0 && negativeTerms.Count == 0)
+        var compiledQuery = new CompiledQuery(positiveTerms, negativeTerms);
+        if (compiledQuery.IsEmpty)
         {
             CancelSearchFilter();
             ApplyFilteredItems(_catalog.Items, resetScroll);
@@ -92,47 +92,32 @@ public partial class MainWindow
         }
 
         var searchScope = GetSearchScope();
-        var candidates = new SearchCandidate[_catalog.Count];
-        for (var index = 0; index < candidates.Length; index++)
-        {
-            var item = _catalog.Items[index];
-            candidates[index] = new SearchCandidate(item, item.SearchProjection);
-        }
 
-        CancelAndDispose(ref _searchFilterCancellation);
-        _searchFilterCancellation = new CancellationTokenSource();
-        var token = _searchFilterCancellation.Token;
-        var generation = ++_searchFilterGeneration;
-        var dataGeneration = _searchDataGeneration;
+        // One columnar snapshot per query. The scan then never touches an ImageItem, so it partitions by
+        // index range and every partition reads contiguous memory. There is no narrowed candidate source
+        // to keep valid, because a full rescan is what the index is for.
+        var snapshot = _catalog.CreateSearchSnapshot();
+
+        var session = _searchFilterGate.Restart();
         DebugLog.Observe(Task.Run(() =>
         {
-            var matches = new List<ImageItem>(candidates.Length);
-            foreach (var candidate in candidates)
-            {
-                token.ThrowIfCancellationRequested();
-                if (ProjectionMatchesSearch(
-                    candidate.Projection,
-                    positiveTerms,
-                    negativeTerms,
-                    searchScope))
-                {
-                    matches.Add(candidate.Item);
-                }
-            }
+            var matches = snapshot.Filter(compiledQuery, searchScope, session.Token);
 
             Dispatcher.UIThread.Post(() =>
             {
-                if (IsCurrentSearchResult(
-                    generation,
-                    _searchFilterGeneration,
-                    dataGeneration,
-                    _searchDataGeneration,
-                    token.IsCancellationRequested))
+                // Only a newer query invalidates this result. Metadata that loaded while the pass ran does
+                // not: loading metadata can only drop items from a match set, so a result computed from an
+                // older snapshot is a superset of the current one, and showing it beats showing nothing.
+                // The scanner's refresh and completion passes reconcile. Discarding here meant that during
+                // a cold scan almost every pass was thrown away.
+                if (session.IsStale)
                 {
-                    ApplyFilteredItems(matches, resetScroll);
+                    return;
                 }
+
+                ApplyFilteredItems(matches, resetScroll);
             }, DispatcherPriority.Background);
-        }, token), "Gallery search filter");
+        }, session.Token), "Gallery search filter");
     }
 
     private void ApplyFilteredItems(IReadOnlyList<ImageItem> filtered, bool resetScroll)
@@ -178,7 +163,7 @@ public partial class MainWindow
 
         if (resetScroll)
         {
-            _galleryScrollRestoreGeneration++;
+            _galleryScrollRestoreGate.Invalidate();
             GalleryScrollViewer.Offset = new Vector(GalleryScrollViewer.Offset.X, 0);
         }
 
@@ -330,16 +315,16 @@ public partial class MainWindow
 
     private void QueueGalleryScrollRestore(double desiredOffset)
     {
-        var restoreGeneration = ++_galleryScrollRestoreGeneration;
+        var restore = _galleryScrollRestoreGate.Begin();
         Dispatcher.UIThread.Post(() =>
         {
-            ApplyGalleryScrollRestore(restoreGeneration, desiredOffset);
+            ApplyGalleryScrollRestore(restore, desiredOffset);
         }, DispatcherPriority.Loaded);
     }
 
-    private void ApplyGalleryScrollRestore(int restoreGeneration, double desiredOffset)
+    private void ApplyGalleryScrollRestore(Generation restore, double desiredOffset)
     {
-        if (restoreGeneration != _galleryScrollRestoreGeneration)
+        if (restore.IsStale)
         {
             return;
         }
@@ -373,123 +358,8 @@ public partial class MainWindow
         return Math.Clamp(((newIndex / columns) * itemExtent) + offsetWithinRow, 0, maxOffset);
     }
 
-    internal static bool ItemMatchesSearch(
-        ImageItem item,
-        List<SearchTerm> positiveTerms,
-        List<SearchTerm> negativeTerms,
-        SearchScope searchScope)
-    {
-        return ProjectionMatchesSearch(item.SearchProjection, positiveTerms, negativeTerms, searchScope);
-    }
-
-    internal static bool ProjectionMatchesSearch(
-        SearchProjection projection,
-        List<SearchTerm> positiveTerms,
-        List<SearchTerm> negativeTerms,
-        SearchScope searchScope)
-    {
-        return searchScope switch
-        {
-            SearchScope.Filename => TextMatchesTerms(projection.FileName, positiveTerms, negativeTerms),
-            SearchScope.PositivePrompt => projection.HasLoadedMetadata
-                ? TextMatchesTerms(projection.Prompt, positiveTerms, negativeTerms)
-                : true,
-            SearchScope.NegativePrompt => projection.HasLoadedMetadata
-                ? TextMatchesTerms(projection.NegativePrompt, positiveTerms, negativeTerms)
-                : true,
-            _ => ProjectionMatchesAllSearch(projection, positiveTerms, negativeTerms)
-        };
-    }
-
-    private static bool ProjectionMatchesAllSearch(
-        SearchProjection projection,
-        List<SearchTerm> positiveTerms,
-        List<SearchTerm> negativeTerms)
-    {
-        foreach (var term in negativeTerms)
-        {
-            if (ProjectionMatchesAnySearchableText(projection, term))
-            {
-                return false;
-            }
-        }
-
-        foreach (var term in positiveTerms)
-        {
-            if (SearchEngine.IsMatch(projection.FileName, term))
-            {
-                continue;
-            }
-
-            if (!projection.HasLoadedMetadata)
-            {
-                return true;
-            }
-
-            if (!ProjectionMetadataMatchesTerm(projection, term))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private static bool ProjectionMatchesAnySearchableText(SearchProjection projection, SearchTerm term)
-    {
-        return SearchEngine.IsMatch(projection.FileName, term) ||
-               projection.HasLoadedMetadata && ProjectionMetadataMatchesTerm(projection, term);
-    }
-
-    private static bool ProjectionMetadataMatchesTerm(SearchProjection projection, SearchTerm term)
-    {
-        return SearchEngine.IsMatch(projection.Prompt, projection.NegativePrompt, term) ||
-               SearchEngine.IsMatch(
-                   projection.NormalizedSettingsText,
-                   term with { Text = term.NormalizedText });
-    }
-
-    private static bool TextMatchesTerms(
-        string text,
-        List<SearchTerm> positiveTerms,
-        List<SearchTerm> negativeTerms)
-    {
-        foreach (var term in positiveTerms)
-        {
-            if (!SearchEngine.IsMatch(text, term))
-            {
-                return false;
-            }
-        }
-
-        foreach (var term in negativeTerms)
-        {
-            if (SearchEngine.IsMatch(text, term))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
     private void CancelSearchFilter()
     {
-        CancelAndDispose(ref _searchFilterCancellation);
-        _searchFilterGeneration++;
+        _searchFilterGate.Cancel();
     }
-
-    internal static bool IsCurrentSearchResult(
-        int resultGeneration,
-        int currentGeneration,
-        int resultDataGeneration,
-        int currentDataGeneration,
-        bool isCancellationRequested)
-    {
-        return !isCancellationRequested &&
-               resultGeneration == currentGeneration &&
-               resultDataGeneration == currentDataGeneration;
-    }
-
-    private readonly record struct SearchCandidate(ImageItem Item, SearchProjection Projection);
 }

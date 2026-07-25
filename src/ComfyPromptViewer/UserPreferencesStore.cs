@@ -12,6 +12,7 @@ internal sealed class UserPreferencesStore
     private readonly string _lastFolderPath;
     private readonly string _recentFoldersPath;
     private readonly string _includeSubfoldersPath;
+    private readonly string _prewarmThumbnailsPath;
     private readonly string _themeModePath;
 
     public UserPreferencesStore(string appDataDirectory)
@@ -21,6 +22,7 @@ internal sealed class UserPreferencesStore
         _lastFolderPath = Path.Combine(appDataDirectory, "last-folder.txt");
         _recentFoldersPath = Path.Combine(appDataDirectory, "recent-folders.txt");
         _includeSubfoldersPath = Path.Combine(appDataDirectory, "include-subfolders.txt");
+        _prewarmThumbnailsPath = Path.Combine(appDataDirectory, "prewarm-thumbnails.txt");
         _themeModePath = Path.Combine(appDataDirectory, "theme-mode.txt");
     }
 
@@ -163,6 +165,21 @@ internal sealed class UserPreferencesStore
             _includeSubfoldersPath,
             includeSubfolders.ToString(CultureInfo.InvariantCulture),
             "include-subfolders setting");
+    }
+
+    public bool LoadPrewarmThumbnails()
+    {
+        return !TryReadPreference(_prewarmThumbnailsPath, "prewarm-thumbnails setting", out var text) ||
+               !bool.TryParse(text, out var value) ||
+               value;
+    }
+
+    public void SavePrewarmThumbnails(bool prewarmThumbnails)
+    {
+        SavePreference(
+            _prewarmThumbnailsPath,
+            prewarmThumbnails.ToString(CultureInfo.InvariantCulture),
+            "prewarm-thumbnails setting");
     }
 
     public ThemeMode LoadThemeMode()

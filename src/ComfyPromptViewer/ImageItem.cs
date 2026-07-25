@@ -13,6 +13,7 @@ namespace ComfyPromptViewer;
 
 public sealed class ImageItem : INotifyPropertyChanged
 {
+    private const int TinyThumbnailWidth = 120;
     private const int SmallThumbnailWidth = 180;
     private const int MediumThumbnailWidth = 240;
     private const int LargeThumbnailWidth = 320;
@@ -32,10 +33,9 @@ public sealed class ImageItem : INotifyPropertyChanged
     private string _lora = "";
     private string _tool = "";
     private string _resources = "";
-    private readonly object _thumbnailCacheStateLock = new();
-    private string _thumbnailCachePath = "";
-    private bool _thumbnailCacheExists;
-    private bool _hasThumbnailCacheState;
+    private readonly object _thumbnailKeyLock = new();
+    private ThumbnailKey _thumbnailKey;
+    private int _thumbnailKeyWidth = -1;
     private bool _isSelected;
     private bool _isMarkedSelected;
     private volatile bool _hasLoadedMetadata;
@@ -50,7 +50,6 @@ public sealed class ImageItem : INotifyPropertyChanged
     private Task? _selectedPreviewLoadTask;
     private string? _creationDateText;
     private bool _hasLoggedThumbnailError;
-    private SearchProjection _searchProjection;
 
     internal ImageItem(
         string path,
@@ -63,7 +62,6 @@ public sealed class ImageItem : INotifyPropertyChanged
         Path = path;
         FileName = System.IO.Path.GetFileName(path);
         SourceFingerprint = sourceFingerprint;
-        _searchProjection = new SearchProjection(FileName, "", "", "", HasLoadedMetadata: false);
         _tileSize = tileSize;
         _metadataService = metadataService;
         _decodedImageCache = decodedImageCache;
@@ -76,7 +74,10 @@ public sealed class ImageItem : INotifyPropertyChanged
     public string Path { get; }
     public string FileName { get; }
     internal SourceFingerprint SourceFingerprint { get; }
-    internal SearchProjection SearchProjection => Volatile.Read(ref _searchProjection);
+
+    // Row this item occupies in the catalog's SearchIndex, or -1 while it is not in a catalog. Searchable
+    // text lives in that index's columns, never on this object. Only SearchIndex assigns this.
+    internal int SearchSlot { get; set; } = -1;
 
     public string CreationDateText
     {
@@ -252,7 +253,6 @@ public sealed class ImageItem : INotifyPropertyChanged
         }
 
         _tileSize = tileSize;
-        InvalidateThumbnailCacheState();
     }
 
     public bool IsSelected
@@ -524,29 +524,21 @@ public sealed class ImageItem : INotifyPropertyChanged
                     return null;
                 }
 
-                var (cachePath, hasCachedThumbnail) = GetThumbnailCacheState();
-                if (hasCachedThumbnail)
+                var cacheKey = GetThumbnailKey();
+                try
                 {
-                    try
+                    if (_thumbnailService.TryLoadCachedThumbnail(cacheKey) is { } cached)
                     {
-                        return _thumbnailService.LoadCachedThumbnail(cachePath);
+                        return cached;
                     }
-                    catch (Exception ex)
+                }
+                catch (Exception ex)
+                {
+                    // The pack already dropped the unreadable entry; fall through and re-encode it.
+                    if (!_hasLoggedThumbnailError)
                     {
-                        if (!_hasLoggedThumbnailError)
-                        {
-                            _hasLoggedThumbnailError = true;
-                            DebugLog.Write($"Failed to load cached thumbnail for {Path} at {cachePath}: {ex.Message}. Re-decoding...");
-                        }
-                        try
-                        {
-                            File.Delete(cachePath);
-                        }
-                        catch (Exception deleteEx)
-                        {
-                            DebugLog.Write($"Failed to delete corrupt cached thumbnail {cachePath}: {deleteEx.Message}");
-                        }
-                        SetThumbnailCacheState(cachePath, exists: false);
+                        _hasLoggedThumbnailError = true;
+                        DebugLog.Write($"Failed to load cached thumbnail for {Path}: {ex.Message}. Re-decoding...");
                     }
                 }
 
@@ -556,11 +548,9 @@ public sealed class ImageItem : INotifyPropertyChanged
                 }
 
                 var decoded = _thumbnailService.DecodeThumbnail(Path, GetThumbnailDecodeWidth());
-                if (!string.IsNullOrEmpty(cachePath) &&
-                    isCurrent?.Invoke() != false &&
-                    !MainWindow.IsFastScrolling)
+                if (isCurrent?.Invoke() != false && !MainWindow.IsFastScrolling)
                 {
-                    _thumbnailService.TryQueueCacheWrite(this, cachePath);
+                    _thumbnailService.TryQueueCacheWrite(this, cacheKey);
                 }
                 return decoded;
             }, token);
@@ -610,51 +600,42 @@ public sealed class ImageItem : INotifyPropertyChanged
         }
 
         _hasLoadedMetadata = true;
-        Volatile.Write(ref _searchProjection, new SearchProjection(
-            FileName,
-            Prompt,
-            NegativePrompt,
-            SearchEngine.NormalizeSeparators(string.Join(
-                '\0',
-                Tool,
-                Model,
-                Sampler,
-                Seed,
-                Settings,
-                Lora,
-                Resources)),
-            HasLoadedMetadata: true));
+        // The catalog owns search data; it updates this item's index row from the same handler that keeps
+        // its own membership counters, so the two cannot disagree.
         MetadataLoaded?.Invoke(this);
     }
 
-    private (string CachePath, bool Exists) GetThumbnailCacheState()
+    // Identity of this image version at the current decode width. Memoized per width, so a scroll pass
+    // costs a comparison rather than a hash, and a tile-size change invalidates it implicitly.
+    internal ThumbnailKey GetThumbnailKey()
     {
-        lock (_thumbnailCacheStateLock)
+        var width = GetThumbnailDecodeWidth();
+        lock (_thumbnailKeyLock)
         {
-            if (_hasThumbnailCacheState)
+            if (_thumbnailKeyWidth != width)
             {
-                return (_thumbnailCachePath, _thumbnailCacheExists);
+                _thumbnailKey = ThumbnailPack.CreateKey(
+                    Path,
+                    SourceFingerprint.LastWriteTimeUtcTicks,
+                    width);
+                _thumbnailKeyWidth = width;
             }
+
+            return _thumbnailKey;
         }
-
-        RefreshThumbnailCacheState();
-
-        lock (_thumbnailCacheStateLock)
-        {
-            return (_thumbnailCachePath, _thumbnailCacheExists);
-        }
-    }
-
-    private void RefreshThumbnailCacheState()
-    {
-        var cachePath = _thumbnailService.BuildCachePath(Path, GetThumbnailDecodeWidth());
-        var exists = !string.IsNullOrEmpty(cachePath) && File.Exists(cachePath);
-        SetThumbnailCacheState(cachePath, exists);
     }
 
     internal int GetThumbnailDecodeWidth()
     {
+        // Buckets track ThumbnailDecodeScale closely so a tile never decodes far wider than it renders.
+        // Without the tiny bucket the smallest tiles decoded at 180px, over twice their display width,
+        // which is what pushes the decoded cache past its byte budget when many tiles are visible.
         var targetWidth = (int)Math.Ceiling(_tileSize * ThumbnailDecodeScale);
+        if (targetWidth <= TinyThumbnailWidth)
+        {
+            return TinyThumbnailWidth;
+        }
+
         if (targetWidth <= SmallThumbnailWidth)
         {
             return SmallThumbnailWidth;
@@ -663,22 +644,11 @@ public sealed class ImageItem : INotifyPropertyChanged
         return targetWidth <= MediumThumbnailWidth ? MediumThumbnailWidth : LargeThumbnailWidth;
     }
 
-    internal void InvalidateThumbnailCacheState()
+    // One dictionary lookup in the pack index. There is no cached "does the file exist" state to keep
+    // fresh, because the pack answers that directly and a cleared pack answers it correctly at once.
+    internal bool HasCachedThumbnail()
     {
-        lock (_thumbnailCacheStateLock)
-        {
-            _hasThumbnailCacheState = false;
-        }
-    }
-
-    internal void SetThumbnailCacheState(string cachePath, bool exists)
-    {
-        lock (_thumbnailCacheStateLock)
-        {
-            _thumbnailCachePath = cachePath;
-            _thumbnailCacheExists = exists;
-            _hasThumbnailCacheState = true;
-        }
+        return _thumbnailService.HasCachedThumbnail(GetThumbnailKey());
     }
 
     private bool SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
@@ -698,10 +668,3 @@ public sealed class ImageItem : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
     }
 }
-
-internal sealed record SearchProjection(
-    string FileName,
-    string Prompt,
-    string NegativePrompt,
-    string NormalizedSettingsText,
-    bool HasLoadedMetadata);

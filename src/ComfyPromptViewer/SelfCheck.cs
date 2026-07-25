@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Text;
+using System.Threading;
 
 namespace ComfyPromptViewer;
 
@@ -19,8 +20,13 @@ internal static class SelfCheck
 
     public static void Run()
     {
+        CheckStalenessGates();
         CheckSearchParsing();
         CheckSearchResultGenerations();
+        CheckSearchMaskFilter();
+        CheckSearchIndexMaintenance();
+        CheckMetadataLoadOnlyRemovesMatches();
+        CheckParallelSearchFiltering();
         CheckGalleryScrollAnchoring();
         CheckGalleryItemReconciliation();
         CheckGalleryCatalog();
@@ -37,8 +43,194 @@ internal static class SelfCheck
         CheckThumbnailCacheWriteBackpressure();
         CheckDeferredThumbnailCacheWriteQueue();
         CheckDeferredThumbnailCacheWritePause();
+        CheckThumbnailPrefetchPolicy();
         CheckJpegThumbnailEncoding();
+        CheckThumbnailPackRoundTrip();
         CheckThumbnailCacheBudget();
+        CheckThumbnailDecodeWidths();
+    }
+
+    // The two staleness primitives replaced six hand-rolled counters. Everything that used to be an
+    // "did this path remember to bump/check" bug now lives or dies here.
+    private static void CheckStalenessGates()
+    {
+        var gate = new GenerationGate();
+        var first = gate.Begin();
+        Check(first.IsCurrent, "Expected a freshly begun generation to be current.");
+
+        var second = gate.Begin();
+        Check(first.IsStale, "Expected beginning a generation to supersede the previous one.");
+        Check(second.IsCurrent, "Expected the newest generation to be current.");
+
+        gate.Invalidate();
+        Check(second.IsStale, "Expected invalidating a gate to supersede every outstanding generation.");
+        Check(default(Generation).IsStale, "Expected an unassigned generation to read as stale.");
+
+        var sessions = new SessionGate();
+        var firstSession = sessions.Restart();
+        Check(firstSession.IsCurrent && sessions.IsActive, "Expected a restarted session to be current.");
+
+        var joined = sessions.Snapshot();
+        Check(joined.IsCurrent, "Expected a snapshot of the active session to be current.");
+
+        var secondSession = sessions.Restart();
+        Check(firstSession.IsStale && firstSession.Token.IsCancellationRequested,
+            "Expected restarting a session gate to cancel and supersede the previous session.");
+        Check(secondSession.IsCurrent, "Expected the replacement session to be current.");
+
+        sessions.Cancel();
+        Check(secondSession.IsStale && secondSession.Token.IsCancellationRequested,
+            "Expected canceling a session gate to cancel and supersede the active session.");
+        Check(!sessions.IsActive, "Expected a canceled session gate to report no active session.");
+        Check(default(Session).IsStale, "Expected an unassigned session to read as stale.");
+    }
+
+    // The mask filter is allowed to admit rows that do not match, never to reject rows that do. A false
+    // negative silently drops images from every search that touches that character.
+    private static void CheckSearchMaskFilter()
+    {
+        string[] texts =
+        [
+            "a serene landscape",
+            "DRAGON, scales, 8k",
+            "photo_of_a_cat-2024.png",
+            "Kelvin sign and ſharp s",
+            "ı dotless and Éclair",
+            "日本語 プロンプト",
+            ""
+        ];
+        string[] terms =
+        [
+            "dragon", "DRAGON", "cat", "Kelvin", "kelvin", "sharp", "Sharp", "I dotless",
+            "eclair", "éclair", "日本", "png", "2024", "zzz", "8k", "_of_"
+        ];
+
+        foreach (var text in texts)
+        {
+            var textMask = SearchIndex.ComputeMask(text);
+            foreach (var term in terms)
+            {
+                if (!text.Contains(term, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var termMask = SearchIndex.ComputeTermMask(term);
+                Check((textMask & termMask) == termMask,
+                    $"Expected the search mask filter never to reject '{term}' inside '{text}'.");
+            }
+        }
+
+        Check(SearchIndex.ComputeTermMask("日本") == 0,
+            "Expected a term whose folding leaves ASCII to disable the mask filter rather than guess.");
+    }
+
+    // The index is only correct because GalleryCatalog is its single owner: every membership change and
+    // every metadata load goes through one call that updates both.
+    private static void CheckSearchIndexMaintenance()
+    {
+        var catalog = new GalleryCatalog();
+        var kept = CreateImageItem(Path.Combine(Path.GetTempPath(), "index-kept.png"));
+        var removed = CreateImageItem(Path.Combine(Path.GetTempPath(), "index-removed.png"));
+        catalog.Add(new GalleryEntry(kept.Path, default, kept));
+        catalog.Add(new GalleryEntry(removed.Path, default, removed));
+
+        Check(MatchCount(catalog, "index", SearchScope.Filename) == 2,
+            "Expected both catalog items to be indexed on add.");
+
+        catalog.RemovePaths(new HashSet<string>([removed.Path], StringComparer.OrdinalIgnoreCase));
+        Check(MatchCount(catalog, "index", SearchScope.Filename) == 1 && removed.SearchSlot < 0,
+            "Expected removing a catalog entry to release its search row.");
+
+        kept.ApplyMetadataEntry(new MetadataIndexEntry
+        {
+            SourcePath = kept.Path,
+            Prompt = "a golden retriever",
+            Lora = "detail_tweaker (0.80)"
+        });
+        Check(MatchCount(catalog, "zebra", SearchScope.All) == 1,
+            "Expected a row the catalog has not been told about yet to still read as unscanned.");
+
+        catalog.MarkMetadataLoaded(kept);
+        Check(MatchCount(catalog, "zebra", SearchScope.All) == 0,
+            "Expected the catalog's metadata-loaded call to write the search row.");
+        Check(MatchCount(catalog, "retriever", SearchScope.All) == 1,
+            "Expected the prompt column to be searchable once written.");
+        Check(MatchCount(catalog, "detail-tweaker", SearchScope.All) == 1,
+            "Expected the settings column to stay separator-normalized.");
+
+        var replacement = CreateImageItem(kept.Path);
+        catalog.ReplaceMany(new Dictionary<string, GalleryEntry>(StringComparer.OrdinalIgnoreCase)
+        {
+            [kept.Path] = new GalleryEntry(kept.Path, default, replacement)
+        });
+        Check(kept.SearchSlot < 0 && replacement.SearchSlot >= 0,
+            "Expected replacing an entry to move the search row to the replacement item.");
+        Check(MatchCount(catalog, "zebra", SearchScope.All) == 1,
+            "Expected the replacement item's row to read as unscanned again.");
+        Check(MatchCount(catalog, "index", SearchScope.Filename) == 1,
+            "Expected exactly the replacement item to be indexed.");
+
+        catalog.Clear();
+        Check(MatchCount(catalog, "index", SearchScope.Filename) == 0 && replacement.SearchSlot < 0,
+            "Expected clearing the catalog to release every search row.");
+    }
+
+    private static void CheckParallelSearchFiltering()
+    {
+        // Exceeds the parallel threshold so the partitioned path runs.
+        const int candidateCount = 20000;
+        var catalog = new GalleryCatalog();
+        var expected = new List<ImageItem>();
+        for (var index = 0; index < candidateCount; index++)
+        {
+            var isMatch = index % 3 == 0;
+            var item = CreateImageItem(Path.Combine(
+                Path.GetTempPath(),
+                $"parallel-{(isMatch ? "keep" : "drop")}-{index}.png"));
+            catalog.Add(new GalleryEntry(item.Path, default, item));
+            if (isMatch)
+            {
+                expected.Add(item);
+            }
+        }
+
+        var matches = Filter(catalog, "keep", SearchScope.Filename);
+
+        Check(matches.Count == expected.Count, "Expected the parallel search filter to find every match.");
+        for (var index = 0; index < expected.Count; index++)
+        {
+            if (!ReferenceEquals(matches[index], expected[index]))
+            {
+                Check(false, "Expected the parallel search filter to preserve catalog order.");
+                catalog.Clear();
+                return;
+            }
+        }
+
+        catalog.Clear();
+    }
+
+    private static List<ImageItem> Filter(GalleryCatalog catalog, string query, SearchScope searchScope)
+    {
+        SearchEngine.ParseQuery(query, out var positive, out var negative);
+        return catalog.CreateSearchSnapshot()
+            .Filter(new CompiledQuery(positive, negative), searchScope, CancellationToken.None);
+    }
+
+    private static int MatchCount(GalleryCatalog catalog, string query, SearchScope searchScope)
+    {
+        return Filter(catalog, query, searchScope).Count;
+    }
+
+    // Indexes one item on its own so a single-item query reads as a plain "does this match".
+    private static bool ItemMatchesSearch(ImageItem item, string query, SearchScope searchScope)
+    {
+        var catalog = new GalleryCatalog();
+        catalog.Add(new GalleryEntry(item.Path, default, item));
+        var matched = MatchCount(catalog, query, searchScope) == 1;
+        catalog.Clear();
+        return matched;
     }
 
     private static void CheckSortedInsertion()
@@ -56,15 +248,21 @@ internal static class SelfCheck
     {
         var coordinator = new FolderLoadCoordinator();
         var first = coordinator.Restart();
-        Check(coordinator.IsCurrent(first), "Expected the new folder load session to be current.");
+        Check(first.IsCurrent, "Expected the new folder load session to be current.");
+        Check(coordinator.IsCurrent(first.Generation),
+            "Expected a folder load generation carried on its own to resolve to the active session.");
 
         var second = coordinator.Restart();
-        Check(!coordinator.IsCurrent(first), "Expected restarting folder loading to invalidate the previous session.");
+        Check(first.IsStale, "Expected restarting folder loading to invalidate the previous session.");
         Check(first.Token.IsCancellationRequested, "Expected restarting folder loading to cancel the previous token.");
-        Check(coordinator.IsCurrent(second), "Expected the replacement folder load session to be current.");
+        Check(second.IsCurrent, "Expected the replacement folder load session to be current.");
+        Check(!coordinator.IsCurrent(first.Generation),
+            "Expected a superseded folder load generation to be rejected.");
 
         coordinator.Cancel();
-        Check(!coordinator.IsCurrent(second), "Expected canceling folder loading to invalidate the active session.");
+        Check(second.IsStale, "Expected canceling folder loading to invalidate the active session.");
+        Check(!coordinator.IsCurrent(second.Generation),
+            "Expected canceling folder loading to reject its generation.");
         Check(second.Token.IsCancellationRequested, "Expected canceling folder loading to cancel the active token.");
     }
 
@@ -108,23 +306,54 @@ internal static class SelfCheck
 
     private static void CheckGalleryCatalog()
     {
+        int NewestFirst(GalleryEntry left, GalleryEntry right) =>
+            right.Fingerprint.LastWriteTimeUtcTicks.CompareTo(left.Fingerprint.LastWriteTimeUtcTicks);
+
         var catalog = new GalleryCatalog();
         var older = CreateImageItem(Path.Combine(Path.GetTempPath(), "catalog-older.png"));
         var newer = CreateImageItem(Path.Combine(Path.GetTempPath(), "catalog-newer.png"));
         catalog.Add(new GalleryEntry(older.Path, new SourceFingerprint(10, 0), older));
         catalog.Add(new GalleryEntry(newer.Path, new SourceFingerprint(20, 0), newer));
-        catalog.Sort((left, right) => right.LastWriteTimeUtc.CompareTo(left.LastWriteTimeUtc));
+        catalog.Sort(NewestFirst);
 
         Check(ReferenceEquals(catalog.Items[0], newer), "Expected catalog sort to keep item and timestamp together.");
+
         var replacement = CreateImageItem(newer.Path);
         Check(
-            catalog.Replace(
-                newer.Path,
-                new GalleryEntry(newer.Path, new SourceFingerprint(30, 0), replacement),
+            catalog.TryReplaceSorted(
+                new GalleryEntry(newer.Path, new SourceFingerprint(5, 0), replacement),
+                NewestFirst,
                 out var previous) &&
-            ReferenceEquals(previous.Item, newer) &&
-            ReferenceEquals(catalog.Items[0], replacement),
+            ReferenceEquals(previous.Item, newer),
             "Expected catalog replacement to update the authoritative entry.");
+        Check(
+            ReferenceEquals(catalog.Items[0], older) && ReferenceEquals(catalog.Items[1], replacement),
+            "Expected a sorted replacement to move the entry to its new ordered position.");
+        Check(
+            catalog.TryGet(newer.Path, out var relocated) && ReferenceEquals(relocated.Item, replacement),
+            "Expected a sorted replacement to stay reachable by path.");
+
+        var bulkReplacement = CreateImageItem(older.Path);
+        catalog.ReplaceMany(new Dictionary<string, GalleryEntry>(StringComparer.OrdinalIgnoreCase)
+        {
+            [older.Path] = new GalleryEntry(older.Path, new SourceFingerprint(1, 0), bulkReplacement)
+        });
+        Check(
+            catalog.TryGet(older.Path, out var bulkReplaced) && ReferenceEquals(bulkReplaced.Item, bulkReplacement),
+            "Expected a bulk replacement pass to swap the authoritative entry.");
+
+        Check(catalog.LoadedMetadataCount == 0, "Expected an unscanned catalog to report no loaded metadata.");
+        catalog.MarkMetadataLoaded(replacement);
+        Check(catalog.LoadedMetadataCount == 1, "Expected a member metadata load to advance the loaded count.");
+        catalog.MarkMetadataLoaded(newer);
+        Check(catalog.LoadedMetadataCount == 1, "Expected a replaced item's late metadata load to be ignored.");
+
+        catalog.RemovePaths(new HashSet<string>([older.Path], StringComparer.OrdinalIgnoreCase));
+        Check(catalog.Count == 1, "Expected removal to drop the entry from the catalog.");
+        Check(catalog.LoadedMetadataCount == 1, "Expected removing an unscanned entry to leave the loaded count alone.");
+
+        catalog.Clear();
+        Check(catalog.LoadedMetadataCount == 0, "Expected clearing the catalog to reset the loaded count.");
     }
 
     private static void CheckSearchParsing()
@@ -148,37 +377,80 @@ internal static class SelfCheck
             Resources = "Embedding: easynegative"
         });
 
-        SearchEngine.ParseQuery("watermark", out positive, out negative);
-        Check(!MainWindow.ItemMatchesSearch(item, positive, negative, MainWindow.SearchScope.PositivePrompt),
+        Check(!ItemMatchesSearch(item, "watermark", SearchScope.PositivePrompt),
             "Expected positive prompt search to ignore negative prompt text.");
-        Check(MainWindow.ItemMatchesSearch(item, positive, negative, MainWindow.SearchScope.NegativePrompt),
+        Check(ItemMatchesSearch(item, "watermark", SearchScope.NegativePrompt),
             "Expected negative prompt search to match negative prompt text.");
 
-        SearchEngine.ParseQuery("cosmos-predict", out positive, out negative);
-        Check(MainWindow.ItemMatchesSearch(item, positive, negative, MainWindow.SearchScope.All),
+        Check(ItemMatchesSearch(item, "cosmos-predict", SearchScope.All),
             "Expected all search to match normalized LoRA metadata.");
-        Check(!MainWindow.ItemMatchesSearch(item, positive, negative, MainWindow.SearchScope.Filename),
+        Check(!ItemMatchesSearch(item, "cosmos-predict", SearchScope.Filename),
             "Expected filename search to ignore LoRA metadata.");
 
-        SearchEngine.ParseQuery("\"cosmos predict lora (1.00)\"", out positive, out negative);
-        Check(MainWindow.ItemMatchesSearch(item, positive, negative, MainWindow.SearchScope.All),
-            "Expected cached search projection to preserve separator-insensitive exact matching.");
+        Check(ItemMatchesSearch(item, "\"cosmos predict lora (1.00)\"", SearchScope.All),
+            "Expected the settings column to preserve separator-insensitive exact matching.");
 
-        SearchEngine.ParseQuery("-easynegative", out positive, out negative);
-        Check(!MainWindow.ItemMatchesSearch(item, positive, negative, MainWindow.SearchScope.All),
+        Check(!ItemMatchesSearch(item, "-easynegative", SearchScope.All),
             "Expected all search exclusions to check resource metadata.");
     }
 
     private static void CheckSearchResultGenerations()
     {
-        Check(
-            MainWindow.IsCurrentSearchResult(3, 3, 8, 8, isCancellationRequested: false),
-            "Expected matching search and data generations to be current.");
-        Check(
-            !MainWindow.IsCurrentSearchResult(2, 3, 8, 8, isCancellationRequested: false) &&
-            !MainWindow.IsCurrentSearchResult(3, 3, 7, 8, isCancellationRequested: false) &&
-            !MainWindow.IsCurrentSearchResult(3, 3, 8, 8, isCancellationRequested: true),
-            "Expected stale or canceled search results to be rejected.");
+        var gate = new SessionGate();
+        var session = gate.Restart();
+        Check(session.IsCurrent, "Expected a result for the current query to be applied.");
+
+        var superseded = session;
+        session = gate.Restart();
+        Check(superseded.IsStale, "Expected a result for a superseded query to be rejected.");
+
+        gate.Cancel();
+        Check(session.IsStale, "Expected a result from a canceled pass to be rejected.");
+    }
+
+    // Applying a background result computed from an older snapshot depends on metadata loading only ever
+    // removing matches. If this stops holding, searches silently lose items.
+    private static void CheckMetadataLoadOnlyRemovesMatches()
+    {
+        foreach (var scope in new[] { SearchScope.All, SearchScope.PositivePrompt, SearchScope.NegativePrompt })
+        {
+            var catalog = new GalleryCatalog();
+            var item = CreateImageItem(Path.Combine(Path.GetTempPath(), $"monotonic-{scope}.png"));
+            catalog.Add(new GalleryEntry(item.Path, default, item));
+
+            Check(MatchCount(catalog, "dragon", scope) == 1,
+                $"Expected an unscanned item to stay visible for scope {scope}.");
+
+            item.ApplyMetadataEntry(new MetadataIndexEntry
+            {
+                SourcePath = item.Path,
+                Prompt = "sunlit portrait",
+                NegativePrompt = "blurry watermark"
+            });
+            catalog.MarkMetadataLoaded(item);
+
+            Check(MatchCount(catalog, "dragon", scope) == 0,
+                $"Expected loading non-matching metadata to drop the item for scope {scope}.");
+            catalog.Clear();
+        }
+
+        // A negative term behaves the same way: metadata can only add reasons to exclude.
+        var excludeCatalog = new GalleryCatalog();
+        var excluded = CreateImageItem(Path.Combine(Path.GetTempPath(), "monotonic-negative.png"));
+        excludeCatalog.Add(new GalleryEntry(excluded.Path, default, excluded));
+        Check(MatchCount(excludeCatalog, "-watermark", SearchScope.All) == 1,
+            "Expected an unscanned item to survive a negative term.");
+
+        excluded.ApplyMetadataEntry(new MetadataIndexEntry
+        {
+            SourcePath = excluded.Path,
+            Prompt = "sunlit portrait",
+            NegativePrompt = "blurry watermark"
+        });
+        excludeCatalog.MarkMetadataLoaded(excluded);
+        Check(MatchCount(excludeCatalog, "-watermark", SearchScope.All) == 0,
+            "Expected loaded metadata to newly satisfy a negative term and drop the item.");
+        excludeCatalog.Clear();
     }
 
     private static void CheckThemeModes()
@@ -400,16 +672,22 @@ internal static class SelfCheck
                 second.Prompt == "second",
                 "Expected batched metadata entries to persist together.");
 
+            var batchCatalog = new GalleryCatalog();
             var firstItem = CreateImageItem(firstPath);
             var secondItem = CreateImageItem(secondPath);
+            batchCatalog.Add(new GalleryEntry(firstItem.Path, default, firstItem));
+            batchCatalog.Add(new GalleryEntry(secondItem.Path, default, secondItem));
             firstItem.ApplyMetadataResult(MetadataLoadResult.Success(firstEntry, needsSave: false));
             secondItem.ApplyMetadataResult(MetadataLoadResult.Success(secondEntry, needsSave: false));
+            batchCatalog.MarkMetadataLoaded(firstItem);
+            batchCatalog.MarkMetadataLoaded(secondItem);
             Check(
                 firstItem.HasLoadedMetadata &&
                 secondItem.HasLoadedMetadata &&
-                firstItem.SearchProjection.Prompt == "first" &&
-                secondItem.SearchProjection.Prompt == "second",
-                "Expected a metadata result batch to update item state and search projections.");
+                MatchCount(batchCatalog, "first", SearchScope.PositivePrompt) == 1 &&
+                MatchCount(batchCatalog, "second", SearchScope.PositivePrompt) == 1,
+                "Expected a metadata result batch to update item state and search rows.");
+            batchCatalog.Clear();
         }
         finally
         {
@@ -531,53 +809,63 @@ internal static class SelfCheck
         return new SourceFingerprint(fileInfo.LastWriteTimeUtc.Ticks, fileInfo.Length);
     }
 
+    private static ThumbnailKey NewThumbnailKey(string label)
+    {
+        return ThumbnailPack.CreateKey($"{Path.GetTempPath()}{label}-{Guid.NewGuid():N}.png", 1, 180);
+    }
+
     private static void CheckThumbnailCacheWriteBackpressure()
     {
-        var firstPath = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}-1.jpg");
-        var secondPath = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}-2.jpg");
+        var firstKey = NewThumbnailKey("backpressure-1");
+        var secondKey = NewThumbnailKey("backpressure-2");
 
-        Check(ItemThumbnailService.TryBeginCacheWrite(firstPath), "Expected first thumbnail cache write slot.");
+        Check(ItemThumbnailService.TryBeginCacheWrite(firstKey), "Expected first thumbnail cache write slot.");
         try
         {
-            Check(!ItemThumbnailService.TryBeginCacheWrite(secondPath), "Expected busy thumbnail cache writer to reject queued writes.");
+            Check(!ItemThumbnailService.TryBeginCacheWrite(secondKey), "Expected busy thumbnail cache writer to reject queued writes.");
         }
         finally
         {
-            ItemThumbnailService.EndCacheWrite(firstPath);
+            ItemThumbnailService.EndCacheWrite(firstKey);
         }
     }
 
     private static void CheckDeferredThumbnailCacheWriteQueue()
     {
-        var activePath = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}-active.jpg");
-        var deferredPath = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}-deferred.jpg");
+        var activeKey = NewThumbnailKey("queue-active");
+        var deferredKey = NewThumbnailKey("queue-deferred");
         var item = CreateImageItem(Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}-missing.png"));
 
-        Check(ItemThumbnailService.TryBeginCacheWrite(activePath), "Expected active thumbnail cache write slot.");
+        Check(ItemThumbnailService.TryBeginCacheWrite(activeKey), "Expected active thumbnail cache write slot.");
         try
         {
-            Check(ItemThumbnailService.TryQueueCacheWrite(item, deferredPath), "Expected deferred thumbnail cache write to queue.");
-            Check(!ItemThumbnailService.TryQueueCacheWrite(item, deferredPath), "Expected duplicate deferred thumbnail cache write to be ignored.");
+            var queuedBefore = ItemThumbnailService.PendingWriteCount;
+            Check(ItemThumbnailService.TryQueueCacheWrite(item, deferredKey), "Expected deferred thumbnail cache write to queue.");
+            Check(ItemThumbnailService.PendingWriteCount == queuedBefore + 1,
+                "Expected the pending write count to track the deferred queue so bulk producers can throttle.");
+            Check(!ItemThumbnailService.TryQueueCacheWrite(item, deferredKey), "Expected duplicate deferred thumbnail cache write to be ignored.");
             ItemThumbnailService.ClearDeferredWrites();
+            Check(ItemThumbnailService.PendingWriteCount == 0,
+                "Expected clearing deferred writes to empty the pending write count.");
         }
         finally
         {
-            ItemThumbnailService.EndCacheWrite(activePath);
+            ItemThumbnailService.EndCacheWrite(activeKey);
         }
     }
 
     private static void CheckDeferredThumbnailCacheWritePause()
     {
-        var activePath = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}-active.jpg");
-        var deferredPath = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}-deferred.jpg");
+        var activeKey = NewThumbnailKey("pause-active");
+        var deferredKey = NewThumbnailKey("pause-deferred");
         var item = CreateImageItem(Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}-missing.png"));
 
         ItemThumbnailService.SetCacheWritePause(() => true);
         try
         {
-            Check(ItemThumbnailService.TryQueueCacheWrite(item, deferredPath), "Expected paused deferred thumbnail cache write to queue.");
-            Check(ItemThumbnailService.TryBeginCacheWrite(activePath), "Expected paused deferred thumbnail cache writer not to take active slot.");
-            ItemThumbnailService.EndCacheWrite(activePath);
+            Check(ItemThumbnailService.TryQueueCacheWrite(item, deferredKey), "Expected paused deferred thumbnail cache write to queue.");
+            Check(ItemThumbnailService.TryBeginCacheWrite(activeKey), "Expected paused deferred thumbnail cache writer not to take active slot.");
+            ItemThumbnailService.EndCacheWrite(activeKey);
             ItemThumbnailService.ClearDeferredWrites();
         }
         finally
@@ -586,30 +874,137 @@ internal static class SelfCheck
         }
     }
 
+    // Prefetch is allowed to overlap the viewport only when the decode is cheap. If a cold ahead load
+    // ever starts while visible work is pending, first-paint on a new folder regresses.
+    private static void CheckThumbnailPrefetchPolicy()
+    {
+        Check(!ThumbnailLoadCoordinator.CanStartAheadLoad(
+                isWarm: false, hasVisibleWork: true, activeLoadCount: 0, activeAheadLoads: 0),
+            "Expected a cold ahead load to yield to pending visible work.");
+        Check(ThumbnailLoadCoordinator.CanStartAheadLoad(
+                isWarm: false, hasVisibleWork: false, activeLoadCount: 0, activeAheadLoads: 0),
+            "Expected a cold ahead load to run once the viewport is idle.");
+        Check(ThumbnailLoadCoordinator.CanStartAheadLoad(
+                isWarm: true, hasVisibleWork: true, activeLoadCount: 1, activeAheadLoads: 0),
+            "Expected a warm ahead load to overlap visible work.");
+        Check(!ThumbnailLoadCoordinator.CanStartAheadLoad(
+                isWarm: true, hasVisibleWork: false, activeLoadCount: 64, activeAheadLoads: 0),
+            "Expected the total active load cap to bound warm prefetch.");
+        Check(!ThumbnailLoadCoordinator.CanStartAheadLoad(
+                isWarm: true, hasVisibleWork: false, activeLoadCount: 1, activeAheadLoads: 64),
+            "Expected the warm ahead cap to bound warm prefetch.");
+
+        // The lookahead budget has to follow the scroll direction, not straddle it.
+        var down = MainWindow.GetAheadRowWindow(1);
+        var up = MainWindow.GetAheadRowWindow(-1);
+        Check(down.RowsBelow > down.RowsAbove, "Expected scrolling down to prefetch mostly below.");
+        Check(up.RowsAbove > up.RowsBelow, "Expected scrolling up to prefetch mostly above.");
+        Check(down.RowsAbove > 0 && up.RowsBelow > 0,
+            "Expected the trailing side to retain some prefetch so a reversal is not fully cold.");
+        Check(down.RowsBelow == up.RowsAbove && down.RowsAbove == up.RowsBelow,
+            "Expected the prefetch window to be symmetric under a direction flip.");
+    }
+
+    // One pack file replaced thousands of small JPEGs, so the round trip, the key's dependence on source
+    // version and width, and instant clearing are all load-bearing.
+    private static void CheckThumbnailPackRoundTrip()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-pack-{Guid.NewGuid():N}");
+        var sourcePath = Path.Combine(directory, "image.png");
+        try
+        {
+            var pack = new ThumbnailPack(directory);
+            var key = ThumbnailPack.CreateKey(sourcePath, 1000, 180);
+            var other = ThumbnailPack.CreateKey(sourcePath, 1000, 240);
+            var newerVersion = ThumbnailPack.CreateKey(sourcePath, 2000, 180);
+
+            Check(key != other && key != newerVersion,
+                "Expected thumbnail keys to separate width buckets and source versions.");
+            Check(!pack.Contains(key), "Expected an empty thumbnail pack to report a miss.");
+
+            byte[] payload = [1, 2, 3, 4, 5, 6, 7, 8];
+            Check(pack.Write(key, payload), "Expected a thumbnail pack write to succeed.");
+            Check(pack.Contains(key) && !pack.Contains(other),
+                "Expected only the written key to be present.");
+            Check(pack.TryRead(key, out var read) && read.AsSpan().SequenceEqual(payload),
+                "Expected a thumbnail pack entry to round trip.");
+
+            byte[] second = [9, 9, 9];
+            pack.Write(other, second);
+            pack.Remove(key);
+            Check(!pack.Contains(key), "Expected removing a thumbnail pack entry to drop it.");
+            Check(pack.TryRead(other, out var stillThere) && stillThere.AsSpan().SequenceEqual(second),
+                "Expected removing one entry to leave neighbouring payloads readable.");
+
+            pack.Dispose();
+
+            // Reopening replays the offset log, which is what makes a warm folder warm across restarts.
+            var reopened = new ThumbnailPack(directory);
+            Check(!reopened.Contains(key), "Expected a tombstoned entry to stay removed after reopening.");
+            Check(reopened.TryRead(other, out var reloaded) && reloaded.AsSpan().SequenceEqual(second),
+                "Expected thumbnail pack entries to survive reopening.");
+
+            reopened.Clear();
+            Check(!reopened.Contains(other), "Expected clearing the pack to drop every entry.");
+            Check(new FileInfo(Path.Combine(directory, "thumbnails.pack")).Length == 8,
+                "Expected clearing the pack to truncate the data file rather than delete files one by one.");
+            reopened.Dispose();
+        }
+        finally
+        {
+            DeleteDirectoryQuietly(directory);
+        }
+    }
+
     private static void CheckThumbnailCacheBudget()
     {
         Check(!DecodedImageCache.ExceedsBudget(DecodedImageCache.MaxCapacity, DecodedImageCache.MaxEstimatedBytes), "Expected exact thumbnail cache budget to fit.");
         Check(DecodedImageCache.ExceedsBudget(DecodedImageCache.MaxCapacity + 1, 0), "Expected thumbnail count budget overflow.");
         Check(DecodedImageCache.ExceedsBudget(1, DecodedImageCache.MaxEstimatedBytes + 1), "Expected thumbnail byte budget overflow.");
+        Check(DecodedImageCache.MaxEvictionScanPerTouch > 0,
+            "Expected a bounded eviction scan so an all-protected cache cannot walk the whole list per touch.");
+    }
+
+    private static void CheckThumbnailDecodeWidths()
+    {
+        var item = CreateImageItem(Path.Combine(Path.GetTempPath(), "decode-width-selfcheck.png"));
+
+        // Every tile size must decode close to its render size, never far above it.
+        foreach (var tileSize in new double[] { 80, 100, 120, 160, 200, 240, 320 })
+        {
+            item.SetTileSize(tileSize);
+            var decodeWidth = item.GetThumbnailDecodeWidth();
+            Check(decodeWidth >= tileSize,
+                $"Expected the decode width for tile size {tileSize} to cover the rendered tile.");
+            Check(decodeWidth <= tileSize * 2,
+                $"Expected the decode width for tile size {tileSize} to stay within twice the rendered tile.");
+        }
+
+        item.SetTileSize(80);
+        Check(item.GetThumbnailDecodeWidth() == 120,
+            "Expected the smallest tile size to use the tiny decode bucket.");
+        item.SetTileSize(120);
+        Check(item.GetThumbnailDecodeWidth() == 180,
+            "Expected the default tile size to keep its existing decode bucket.");
+        item.SetTileSize(320);
+        Check(item.GetThumbnailDecodeWidth() == 320,
+            "Expected the largest tile size to use the large decode bucket.");
     }
 
     private static void CheckJpegThumbnailEncoding()
     {
         var sourcePath = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}.png");
-        var cachePath = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}.jpg");
         try
         {
             File.WriteAllBytes(sourcePath, Convert.FromBase64String(
                 "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="));
-            ThumbnailService.SaveJpegThumbnailAtomically(sourcePath, cachePath, thumbnailWidth: 180);
-            var signature = File.ReadAllBytes(cachePath);
-            Check(signature.Length > 3 && signature[0] == 0xff && signature[1] == 0xd8 && signature[2] == 0xff,
+            var encoded = ThumbnailService.EncodeJpegThumbnail(sourcePath, thumbnailWidth: 180);
+            Check(encoded.Length > 3 && encoded[0] == 0xff && encoded[1] == 0xd8 && encoded[2] == 0xff,
                 "Expected thumbnail cache output to contain a JPEG signature.");
         }
         finally
         {
             TryDelete(sourcePath);
-            TryDelete(cachePath);
         }
     }
 

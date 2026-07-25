@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Media.Imaging;
@@ -9,72 +8,68 @@ using SkiaSharp;
 
 namespace ComfyPromptViewer;
 
-internal sealed class ThumbnailService
+internal sealed class ThumbnailService : IDisposable
 {
     private const int ThumbnailJpegQuality = 82;
-    private const int ThumbnailFolderHashLength = 8;
-    private static readonly char[] InvalidFileNameChars = Path.GetInvalidFileNameChars();
     private readonly SemaphoreSlim _cacheWriteLimiter = new(1, 1);
     private readonly object _pendingWritesLock = new();
-    private readonly HashSet<string> _pendingWrites = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<ThumbnailKey> _pendingWrites = [];
     private readonly Queue<ThumbnailCacheWrite> _deferredWrites = new();
+    private readonly ThumbnailPack _pack;
     private Func<bool>? _writesPaused;
     private bool _maintenancePaused;
 
     public ThumbnailService(string appDataDirectory)
     {
         CacheRootDirectory = Path.Combine(appDataDirectory, "thumbnails");
-        try
-        {
-            Directory.CreateDirectory(CacheRootDirectory);
-        }
-        catch (Exception ex)
-        {
-            DebugLog.Write($"Failed to create thumbnail cache root {CacheRootDirectory}: {ex.Message}");
-        }
+        _pack = new ThumbnailPack(CacheRootDirectory);
+        DebugLog.Observe(Task.Run(RemoveLegacyCacheDirectories), "Legacy thumbnail cache cleanup");
     }
 
     public string CacheRootDirectory { get; }
     public SemaphoreSlim SelectedPreviewLoadLimiter { get; } = new(1);
 
-    public string BuildCachePath(string sourcePath, int thumbnailWidth)
+    // Lets bulk producers throttle themselves instead of queueing a whole folder at once.
+    public int PendingWriteCount
     {
-        try
+        get
         {
-            var parentDirectory = Directory.GetParent(sourcePath);
-            var parentPath = parentDirectory?.FullName ?? "";
-            var parentName = string.IsNullOrWhiteSpace(parentDirectory?.Name)
-                ? "root"
-                : parentDirectory.Name;
-            var folderHash = HashText(parentPath)[..ThumbnailFolderHashLength];
-            var cacheDirectory = Path.Combine(
-                CacheRootDirectory,
-                $"{MakeSafePathSegment(parentName)}_{folderHash}");
-            Directory.CreateDirectory(cacheDirectory);
-
-            var input = $"{sourcePath}_{File.GetLastWriteTimeUtc(sourcePath).Ticks}";
-            var hash = HashText(input);
-            var legacyPath = Path.Combine(cacheDirectory, $"w{thumbnailWidth}_{hash}.jpg");
-            try
+            lock (_pendingWritesLock)
             {
-                File.Delete(legacyPath);
+                return _deferredWrites.Count;
             }
-            catch
-            {
-            }
-
-            return Path.Combine(cacheDirectory, $"j1_w{thumbnailWidth}_{hash}.jpg");
-        }
-        catch (Exception ex)
-        {
-            DebugLog.Write($"Failed to build thumbnail cache path for {sourcePath}: {ex.Message}");
-            return "";
         }
     }
 
-    public Bitmap LoadCachedThumbnail(string cachePath)
+    // A dictionary hit. There is no per-image path to build, directory to create, or file to probe.
+    public bool HasCachedThumbnail(in ThumbnailKey key)
     {
-        return new Bitmap(cachePath);
+        return _pack.Contains(key);
+    }
+
+    public Bitmap? TryLoadCachedThumbnail(in ThumbnailKey key)
+    {
+        if (!_pack.TryRead(key, out var data))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var stream = new MemoryStream(data, writable: false);
+            return new Bitmap(stream);
+        }
+        catch
+        {
+            // A payload that will not decode is worse than a miss; drop it so the next pass re-encodes.
+            _pack.Remove(key);
+            throw;
+        }
+    }
+
+    public void RemoveCachedThumbnail(in ThumbnailKey key)
+    {
+        _pack.Remove(key);
     }
 
     public Bitmap DecodeThumbnail(string sourcePath, int width)
@@ -89,29 +84,23 @@ internal sealed class ThumbnailService
         return Bitmap.DecodeToWidth(stream, width, BitmapInterpolationMode.MediumQuality);
     }
 
-    public bool TryQueueCacheWrite(ImageItem item, string cachePath)
+    public bool TryQueueCacheWrite(ImageItem item, in ThumbnailKey key)
     {
-        if (string.IsNullOrEmpty(cachePath))
+        if (_pack.Contains(key))
         {
-            return false;
-        }
-
-        if (File.Exists(cachePath))
-        {
-            item.SetThumbnailCacheState(cachePath, exists: true);
             return false;
         }
 
         lock (_pendingWritesLock)
         {
-            if (_maintenancePaused || !_pendingWrites.Add(cachePath))
+            if (_maintenancePaused || !_pendingWrites.Add(key))
             {
                 return false;
             }
 
             _deferredWrites.Enqueue(new ThumbnailCacheWrite(
                 item,
-                cachePath,
+                key,
                 item.GetThumbnailDecodeWidth()));
         }
 
@@ -129,7 +118,7 @@ internal sealed class ThumbnailService
         StartWriter();
     }
 
-    internal bool TryBeginCacheWrite(string cachePath)
+    internal bool TryBeginCacheWrite(in ThumbnailKey key)
     {
         if (!_cacheWriteLimiter.Wait(0))
         {
@@ -138,7 +127,7 @@ internal sealed class ThumbnailService
 
         lock (_pendingWritesLock)
         {
-            if (_pendingWrites.Add(cachePath))
+            if (_pendingWrites.Add(key))
             {
                 return true;
             }
@@ -148,11 +137,11 @@ internal sealed class ThumbnailService
         return false;
     }
 
-    internal void EndCacheWrite(string cachePath)
+    internal void EndCacheWrite(in ThumbnailKey key)
     {
         lock (_pendingWritesLock)
         {
-            _pendingWrites.Remove(cachePath);
+            _pendingWrites.Remove(key);
         }
 
         _cacheWriteLimiter.Release();
@@ -165,8 +154,53 @@ internal sealed class ThumbnailService
         {
             while (_deferredWrites.TryDequeue(out var write))
             {
-                _pendingWrites.Remove(write.CachePath);
+                _pendingWrites.Remove(write.Key);
             }
+        }
+    }
+
+    // Drains and pauses writes, empties the pack, then resumes. Emptying is two file truncations, so this
+    // no longer depends on how many thumbnails were cached.
+    public async Task ClearCacheAsync()
+    {
+        await PauseAndDrainWritesAsync();
+        try
+        {
+            _pack.Clear();
+            await Task.Run(RemoveLegacyCacheDirectories);
+        }
+        finally
+        {
+            ResumeWrites();
+        }
+    }
+
+    // The pack format keeps two files at the cache root, so any subdirectory is a per-folder cache left
+    // behind by the old one-JPEG-per-thumbnail layout. Sweep them once instead of stranding them forever.
+    private void RemoveLegacyCacheDirectories()
+    {
+        try
+        {
+            if (!Directory.Exists(CacheRootDirectory))
+            {
+                return;
+            }
+
+            foreach (var directory in Directory.EnumerateDirectories(CacheRootDirectory))
+            {
+                try
+                {
+                    Directory.Delete(directory, recursive: true);
+                }
+                catch (Exception ex)
+                {
+                    DebugLog.Write($"Failed to remove legacy thumbnail cache directory {directory}: {ex.Message}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            DebugLog.Write($"Failed to enumerate legacy thumbnail cache directories: {ex.Message}");
         }
     }
 
@@ -177,7 +211,7 @@ internal sealed class ThumbnailService
             _maintenancePaused = true;
             while (_deferredWrites.TryDequeue(out var write))
             {
-                _pendingWrites.Remove(write.CachePath);
+                _pendingWrites.Remove(write.Key);
             }
         }
 
@@ -193,6 +227,11 @@ internal sealed class ThumbnailService
         }
 
         StartWriter();
+    }
+
+    public void Dispose()
+    {
+        _pack.Dispose();
     }
 
     private void StartWriter()
@@ -220,22 +259,20 @@ internal sealed class ThumbnailService
         {
             try
             {
-                if (File.Exists(write.CachePath))
+                if (_pack.Contains(write.Key))
                 {
-                    write.Item.SetThumbnailCacheState(write.CachePath, exists: true);
                     return;
                 }
 
-                SaveJpegThumbnailAtomically(write.Item.Path, write.CachePath, write.ThumbnailWidth);
-                write.Item.SetThumbnailCacheState(write.CachePath, exists: true);
+                _pack.Write(write.Key, EncodeJpegThumbnail(write.Item.Path, write.ThumbnailWidth));
             }
             catch (Exception ex)
             {
-                DebugLog.Write($"Failed to write deferred thumbnail cache for {write.Item.Path} to {write.CachePath}: {ex.Message}");
+                DebugLog.Write($"Failed to write deferred thumbnail cache for {write.Item.Path}: {ex.Message}");
             }
             finally
             {
-                EndCacheWrite(write.CachePath);
+                EndCacheWrite(write.Key);
             }
         }), "Deferred thumbnail cache writer");
     }
@@ -253,57 +290,34 @@ internal sealed class ThumbnailService
         }
     }
 
-    internal static void SaveJpegThumbnailAtomically(string sourcePath, string cachePath, int thumbnailWidth)
+    // Produces the JPEG bytes only. Durability is the pack's problem now, so there is no temporary file
+    // and no atomic move per thumbnail.
+    internal static byte[] EncodeJpegThumbnail(string sourcePath, int thumbnailWidth)
     {
-        var temporaryPath = $"{cachePath}.{Guid.NewGuid():N}.tmp";
-        try
+        using var codec = SKCodec.Create(sourcePath)
+            ?? throw new InvalidDataException($"Could not open thumbnail source {sourcePath}.");
+        var sourceInfo = codec.Info;
+        var width = Math.Min(sourceInfo.Width, thumbnailWidth);
+        var height = Math.Max(1, (int)Math.Round(sourceInfo.Height * (width / (double)sourceInfo.Width)));
+        var decodedSize = codec.GetScaledDimensions(width / (float)sourceInfo.Width);
+        var decodedInfo = new SKImageInfo(
+            decodedSize.Width,
+            decodedSize.Height,
+            SKColorType.Bgra8888,
+            SKAlphaType.Premul);
+        using var decoded = SKBitmap.Decode(codec, decodedInfo)
+            ?? throw new InvalidDataException($"Could not decode thumbnail source {sourcePath}.");
+        var info = new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Premul);
+        using var resized = new SKBitmap(info);
+        if (!decoded.ScalePixels(resized, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None)))
         {
-            using var codec = SKCodec.Create(sourcePath)
-                ?? throw new InvalidDataException($"Could not open thumbnail source {sourcePath}.");
-            var sourceInfo = codec.Info;
-            var width = Math.Min(sourceInfo.Width, thumbnailWidth);
-            var height = Math.Max(1, (int)Math.Round(sourceInfo.Height * (width / (double)sourceInfo.Width)));
-            var decodedSize = codec.GetScaledDimensions(width / (float)sourceInfo.Width);
-            var decodedInfo = new SKImageInfo(
-                decodedSize.Width,
-                decodedSize.Height,
-                SKColorType.Bgra8888,
-                SKAlphaType.Premul);
-            using var decoded = SKBitmap.Decode(codec, decodedInfo)
-                ?? throw new InvalidDataException($"Could not decode thumbnail source {sourcePath}.");
-            var info = new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Premul);
-            using var resized = new SKBitmap(info);
-            if (!decoded.ScalePixels(resized, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None)))
-            {
-                throw new InvalidDataException($"Could not resize thumbnail source {sourcePath}.");
-            }
-
-            using var image = SKImage.FromBitmap(resized);
-            using var data = image.Encode(SKEncodedImageFormat.Jpeg, ThumbnailJpegQuality)
-                ?? throw new InvalidDataException($"Could not encode JPEG thumbnail for {sourcePath}.");
-            using (var stream = File.Create(temporaryPath))
-            {
-                data.SaveTo(stream);
-            }
-
-            try
-            {
-                File.Move(temporaryPath, cachePath);
-            }
-            catch (IOException) when (File.Exists(cachePath))
-            {
-            }
+            throw new InvalidDataException($"Could not resize thumbnail source {sourcePath}.");
         }
-        finally
-        {
-            try
-            {
-                File.Delete(temporaryPath);
-            }
-            catch
-            {
-            }
-        }
+
+        using var image = SKImage.FromBitmap(resized);
+        using var data = image.Encode(SKEncodedImageFormat.Jpeg, ThumbnailJpegQuality)
+            ?? throw new InvalidDataException($"Could not encode JPEG thumbnail for {sourcePath}.");
+        return data.ToArray();
     }
 
     private bool TryDequeue(out ThumbnailCacheWrite write)
@@ -314,40 +328,8 @@ internal sealed class ThumbnailService
         }
     }
 
-    private static string HashText(string value)
-    {
-        return Convert.ToHexStringLower(
-            System.Security.Cryptography.MD5.HashData(Encoding.UTF8.GetBytes(value)));
-    }
-
-    private static string MakeSafePathSegment(string value)
-    {
-        var safeValue = value.Trim();
-        if (safeValue.Length == 0)
-        {
-            return "folder";
-        }
-
-        var firstInvalidIndex = safeValue.IndexOfAny(InvalidFileNameChars);
-        if (firstInvalidIndex < 0)
-        {
-            return safeValue;
-        }
-
-        var chars = safeValue.ToCharArray();
-        for (var index = firstInvalidIndex; index < chars.Length; index++)
-        {
-            if (Array.IndexOf(InvalidFileNameChars, chars[index]) >= 0)
-            {
-                chars[index] = '_';
-            }
-        }
-
-        return new string(chars);
-    }
-
     private readonly record struct ThumbnailCacheWrite(
         ImageItem Item,
-        string CachePath,
+        ThumbnailKey Key,
         int ThumbnailWidth);
 }

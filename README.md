@@ -17,7 +17,7 @@ It supports images from ComfyUI, Forge Neo, Draw Things, and Stable Diffusion We
 - Multi-select cards to copy their positive prompts together or delete them as one confirmed batch.
 - Sort by date or filename, switch color themes, and quickly reopen recent folders.
 - Watch the active folder for created, modified, renamed, or removed images.
-- Cache thumbnails and parsed metadata locally for faster repeat browsing.
+- Cache thumbnails and parsed metadata locally for faster repeat browsing, with optional background prewarming of the whole folder.
 
 ## Search Syntax
 

@@ -102,6 +102,13 @@ public partial class MainWindow
             var newFiles = new List<ImageFileEntry>(addedFiles.Count + changedFiles.Count);
             var processedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+            // Small batches keep the catalog ordered as they go, so adds and replacements both avoid a
+            // full re-sort. Larger batches swap entries in one pass and pay for a single bulk sort.
+            var useSortedPlacement = addedFiles.Count + changedFiles.Count <= MaxIncrementalGalleryChanges;
+            var bulkReplacements = useSortedPlacement
+                ? null
+                : new Dictionary<string, GalleryEntry>(StringComparer.OrdinalIgnoreCase);
+
             void ProcessChangedFile(ImageFileEntry imageFile)
             {
                 if (!processedPaths.Add(imageFile.Path))
@@ -117,10 +124,23 @@ public partial class MainWindow
 
                 var previousItem = existingEntry.Item;
                 var replacementItem = CreateImageItem(imageFile.Path, imageFile.Fingerprint);
-                _catalog.Replace(
-                    imageFile.Path,
-                    new GalleryEntry(imageFile.Path, imageFile.Fingerprint, replacementItem),
-                    out _);
+                var replacementEntry = new GalleryEntry(imageFile.Path, imageFile.Fingerprint, replacementItem);
+                if (useSortedPlacement)
+                {
+                    if (!_catalog.TryReplaceSorted(replacementEntry, CompareGalleryEntries, out _))
+                    {
+                        // The entry vanished between lookup and replacement; drop the orphan rather than
+                        // leaving it subscribed to metadata events while outside the catalog.
+                        replacementItem.MetadataLoaded -= ImageItem_MetadataLoaded;
+                        return;
+                    }
+                }
+                else
+                {
+                    bulkReplacements![imageFile.Path] = replacementEntry;
+                    needsSort = true;
+                }
+
                 previousItem.MetadataLoaded -= ImageItem_MetadataLoaded;
                 previousItem.ReleasePreview();
                 if (_selectedItems.Contains(previousItem))
@@ -139,7 +159,6 @@ public partial class MainWindow
 
                 itemsToScan.Add(replacementItem);
                 changed = true;
-                needsSort = true;
             }
 
             foreach (var imageFile in changedFiles)
@@ -152,13 +171,12 @@ public partial class MainWindow
                 ProcessChangedFile(imageFile);
             }
 
-            var useSortedInsertion = !needsSort && newFiles.Count <= MaxIncrementalGalleryChanges;
             foreach (var addedFile in newFiles)
             {
                 var path = addedFile.Path;
                 var item = CreateImageItem(path, addedFile.Fingerprint);
                 var entry = new GalleryEntry(path, addedFile.Fingerprint, item);
-                if (useSortedInsertion)
+                if (useSortedPlacement)
                 {
                     var insertIndex = _catalog.FindSortedInsertIndex(entry, CompareGalleryEntries);
                     _catalog.Insert(insertIndex, entry);
@@ -166,13 +184,19 @@ public partial class MainWindow
                 else
                 {
                     _catalog.Add(entry);
+                    needsSort = true;
                 }
 
                 itemsToScan.Add(item);
                 changed = true;
             }
 
-            if ((!useSortedInsertion && newFiles.Count > 0) || needsSort)
+            if (bulkReplacements is { Count: > 0 })
+            {
+                _catalog.ReplaceMany(bulkReplacements);
+            }
+
+            if (needsSort)
             {
                 ApplySort();
             }
@@ -186,6 +210,12 @@ public partial class MainWindow
                     itemsToScan,
                     HasSearchQueryActive,
                     () => ApplyFilter(resetScroll: false));
+
+                // Files that arrive after the initial scan miss its completion hook, so warm them here.
+                if (_folderLoader.CurrentToken is { IsCancellationRequested: false } prewarmToken)
+                {
+                    QueueThumbnailCachePrewarm(itemsToScan, _folderLoader.Generation, prewarmToken);
+                }
             }
 
             ApplyFilter(resetScroll: false);

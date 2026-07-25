@@ -80,22 +80,12 @@ public partial class MainWindow
 
         _thumbnailCacheClearInProgress = true;
         _thumbnailLoads.Clear();
-        var cacheWritesPaused = false;
         try
         {
-            await _thumbnailService.PauseAndDrainWritesAsync();
-            cacheWritesPaused = true;
-            foreach (var item in _catalog.Items)
-            {
-                item.InvalidateThumbnailCacheState();
-            }
             _decodedImageCache.ClearAndReleaseAll();
-            if (Directory.Exists(_thumbnailService.CacheRootDirectory))
-            {
-                Directory.Delete(_thumbnailService.CacheRootDirectory, recursive: true);
-            }
-
-            Directory.CreateDirectory(_thumbnailService.CacheRootDirectory);
+            // Two file truncations regardless of cache size, and no per-item state to invalidate: every
+            // item resolves "is this cached" through the pack index, which is now empty.
+            await _thumbnailService.ClearCacheAsync();
             ShowAdvancedMaintenanceStatus("Thumbnail cache cleared.");
         }
         catch (Exception ex)
@@ -106,10 +96,6 @@ public partial class MainWindow
         }
         finally
         {
-            if (cacheWritesPaused)
-            {
-                _thumbnailService.ResumeWrites();
-            }
             _thumbnailCacheClearInProgress = false;
             QueueViewportThumbnailSchedule(force: true);
         }
@@ -148,15 +134,13 @@ public partial class MainWindow
 
     private async void ShowAdvancedMaintenanceStatus(string message)
     {
-        CancelAndDispose(ref _advancedMaintenanceStatusCancellation);
-        _advancedMaintenanceStatusCancellation = new CancellationTokenSource();
-        var token = _advancedMaintenanceStatusCancellation.Token;
+        var session = _advancedMaintenanceStatusGate.Restart();
 
         AdvancedMaintenanceStatus.Text = message;
         AdvancedMaintenanceStatus.Opacity = 0;
         AdvancedMaintenanceStatus.IsVisible = true;
         await Task.Yield();
-        if (token.IsCancellationRequested)
+        if (session.IsStale)
         {
             return;
         }
@@ -165,10 +149,10 @@ public partial class MainWindow
 
         try
         {
-            await Task.Delay(AdvancedMaintenanceStatusDuration, token);
+            await Task.Delay(AdvancedMaintenanceStatusDuration, session.Token);
             AdvancedMaintenanceStatus.Opacity = 0;
-            await Task.Delay(120, token);
-            if (!token.IsCancellationRequested)
+            await Task.Delay(120, session.Token);
+            if (session.IsCurrent)
             {
                 AdvancedMaintenanceStatus.IsVisible = false;
                 AdvancedMaintenanceStatus.Text = "";
@@ -181,7 +165,7 @@ public partial class MainWindow
 
     private void ClearAdvancedMaintenanceStatus()
     {
-        CancelAndDispose(ref _advancedMaintenanceStatusCancellation);
+        _advancedMaintenanceStatusGate.Cancel();
         AdvancedMaintenanceStatus.Opacity = 0;
         AdvancedMaintenanceStatus.IsVisible = false;
         AdvancedMaintenanceStatus.Text = "";
@@ -270,7 +254,7 @@ public partial class MainWindow
                 Classes = { "recent-item" },
                 Margin = new Thickness(0, 0, 0, 8),
                 Padding = new Thickness(14, 12),
-                Cursor = new Cursor(StandardCursorType.Hand),
+                Cursor = HandCursor,
                 Focusable = true
             };
             itemBorder.SetValue(AutomationProperties.NameProperty, $"Open recent folder {folderName}");
@@ -365,7 +349,7 @@ public partial class MainWindow
                 CornerRadius = new CornerRadius(2),
                 FontSize = 10,
                 Padding = new Thickness(0),
-                Cursor = new Cursor(StandardCursorType.Arrow),
+                Cursor = ArrowCursor,
                 Margin = new Thickness(8, 0, 0, 0)
             };
             closeButton.SetValue(AutomationProperties.NameProperty, $"Remove {folderName} from Recent");
@@ -434,6 +418,28 @@ public partial class MainWindow
         if (span.TotalDays < 30) return $"{(int)span.TotalDays}d ago";
         return utcTime.ToLocalTime().ToString("MMM d, yyyy");
     }
+    private void PrewarmThumbnailsToggle_Click(object? sender, RoutedEventArgs e)
+    {
+        _prewarmThumbnails = PrewarmThumbnailsToggle.IsChecked == true;
+        _preferences.SavePrewarmThumbnails(_prewarmThumbnails);
+
+        if (!_prewarmThumbnails)
+        {
+            _thumbnailService.ClearDeferredWrites();
+            _prewarmRemaining = 0;
+            UpdateCountText();
+            ShowAdvancedMaintenanceStatus("Thumbnail prewarming off.");
+            return;
+        }
+
+        ShowAdvancedMaintenanceStatus("Thumbnail prewarming on.");
+        if (_catalog.Count > 0 &&
+            _folderLoader.CurrentToken is { IsCancellationRequested: false } token)
+        {
+            QueueThumbnailCachePrewarm(_folderLoader.Generation, token);
+        }
+    }
+
     private void AdvancedToggle_Click(object? sender, RoutedEventArgs e)
     {
         AdvancedPanel.IsVisible = AdvancedToggle.IsChecked == true;

@@ -75,7 +75,7 @@ public partial class MainWindow
                 (left, right) => CompareImageFileEntries(left, right, sortMode),
                 token);
 
-            if (!_folderLoader.IsCurrent(loadSession))
+            if (!loadSession.IsCurrent)
             {
                 return;
             }
@@ -87,7 +87,7 @@ public partial class MainWindow
                     () => imageFiles.Sort(
                         (left, right) => CompareImageFileEntries(left, right, sortMode)),
                     token);
-                if (!_folderLoader.IsCurrent(loadSession))
+                if (!loadSession.IsCurrent)
                 {
                     return;
                 }
@@ -104,7 +104,7 @@ public partial class MainWindow
             {
                 var hasNestedImages = !includeSubfolders &&
                                       await FolderLoadCoordinator.HasImagesAsync(folderPath, includeSubfolders: true);
-                if (!_folderLoader.IsCurrent(loadSession))
+                if (!loadSession.IsCurrent)
                 {
                     return;
                 }
@@ -147,7 +147,7 @@ public partial class MainWindow
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             DebugLog.Write($"Failed to load folder '{folderPath}': {ex}");
-            if (!_folderLoader.IsCurrent(loadSession))
+            if (!loadSession.IsCurrent)
             {
                 return;
             }

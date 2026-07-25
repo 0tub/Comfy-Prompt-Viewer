@@ -110,30 +110,28 @@ public partial class MainWindow
 
     private int CompareGalleryEntries(GalleryEntry left, GalleryEntry right)
     {
-        if (_sortMode == SortMode.Name)
-        {
-            return CompareImagePathNames(left.Path, right.Path);
-        }
-
-        var compare = left.LastWriteTimeUtc.CompareTo(right.LastWriteTimeUtc);
-        if (_sortMode == SortMode.NewestFirst)
-        {
-            compare = -compare;
-        }
-
-        return compare != 0
-            ? compare
-            : StringComparer.OrdinalIgnoreCase.Compare(left.Path, right.Path);
+        return CompareSortKeys(left.Path, left.Fingerprint, right.Path, right.Fingerprint, _sortMode);
     }
 
     private static int CompareImageFileEntries(ImageFileEntry left, ImageFileEntry right, SortMode sortMode)
     {
+        return CompareSortKeys(left.Path, left.Fingerprint, right.Path, right.Fingerprint, sortMode);
+    }
+
+    private static int CompareSortKeys(
+        string leftPath,
+        SourceFingerprint leftFingerprint,
+        string rightPath,
+        SourceFingerprint rightFingerprint,
+        SortMode sortMode)
+    {
         if (sortMode == SortMode.Name)
         {
-            return CompareImagePathNames(left.Path, right.Path);
+            return CompareImagePathNames(leftPath, rightPath);
         }
 
-        var compare = left.LastWriteTimeUtc.CompareTo(right.LastWriteTimeUtc);
+        // Compare raw ticks so the sort inner loop does not construct a DateTime per comparison.
+        var compare = leftFingerprint.LastWriteTimeUtcTicks.CompareTo(rightFingerprint.LastWriteTimeUtcTicks);
         if (sortMode == SortMode.NewestFirst)
         {
             compare = -compare;
@@ -141,15 +139,17 @@ public partial class MainWindow
 
         return compare != 0
             ? compare
-            : StringComparer.OrdinalIgnoreCase.Compare(left.Path, right.Path);
+            : StringComparer.OrdinalIgnoreCase.Compare(leftPath, rightPath);
     }
 
     private static int CompareImagePathNames(string left, string right)
     {
-        var fileNameCompare = StringComparer.CurrentCultureIgnoreCase.Compare(Path.GetFileName(left), Path.GetFileName(right));
+        // Span slicing keeps the file-name comparison allocation-free across the whole n log n sort.
+        var fileNameCompare = Path.GetFileName(left.AsSpan())
+            .CompareTo(Path.GetFileName(right.AsSpan()), StringComparison.CurrentCultureIgnoreCase);
         return fileNameCompare != 0
             ? fileNameCompare
-            : StringComparer.CurrentCultureIgnoreCase.Compare(left, right);
+            : string.Compare(left, right, StringComparison.CurrentCultureIgnoreCase);
     }
 
     internal static int FindSortedInsertIndex<T>(IReadOnlyList<T> sortedItems, T item, Comparison<T> comparison)
@@ -687,6 +687,15 @@ public partial class MainWindow
         }, DispatcherPriority.Background);
     }
 
+    // Roughly one extra screen of lookahead in the direction of travel, and just enough behind to cover a
+    // reversal. Spending the whole budget symmetrically wastes most of it on rows already passed.
+    internal static (int RowsAbove, int RowsBelow) GetAheadRowWindow(int prefetchDirection)
+    {
+        return prefetchDirection < 0
+            ? (AheadRowsInScrollDirection, AheadRowsAgainstScrollDirection)
+            : (AheadRowsAgainstScrollDirection, AheadRowsInScrollDirection);
+    }
+
     private void ScheduleViewportThumbnails()
     {
         if (_folderLoader.CurrentToken is not { IsCancellationRequested: false } token || _viewModel.Items.Count == 0)
@@ -718,8 +727,9 @@ public partial class MainWindow
 
         AddRange(visibleItems, firstVisibleIndex, lastVisibleIndex);
 
-        var aheadStartRow = Math.Max(0, firstVisibleRow - 2);
-        var aheadEndRow = firstVisibleRow + visibleRowCount + 4;
+        var (rowsAbove, rowsBelow) = GetAheadRowWindow(_prefetchDirection);
+        var aheadStartRow = Math.Max(0, firstVisibleRow - rowsAbove);
+        var aheadEndRow = firstVisibleRow + visibleRowCount + rowsBelow;
         var aheadEndIndex = Math.Min(_viewModel.Items.Count - 1, (aheadEndRow * columnCount) - 1);
 
         if (_prefetchDirection < 0)
@@ -768,7 +778,7 @@ public partial class MainWindow
 
     private async void ToggleGalleryEmptyState(bool show)
     {
-        var generation = ++_galleryEmptyStateGeneration;
+        var transition = _galleryEmptyStateGate.Begin();
         if (show)
         {
             if (!GalleryEmptyState.IsVisible)
@@ -778,7 +788,7 @@ public partial class MainWindow
             }
 
             await Task.Yield();
-            if (generation == _galleryEmptyStateGeneration)
+            if (transition.IsCurrent)
             {
                 GalleryEmptyState.Opacity = 1;
             }
@@ -789,7 +799,7 @@ public partial class MainWindow
             {
                 GalleryEmptyState.Opacity = 0;
                 await Task.Delay(120);
-                if (generation == _galleryEmptyStateGeneration)
+                if (transition.IsCurrent)
                 {
                     GalleryEmptyState.IsVisible = false;
                 }
@@ -801,7 +811,7 @@ public partial class MainWindow
     {
         int total = _catalog.Count;
         int filtered = _viewModel.Items.Count;
-        int loadedMetadataCount = _catalog.Items.Count(item => item.HasLoadedMetadata);
+        int loadedMetadataCount = _catalog.LoadedMetadataCount;
 
         bool isScanning = _metadataScanner.HasActiveSession &&
                          loadedMetadataCount < total;
@@ -831,6 +841,11 @@ public partial class MainWindow
                 : $"{filtered:n0} of {total} images";
         }
 
+        if (!isScanning && _prewarmRemaining > 0)
+        {
+            CountText.Text += $" (Caching thumbnails {total - _prewarmRemaining:n0}/{total:n0})";
+        }
+
         if (_selectedItems.Count > 1)
         {
             CountText.Text += $" | {_selectedItems.Count:n0} selected";
@@ -844,7 +859,7 @@ public partial class MainWindow
     private void ClearImageItems()
     {
         CancelSearchFilter();
-        _searchDataGeneration++;
+        _prewarmRemaining = 0;
         _metadataCountUpdateTimer?.Stop();
         GalleryEmptyState.IsVisible = false;
         GalleryEmptyState.Opacity = 0;

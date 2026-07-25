@@ -1467,6 +1467,13 @@
                                 </ToggleButton>
                                 
                                 <StackPanel Name="AdvancedPanel" Spacing="8" Margin="16,4,0,0" IsVisible="False">
+                                    <CheckBox Name="PrewarmThumbnailsToggle"
+                                              Content="Prewarm thumbnail cache"
+                                              Click="PrewarmThumbnailsToggle_Click"
+                                              FontSize="13"
+                                              Foreground="{DynamicResource TextSecondary}"
+                                              AutomationProperties.Name="Prewarm thumbnail cache"
+                                              ToolTip.Tip="Cache every thumbnail in the background after scanning, so later scrolling is never cold" />
                                     <Button Classes="menu-maintenance-btn" Click="ClearCacheButton_Click" ToolTip.Tip="Clear local thumbnail cache">
                                         <StackPanel Orientation="Horizontal" Spacing="8">
                                             <TextBlock Text="🗑" Classes="emoji-icon" FontSize="13" VerticalAlignment="Center" Foreground="{DynamicResource TextMuted}" />

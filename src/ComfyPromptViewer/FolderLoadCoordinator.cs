@@ -9,74 +9,26 @@ namespace ComfyPromptViewer;
 
 internal sealed class FolderLoadCoordinator
 {
-    private readonly object _stateLock = new();
-    private CancellationTokenSource? _cancellation;
-    private int _generation;
+    // Folder-load staleness is one SessionGate; see Staleness.cs. Do not add a second counter here.
+    private readonly SessionGate _gate = new();
 
-    public int Generation
+    public int Generation => _gate.Generation;
+
+    public CancellationToken? CurrentToken => _gate.CurrentToken;
+
+    public Session Restart()
     {
-        get
-        {
-            lock (_stateLock)
-            {
-                return _generation;
-            }
-        }
-    }
-
-    public CancellationToken? CurrentToken
-    {
-        get
-        {
-            lock (_stateLock)
-            {
-                return _cancellation?.Token;
-            }
-        }
-    }
-
-    public FolderLoadSession Restart()
-    {
-        CancellationTokenSource? previousCancellation;
-        FolderLoadSession session;
-        lock (_stateLock)
-        {
-            previousCancellation = _cancellation;
-            _cancellation = new CancellationTokenSource();
-            session = new FolderLoadSession(_cancellation.Token, ++_generation);
-        }
-
-        CancelAndDispose(previousCancellation);
-        return session;
+        return _gate.Restart();
     }
 
     public void Cancel()
     {
-        CancellationTokenSource? cancellation;
-        lock (_stateLock)
-        {
-            cancellation = _cancellation;
-            _cancellation = null;
-            _generation++;
-        }
-
-        CancelAndDispose(cancellation);
-    }
-
-    public bool IsCurrent(FolderLoadSession session)
-    {
-        lock (_stateLock)
-        {
-            return session.Generation == _generation && !session.Token.IsCancellationRequested;
-        }
+        _gate.Cancel();
     }
 
     public bool IsCurrent(int generation)
     {
-        lock (_stateLock)
-        {
-            return generation == _generation && _cancellation is { IsCancellationRequested: false };
-        }
+        return _gate.IsCurrent(generation);
     }
 
     public static Task<List<ImageFileEntry>> ReadFolderAsync(
@@ -167,26 +119,8 @@ internal sealed class FolderLoadCoordinator
     {
         return ReadEntries(paths.Select(path => new FileInfo(path)), token);
     }
-
-    private static void CancelAndDispose(CancellationTokenSource? cancellation)
-    {
-        if (cancellation is null)
-        {
-            return;
-        }
-
-        try
-        {
-            cancellation.Cancel();
-        }
-        catch (ObjectDisposedException)
-        {
-        }
-        cancellation.Dispose();
-    }
 }
 
-internal readonly record struct FolderLoadSession(CancellationToken Token, int Generation);
 internal readonly record struct SourceFingerprint(long LastWriteTimeUtcTicks, long FileLength)
 {
     public DateTime LastWriteTimeUtc => new(LastWriteTimeUtcTicks, DateTimeKind.Utc);

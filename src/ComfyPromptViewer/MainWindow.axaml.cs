@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -34,6 +33,11 @@ public partial class MainWindow : Window
     private static readonly TimeSpan AdvancedMaintenanceStatusDuration = TimeSpan.FromSeconds(2.5);
     private const int InitialMetadataScannerMaxPolls = 15;
     private const int MaxIncrementalGalleryChanges = 32;
+    private const int AheadRowsInScrollDirection = 8;
+    private const int AheadRowsAgainstScrollDirection = 2;
+    private const int PrewarmQueueHighWaterMark = 256;
+    private const int PrewarmProgressBatch = 32;
+    private static readonly TimeSpan PrewarmQueuePollInterval = TimeSpan.FromMilliseconds(250);
     private readonly GalleryViewModel _viewModel = new();
     private readonly UserPreferencesStore _preferences;
     private readonly DecodedImageCache _decodedImageCache;
@@ -47,8 +51,13 @@ public partial class MainWindow : Window
     private readonly HashSet<ImageItem> _selectedItems = [];
     private readonly List<ImageItem> _visibleThumbnailScheduleItems = [];
     private readonly List<ImageItem> _aheadThumbnailScheduleItems = [];
-    private CancellationTokenSource? _advancedMaintenanceStatusCancellation;
-    private CancellationTokenSource? _searchFilterCancellation;
+    // Staleness lives in the two primitives from Staleness.cs. Folder-load, metadata-scan, and
+    // thumbnail-load staleness belong to their coordinators; these four are the UI-side gates. Do not add
+    // a bare int counter or a hand-managed CancellationTokenSource.
+    private readonly SessionGate _advancedMaintenanceStatusGate = new();
+    private readonly SessionGate _searchFilterGate = new();
+    private readonly GenerationGate _galleryScrollRestoreGate = new();
+    private readonly GenerationGate _galleryEmptyStateGate = new();
     private DispatcherTimer? _searchDebounceTimer;
     private DispatcherTimer? _metadataCountUpdateTimer;
     private DispatcherTimer? _tileSizeSaveTimer;
@@ -60,16 +69,14 @@ public partial class MainWindow : Window
     private ThemeMode _themeMode;
     private string? _currentFolderPath;
     private bool _includeSubfolders;
+    private bool _prewarmThumbnails;
+    private int _prewarmRemaining;
     private double _targetTileSize;
     private double _tileSize;
     private double _tileItemExtent;
     private bool _isInitializing = true;
     private bool _isViewportThumbnailScheduleQueued;
     private bool _thumbnailCacheClearInProgress;
-    private int _galleryScrollRestoreGeneration;
-    private int _galleryEmptyStateGeneration;
-    private int _searchFilterGeneration;
-    private int _searchDataGeneration;
     private int _lastPrefetchFirstVisibleRow = -1;
     private int _prefetchDirection = 1;
     private volatile bool _hasSearchQueryActive;
@@ -85,19 +92,12 @@ public partial class MainWindow : Window
     private DispatcherTimer? _scrollMonitorTimer;
     private const double ScrollVelocityThreshold = 1200.0;
 
-    internal enum SearchScope
-    {
-        All,
-        PositivePrompt,
-        NegativePrompt,
-        Filename
-    }
-
     public MainWindow()
     {
         _preferences = new UserPreferencesStore(AppPaths.LocalDataDirectory);
         _themeMode = _preferences.LoadThemeMode();
         _includeSubfolders = _preferences.LoadIncludeSubfolders();
+        _prewarmThumbnails = _preferences.LoadPrewarmThumbnails();
         _targetTileSize = _preferences.LoadTileSize(DefaultTileSize, MinTileSize, MaxTileSize);
         _decodedImageCache = new DecodedImageCache();
         _thumbnailService = new ThumbnailService(AppPaths.LocalDataDirectory);
@@ -127,6 +127,7 @@ public partial class MainWindow : Window
         TileSizeSlider.TickFrequency = TileSizeStep;
         TileSizeSlider.Value = _targetTileSize;
         SyncIncludeSubfoldersToggles();
+        PrewarmThumbnailsToggle.IsChecked = _prewarmThumbnails;
         ApplyTileLayout();
         SortComboBox.SelectedIndex = (int)_sortMode;
         SearchScopeComboBox.SelectedIndex = (int)SearchScope.All;
@@ -175,33 +176,15 @@ public partial class MainWindow : Window
         }
         _metadataScanner.Cancel();
         _folderLoader.Cancel();
-        CancelAndDispose(ref _advancedMaintenanceStatusCancellation);
+        _advancedMaintenanceStatusGate.Cancel();
         _thumbnailLoads.Clear();
         _thumbnailService.ClearDeferredWrites();
         _thumbnailService.SetCacheWritePause(null);
         SelectItem(null);
         ClearImageItems();
         _decodedImageCache.ClearAndReleaseAll();
+        _thumbnailService.Dispose();
         _metadataRepository.Dispose();
         base.OnClosed(e);
-    }
-
-    private static void CancelAndDispose(ref CancellationTokenSource? cancellation)
-    {
-        if (cancellation is null)
-        {
-            return;
-        }
-
-        try
-        {
-            cancellation.Cancel();
-        }
-        catch (ObjectDisposedException)
-        {
-        }
-
-        cancellation.Dispose();
-        cancellation = null;
     }
 }

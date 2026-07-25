@@ -7,6 +7,11 @@ namespace ComfyPromptViewer;
 
 public partial class MainWindow
 {
+    // Cursor owns a native handle and is IDisposable, so these are created once instead of per use.
+    private static readonly Cursor AutoScrollCursor = new(StandardCursorType.SizeNorthSouth);
+    internal static readonly Cursor HandCursor = new(StandardCursorType.Hand);
+    internal static readonly Cursor ArrowCursor = new(StandardCursorType.Arrow);
+
     private bool _isAutoScrolling;
     private bool _hasDragged;
     private Point _autoScrollAnchor;
@@ -38,7 +43,7 @@ public partial class MainWindow
             _capturedPointer = e.Pointer;
             _capturedPointer.Capture(GalleryScrollViewer);
 
-            this.Cursor = new Cursor(StandardCursorType.SizeNorthSouth);
+            this.Cursor = AutoScrollCursor;
 
             _isFirstFrame = true;
             RequestNextScrollFrame();
