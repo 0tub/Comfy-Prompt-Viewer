@@ -10,11 +10,20 @@ namespace ComfyPromptViewer;
 
 internal static class SelfCheck
 {
+    private static readonly MetadataRepository ItemMetadataRepository =
+        new(Path.Combine(Path.GetTempPath(), "comfypromptviewer-selfcheck-items"));
+    private static readonly ImageMetadataService ItemMetadataService = new(ItemMetadataRepository);
+    private static readonly DecodedImageCache ItemDecodedImageCache = new();
+    private static readonly ThumbnailService ItemThumbnailService =
+        new(Path.Combine(Path.GetTempPath(), "comfypromptviewer-selfcheck-items"));
+
     public static void Run()
     {
         CheckSearchParsing();
+        CheckSearchResultGenerations();
         CheckGalleryScrollAnchoring();
         CheckGalleryItemReconciliation();
+        CheckGalleryCatalog();
         CheckSortedInsertion();
         CheckFolderLoadSessions();
         CheckThemeModes();
@@ -22,7 +31,9 @@ internal static class SelfCheck
         CheckPngMetadataRead();
         CheckPngMetadataLimit();
         CheckMetadataIndexRoundTrip();
+        CheckMetadataBatchSave();
         CheckMetadataIndexCleanup();
+        CheckMetadataFailureClassification();
         CheckThumbnailCacheWriteBackpressure();
         CheckDeferredThumbnailCacheWriteQueue();
         CheckDeferredThumbnailCacheWritePause();
@@ -82,10 +93,10 @@ internal static class SelfCheck
 
     private static void CheckGalleryItemReconciliation()
     {
-        var a = new ImageItem(Path.Combine(Path.GetTempPath(), "gallery-a.png"), tileSize: 120);
-        var b = new ImageItem(Path.Combine(Path.GetTempPath(), "gallery-b.png"), tileSize: 120);
-        var c = new ImageItem(Path.Combine(Path.GetTempPath(), "gallery-c.png"), tileSize: 120);
-        var added = new ImageItem(Path.Combine(Path.GetTempPath(), "gallery-added.png"), tileSize: 120);
+        var a = CreateImageItem(Path.Combine(Path.GetTempPath(), "gallery-a.png"));
+        var b = CreateImageItem(Path.Combine(Path.GetTempPath(), "gallery-b.png"));
+        var c = CreateImageItem(Path.Combine(Path.GetTempPath(), "gallery-c.png"));
+        var added = CreateImageItem(Path.Combine(Path.GetTempPath(), "gallery-added.png"));
 
         Check(MainWindow.CanSynchronizeGalleryItemsIncrementally([a, b, c], [added, a, b, c], maximumChanges: 2),
             "Expected a small watcher insertion to retain the existing gallery order.");
@@ -93,6 +104,27 @@ internal static class SelfCheck
             "Expected a reorder to use a gallery reset instead of per-item moves.");
         Check(!MainWindow.CanSynchronizeGalleryItemsIncrementally([a, b, c], [added, a, b, c], maximumChanges: 0),
             "Expected the incremental gallery change limit to be enforced.");
+    }
+
+    private static void CheckGalleryCatalog()
+    {
+        var catalog = new GalleryCatalog();
+        var older = CreateImageItem(Path.Combine(Path.GetTempPath(), "catalog-older.png"));
+        var newer = CreateImageItem(Path.Combine(Path.GetTempPath(), "catalog-newer.png"));
+        catalog.Add(new GalleryEntry(older.Path, new SourceFingerprint(10, 0), older));
+        catalog.Add(new GalleryEntry(newer.Path, new SourceFingerprint(20, 0), newer));
+        catalog.Sort((left, right) => right.LastWriteTimeUtc.CompareTo(left.LastWriteTimeUtc));
+
+        Check(ReferenceEquals(catalog.Items[0], newer), "Expected catalog sort to keep item and timestamp together.");
+        var replacement = CreateImageItem(newer.Path);
+        Check(
+            catalog.Replace(
+                newer.Path,
+                new GalleryEntry(newer.Path, new SourceFingerprint(30, 0), replacement),
+                out var previous) &&
+            ReferenceEquals(previous.Item, newer) &&
+            ReferenceEquals(catalog.Items[0], replacement),
+            "Expected catalog replacement to update the authoritative entry.");
     }
 
     private static void CheckSearchParsing()
@@ -106,7 +138,7 @@ internal static class SelfCheck
         Check(negative[0] is { Text: "bad", IsExact: false }, "Expected plain negative term.");
         Check(negative[1] is { Text: "low quality", IsExact: true }, "Expected exact negative term.");
 
-        var item = new ImageItem(Path.Combine(Path.GetTempPath(), "search-scope-selfcheck.png"), tileSize: 120);
+        var item = CreateImageItem(Path.Combine(Path.GetTempPath(), "search-scope-selfcheck.png"));
         item.ApplyMetadataEntry(new MetadataIndexEntry
         {
             SourcePath = item.Path,
@@ -128,9 +160,25 @@ internal static class SelfCheck
         Check(!MainWindow.ItemMatchesSearch(item, positive, negative, MainWindow.SearchScope.Filename),
             "Expected filename search to ignore LoRA metadata.");
 
+        SearchEngine.ParseQuery("\"cosmos predict lora (1.00)\"", out positive, out negative);
+        Check(MainWindow.ItemMatchesSearch(item, positive, negative, MainWindow.SearchScope.All),
+            "Expected cached search projection to preserve separator-insensitive exact matching.");
+
         SearchEngine.ParseQuery("-easynegative", out positive, out negative);
         Check(!MainWindow.ItemMatchesSearch(item, positive, negative, MainWindow.SearchScope.All),
             "Expected all search exclusions to check resource metadata.");
+    }
+
+    private static void CheckSearchResultGenerations()
+    {
+        Check(
+            MainWindow.IsCurrentSearchResult(3, 3, 8, 8, isCancellationRequested: false),
+            "Expected matching search and data generations to be current.");
+        Check(
+            !MainWindow.IsCurrentSearchResult(2, 3, 8, 8, isCancellationRequested: false) &&
+            !MainWindow.IsCurrentSearchResult(3, 3, 7, 8, isCancellationRequested: false) &&
+            !MainWindow.IsCurrentSearchResult(3, 3, 8, 8, isCancellationRequested: true),
+            "Expected stale or canceled search results to be rejected.");
     }
 
     private static void CheckThemeModes()
@@ -295,27 +343,85 @@ internal static class SelfCheck
     private static void CheckMetadataIndexRoundTrip()
     {
         var path = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}.png");
-        var databasePath = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-metadata-{Guid.NewGuid():N}.db");
+        var databaseDirectory = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-metadata-{Guid.NewGuid():N}");
         try
         {
             WriteTinyPng(path, "parameters", "cached prompt\nSteps: 1, Seed: 2");
             Check(File.Exists(path), "Expected temporary metadata index source file.");
-            using (MetadataIndex.UseDatabaseForSelfCheck(databasePath))
-            {
-                Check(MetadataIndex.RoundTripsForSelfCheck(path), "Expected metadata index round trip.");
-            }
+            using var repository = new MetadataRepository(databaseDirectory);
+            Check(repository.RoundTripsForSelfCheck(path), "Expected metadata index round trip.");
+            var fingerprint = GetFingerprint(path);
+            Check(repository.TryLoad(path, fingerprint, out _), "Expected matching source fingerprint to hit metadata cache.");
+            Check(
+                !repository.TryLoad(
+                    path,
+                    fingerprint with { FileLength = fingerprint.FileLength + 1 },
+                    out _),
+                "Expected a changed source fingerprint to miss metadata cache.");
         }
         finally
         {
             DeleteFileQuietly(path);
-            DeleteFileQuietly(databasePath);
+            DeleteDirectoryQuietly(databaseDirectory);
+        }
+    }
+
+    private static void CheckMetadataBatchSave()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-batch-{Guid.NewGuid():N}");
+        var databaseDirectory = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-batch-db-{Guid.NewGuid():N}");
+        var firstPath = Path.Combine(folder, "first.png");
+        var secondPath = Path.Combine(folder, "second.png");
+        try
+        {
+            Directory.CreateDirectory(folder);
+            WriteTinyPng(firstPath, "parameters", "first");
+            WriteTinyPng(secondPath, "parameters", "second");
+            using var repository = new MetadataRepository(databaseDirectory);
+            var readResult = new ImageReadResult(1, 1, new(StringComparer.OrdinalIgnoreCase));
+            var firstFingerprint = GetFingerprint(firstPath);
+            var secondFingerprint = GetFingerprint(secondPath);
+            var firstEntry = repository.CreateEntry(
+                firstPath,
+                firstFingerprint,
+                readResult,
+                new ExtractedPromptMetadata { Prompt = "first" });
+            var secondEntry = repository.CreateEntry(
+                secondPath,
+                secondFingerprint,
+                readResult,
+                new ExtractedPromptMetadata { Prompt = "second" });
+            repository.SaveMany([firstEntry, secondEntry]);
+
+            Check(
+                repository.TryLoad(firstPath, firstFingerprint, out var first) &&
+                repository.TryLoad(secondPath, secondFingerprint, out var second) &&
+                first.Prompt == "first" &&
+                second.Prompt == "second",
+                "Expected batched metadata entries to persist together.");
+
+            var firstItem = CreateImageItem(firstPath);
+            var secondItem = CreateImageItem(secondPath);
+            firstItem.ApplyMetadataResult(MetadataLoadResult.Success(firstEntry, needsSave: false));
+            secondItem.ApplyMetadataResult(MetadataLoadResult.Success(secondEntry, needsSave: false));
+            Check(
+                firstItem.HasLoadedMetadata &&
+                secondItem.HasLoadedMetadata &&
+                firstItem.SearchProjection.Prompt == "first" &&
+                secondItem.SearchProjection.Prompt == "second",
+                "Expected a metadata result batch to update item state and search projections.");
+        }
+        finally
+        {
+            DeleteDirectoryQuietly(folder);
+            DeleteDirectoryQuietly(databaseDirectory);
         }
     }
 
     private static void CheckMetadataIndexCleanup()
     {
         var folder = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-metadata-{Guid.NewGuid():N}");
-        var databasePath = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-metadata-{Guid.NewGuid():N}.db");
+        var databaseDirectory = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-index-{Guid.NewGuid():N}");
         var keepPath = Path.Combine(folder, "keep.png");
         var deletePath = Path.Combine(folder, "delete.png");
         var prunePath = Path.Combine(folder, "prune.png");
@@ -327,24 +433,48 @@ internal static class SelfCheck
             WriteTinyPng(deletePath, "parameters", "delete prompt");
             WriteTinyPng(prunePath, "parameters", "prune prompt");
 
-            using (MetadataIndex.UseDatabaseForSelfCheck(databasePath))
-            {
-                SaveSelfCheckMetadata(keepPath, "keep prompt");
-                SaveSelfCheckMetadata(deletePath, "delete prompt");
-                SaveSelfCheckMetadata(prunePath, "prune prompt");
+            using var repository = new MetadataRepository(databaseDirectory);
+            SaveSelfCheckMetadata(repository, keepPath, "keep prompt");
+            SaveSelfCheckMetadata(repository, deletePath, "delete prompt");
+            SaveSelfCheckMetadata(repository, prunePath, "prune prompt");
 
-                MetadataIndex.DeletePaths([deletePath]);
-                Check(!MetadataIndex.TryLoad(deletePath, out _), "Expected deleted metadata index path to be removed.");
+            repository.DeletePaths([deletePath]);
+            Check(!repository.TryLoad(deletePath, GetFingerprint(deletePath), out _), "Expected deleted metadata index path to be removed.");
 
-                MetadataIndex.PruneMissing([keepPath], includeSubfolders: false);
-                Check(MetadataIndex.TryLoad(keepPath, out _), "Expected current metadata index path to remain.");
-                Check(!MetadataIndex.TryLoad(prunePath, out _), "Expected missing metadata index path to be pruned.");
-            }
+            repository.PruneMissing([keepPath], includeSubfolders: false);
+            Check(repository.TryLoad(keepPath, GetFingerprint(keepPath), out _), "Expected current metadata index path to remain.");
+            Check(!repository.TryLoad(prunePath, GetFingerprint(prunePath), out _), "Expected missing metadata index path to be pruned.");
         }
         finally
         {
             DeleteDirectoryQuietly(folder);
-            DeleteFileQuietly(databasePath);
+            DeleteDirectoryQuietly(databaseDirectory);
+        }
+    }
+
+    private static void CheckMetadataFailureClassification()
+    {
+        var directory = Path.Combine(
+            Path.GetTempPath(),
+            $"comfypromptviewer-selfcheck-failure-{Guid.NewGuid():N}");
+        try
+        {
+            using var repository = new MetadataRepository(directory);
+            var service = new ImageMetadataService(repository);
+            var missingPath = Path.Combine(directory, "missing.png");
+            var result = service.LoadAsync(
+                missingPath,
+                default,
+                skipCacheLookup: false,
+                persistResult: true,
+                default).GetAwaiter().GetResult();
+            Check(
+                result.Status == MetadataLoadStatus.TransientIoFailure,
+                "Expected a missing image to be classified as a transient I/O failure.");
+        }
+        finally
+        {
+            DeleteDirectoryQuietly(directory);
         }
     }
 
@@ -375,12 +505,30 @@ internal static class SelfCheck
         }
     }
 
-    private static void SaveSelfCheckMetadata(string path, string prompt)
+    private static void SaveSelfCheckMetadata(MetadataRepository repository, string path, string prompt)
     {
-        MetadataIndex.Save(
+        repository.Save(
             path,
+            GetFingerprint(path),
             new ImageReadResult(1, 1, new(StringComparer.OrdinalIgnoreCase)),
             new ExtractedPromptMetadata { Prompt = prompt });
+    }
+
+    private static ImageItem CreateImageItem(string path)
+    {
+        return new ImageItem(
+            path,
+            sourceFingerprint: default,
+            tileSize: 120,
+            metadataService: ItemMetadataService,
+            decodedImageCache: ItemDecodedImageCache,
+            thumbnailService: ItemThumbnailService);
+    }
+
+    private static SourceFingerprint GetFingerprint(string path)
+    {
+        var fileInfo = new FileInfo(path);
+        return new SourceFingerprint(fileInfo.LastWriteTimeUtc.Ticks, fileInfo.Length);
     }
 
     private static void CheckThumbnailCacheWriteBackpressure()
@@ -388,14 +536,14 @@ internal static class SelfCheck
         var firstPath = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}-1.jpg");
         var secondPath = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}-2.jpg");
 
-        Check(ImageItem.TryBeginThumbnailCacheWrite(firstPath), "Expected first thumbnail cache write slot.");
+        Check(ItemThumbnailService.TryBeginCacheWrite(firstPath), "Expected first thumbnail cache write slot.");
         try
         {
-            Check(!ImageItem.TryBeginThumbnailCacheWrite(secondPath), "Expected busy thumbnail cache writer to reject queued writes.");
+            Check(!ItemThumbnailService.TryBeginCacheWrite(secondPath), "Expected busy thumbnail cache writer to reject queued writes.");
         }
         finally
         {
-            ImageItem.EndThumbnailCacheWrite(firstPath);
+            ItemThumbnailService.EndCacheWrite(firstPath);
         }
     }
 
@@ -403,18 +551,18 @@ internal static class SelfCheck
     {
         var activePath = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}-active.jpg");
         var deferredPath = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}-deferred.jpg");
-        var item = new ImageItem(Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}-missing.png"), tileSize: 120);
+        var item = CreateImageItem(Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}-missing.png"));
 
-        Check(ImageItem.TryBeginThumbnailCacheWrite(activePath), "Expected active thumbnail cache write slot.");
+        Check(ItemThumbnailService.TryBeginCacheWrite(activePath), "Expected active thumbnail cache write slot.");
         try
         {
-            Check(ImageItem.TryQueueDeferredThumbnailCacheWrite(item, deferredPath), "Expected deferred thumbnail cache write to queue.");
-            Check(!ImageItem.TryQueueDeferredThumbnailCacheWrite(item, deferredPath), "Expected duplicate deferred thumbnail cache write to be ignored.");
-            ImageItem.ClearDeferredThumbnailCacheWrites();
+            Check(ItemThumbnailService.TryQueueCacheWrite(item, deferredPath), "Expected deferred thumbnail cache write to queue.");
+            Check(!ItemThumbnailService.TryQueueCacheWrite(item, deferredPath), "Expected duplicate deferred thumbnail cache write to be ignored.");
+            ItemThumbnailService.ClearDeferredWrites();
         }
         finally
         {
-            ImageItem.EndThumbnailCacheWrite(activePath);
+            ItemThumbnailService.EndCacheWrite(activePath);
         }
     }
 
@@ -422,27 +570,27 @@ internal static class SelfCheck
     {
         var activePath = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}-active.jpg");
         var deferredPath = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}-deferred.jpg");
-        var item = new ImageItem(Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}-missing.png"), tileSize: 120);
+        var item = CreateImageItem(Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}-missing.png"));
 
-        ImageItem.SetDeferredThumbnailCacheWritePause(() => true);
+        ItemThumbnailService.SetCacheWritePause(() => true);
         try
         {
-            Check(ImageItem.TryQueueDeferredThumbnailCacheWrite(item, deferredPath), "Expected paused deferred thumbnail cache write to queue.");
-            Check(ImageItem.TryBeginThumbnailCacheWrite(activePath), "Expected paused deferred thumbnail cache writer not to take active slot.");
-            ImageItem.EndThumbnailCacheWrite(activePath);
-            ImageItem.ClearDeferredThumbnailCacheWrites();
+            Check(ItemThumbnailService.TryQueueCacheWrite(item, deferredPath), "Expected paused deferred thumbnail cache write to queue.");
+            Check(ItemThumbnailService.TryBeginCacheWrite(activePath), "Expected paused deferred thumbnail cache writer not to take active slot.");
+            ItemThumbnailService.EndCacheWrite(activePath);
+            ItemThumbnailService.ClearDeferredWrites();
         }
         finally
         {
-            ImageItem.SetDeferredThumbnailCacheWritePause(null);
+            ItemThumbnailService.SetCacheWritePause(null);
         }
     }
 
     private static void CheckThumbnailCacheBudget()
     {
-        Check(!ImageCache.ExceedsBudget(ImageCache.MaxCapacity, ImageCache.MaxEstimatedBytes), "Expected exact thumbnail cache budget to fit.");
-        Check(ImageCache.ExceedsBudget(ImageCache.MaxCapacity + 1, 0), "Expected thumbnail count budget overflow.");
-        Check(ImageCache.ExceedsBudget(1, ImageCache.MaxEstimatedBytes + 1), "Expected thumbnail byte budget overflow.");
+        Check(!DecodedImageCache.ExceedsBudget(DecodedImageCache.MaxCapacity, DecodedImageCache.MaxEstimatedBytes), "Expected exact thumbnail cache budget to fit.");
+        Check(DecodedImageCache.ExceedsBudget(DecodedImageCache.MaxCapacity + 1, 0), "Expected thumbnail count budget overflow.");
+        Check(DecodedImageCache.ExceedsBudget(1, DecodedImageCache.MaxEstimatedBytes + 1), "Expected thumbnail byte budget overflow.");
     }
 
     private static void CheckJpegThumbnailEncoding()
@@ -453,7 +601,7 @@ internal static class SelfCheck
         {
             File.WriteAllBytes(sourcePath, Convert.FromBase64String(
                 "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="));
-            ImageItem.SaveJpegThumbnailAtomically(sourcePath, cachePath, thumbnailWidth: 180);
+            ThumbnailService.SaveJpegThumbnailAtomically(sourcePath, cachePath, thumbnailWidth: 180);
             var signature = File.ReadAllBytes(cachePath);
             Check(signature.Length > 3 && signature[0] == 0xff && signature[1] == 0xd8 && signature[2] == 0xff,
                 "Expected thumbnail cache output to contain a JPEG signature.");

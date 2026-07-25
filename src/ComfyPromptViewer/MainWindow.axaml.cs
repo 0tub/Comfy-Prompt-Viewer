@@ -35,16 +35,20 @@ public partial class MainWindow : Window
     private const int InitialMetadataScannerMaxPolls = 15;
     private const int MaxIncrementalGalleryChanges = 32;
     private readonly GalleryViewModel _viewModel = new();
-    private readonly ThumbnailLoadCoordinator _thumbnailLoads = new();
-    private readonly MetadataScanCoordinator _metadataScanner = new();
+    private readonly UserPreferencesStore _preferences;
+    private readonly DecodedImageCache _decodedImageCache;
+    private readonly ThumbnailService _thumbnailService;
+    private readonly ThumbnailLoadCoordinator _thumbnailLoads;
+    private readonly MetadataRepository _metadataRepository;
+    private readonly ImageMetadataService _metadataService;
+    private readonly MetadataScanCoordinator _metadataScanner;
     private readonly FolderLoadCoordinator _folderLoader = new();
-    private readonly List<string> _allImagePaths = [];
-    private readonly List<ImageItem> _allImageItems = [];
+    private readonly GalleryCatalog _catalog = new();
     private readonly HashSet<ImageItem> _selectedItems = [];
-    private readonly Dictionary<string, DateTime> _imageLastWriteTimes = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<ImageItem> _visibleThumbnailScheduleItems = [];
     private readonly List<ImageItem> _aheadThumbnailScheduleItems = [];
     private CancellationTokenSource? _advancedMaintenanceStatusCancellation;
+    private CancellationTokenSource? _searchFilterCancellation;
     private DispatcherTimer? _searchDebounceTimer;
     private DispatcherTimer? _metadataCountUpdateTimer;
     private DispatcherTimer? _tileSizeSaveTimer;
@@ -53,10 +57,10 @@ public partial class MainWindow : Window
     private TaskCompletionSource<bool>? _deleteConfirmationCompletion;
     private ImageItem? _queuedSelectedItemRefresh;
     private SortMode _sortMode = SortMode.NewestFirst;
-    private ThemeMode _themeMode = UserPreferences.LoadThemeMode();
+    private ThemeMode _themeMode;
     private string? _currentFolderPath;
-    private bool _includeSubfolders = UserPreferences.LoadIncludeSubfolders();
-    private double _targetTileSize = UserPreferences.LoadTileSize(DefaultTileSize, MinTileSize, MaxTileSize);
+    private bool _includeSubfolders;
+    private double _targetTileSize;
     private double _tileSize;
     private double _tileItemExtent;
     private bool _isInitializing = true;
@@ -64,6 +68,8 @@ public partial class MainWindow : Window
     private bool _thumbnailCacheClearInProgress;
     private int _galleryScrollRestoreGeneration;
     private int _galleryEmptyStateGeneration;
+    private int _searchFilterGeneration;
+    private int _searchDataGeneration;
     private int _lastPrefetchFirstVisibleRow = -1;
     private int _prefetchDirection = 1;
     private volatile bool _hasSearchQueryActive;
@@ -89,10 +95,20 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
+        _preferences = new UserPreferencesStore(AppPaths.LocalDataDirectory);
+        _themeMode = _preferences.LoadThemeMode();
+        _includeSubfolders = _preferences.LoadIncludeSubfolders();
+        _targetTileSize = _preferences.LoadTileSize(DefaultTileSize, MinTileSize, MaxTileSize);
+        _decodedImageCache = new DecodedImageCache();
+        _thumbnailService = new ThumbnailService(AppPaths.LocalDataDirectory);
+        _thumbnailLoads = new ThumbnailLoadCoordinator(_decodedImageCache);
+        _metadataRepository = new MetadataRepository(AppPaths.LocalDataDirectory);
+        _metadataService = new ImageMetadataService(_metadataRepository);
+        _metadataScanner = new MetadataScanCoordinator(_metadataRepository, new AvaloniaUiScheduler());
         InitializeComponent();
         DataContext = _viewModel;
-        _thumbnailLoads.VisibleWorkDrained = ImageItem.ResumeDeferredThumbnailCacheWrites;
-        ImageItem.SetDeferredThumbnailCacheWritePause(() => _thumbnailLoads.HasVisibleWork);
+        _thumbnailLoads.VisibleWorkDrained = _thumbnailService.ResumeDeferredWrites;
+        _thumbnailService.SetCacheWritePause(() => _thumbnailLoads.HasVisibleWork);
 
         GalleryScrollViewer.AddHandler(InputElement.PointerPressedEvent, GalleryScrollViewer_PointerPressed, RoutingStrategies.Bubble, true);
         GalleryScrollViewer.AddHandler(InputElement.PointerMovedEvent, GalleryScrollViewer_PointerMoved, RoutingStrategies.Bubble, true);
@@ -138,7 +154,7 @@ public partial class MainWindow : Window
 
         _themeMode = (ThemeMode)selectedIndex;
         ThemeManager.Apply(_themeMode);
-        UserPreferences.SaveThemeMode(_themeMode);
+        _preferences.SaveThemeMode(_themeMode);
     }
 
     protected override void OnClosed(EventArgs e)
@@ -151,20 +167,22 @@ public partial class MainWindow : Window
         StopLargePreviewPan(releaseCapture: true);
         StopFolderWatcher();
         _searchDebounceTimer?.Stop();
+        CancelSearchFilter();
         if (_tileSizeSaveTimer?.IsEnabled == true)
         {
             _tileSizeSaveTimer.Stop();
-            UserPreferences.SaveTileSize(_targetTileSize);
+            _preferences.SaveTileSize(_targetTileSize);
         }
         _metadataScanner.Cancel();
         _folderLoader.Cancel();
         CancelAndDispose(ref _advancedMaintenanceStatusCancellation);
         _thumbnailLoads.Clear();
-        ImageItem.ClearDeferredThumbnailCacheWrites();
-        ImageItem.SetDeferredThumbnailCacheWritePause(null);
+        _thumbnailService.ClearDeferredWrites();
+        _thumbnailService.SetCacheWritePause(null);
         SelectItem(null);
         ClearImageItems();
-        ImageCache.ClearAndReleaseAll();
+        _decodedImageCache.ClearAndReleaseAll();
+        _metadataRepository.Dispose();
         base.OnClosed(e);
     }
 

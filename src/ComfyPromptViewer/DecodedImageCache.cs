@@ -5,15 +5,15 @@ using Avalonia.Threading;
 
 namespace ComfyPromptViewer;
 
-public static class ImageCache
+internal sealed class DecodedImageCache
 {
     private const int LinuxMallocTrimThreshold = -1;
     private const int LinuxMallocArenaMax = -8;
     private const int LinuxTrimThresholdBytes = 64 * 1024;
     private const int LinuxMaxMallocArenas = 4;
-    private static readonly LinkedList<ImageItem> _lruList = new();
-    private static readonly object _lock = new();
-    private static long _estimatedBytes;
+    private readonly LinkedList<ImageItem> _lruList = new();
+    private readonly object _lock = new();
+    private long _estimatedBytes;
     internal const int MaxCapacity = 512;
     internal const long MaxEstimatedBytes = 64L * 1024 * 1024;
 
@@ -35,7 +35,7 @@ public static class ImageCache
         }
     }
 
-    public static void Touch(ImageItem item)
+    public void Touch(ImageItem item)
     {
         lock (_lock)
         {
@@ -82,7 +82,7 @@ public static class ImageCache
         return count > MaxCapacity || estimatedBytes > MaxEstimatedBytes;
     }
 
-    private static void RemoveFromCacheLocked(ImageItem item)
+    private void RemoveFromCacheLocked(ImageItem item)
     {
         if (item.CacheNode != null)
         {
@@ -98,7 +98,7 @@ public static class ImageCache
         item.CachedPreviewBytes = 0;
     }
 
-    public static void Remove(ImageItem item)
+    public void Remove(ImageItem item)
     {
         lock (_lock)
         {
@@ -106,7 +106,7 @@ public static class ImageCache
         }
     }
 
-    public static void ClearAndReleaseAll()
+    public void ClearAndReleaseAll()
     {
         List<ImageItem> itemsToRelease;
         lock (_lock)

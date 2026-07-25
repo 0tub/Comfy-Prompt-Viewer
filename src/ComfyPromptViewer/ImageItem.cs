@@ -3,117 +3,21 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.CompilerServices;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
-using SkiaSharp;
 
 namespace ComfyPromptViewer;
 
 public sealed class ImageItem : INotifyPropertyChanged
 {
-    public static readonly string ThumbnailCacheRootDir = System.IO.Path.Combine(UserPreferences.AppDataDir, "thumbnails");
-
-    static ImageItem()
-    {
-        try
-        {
-            Directory.CreateDirectory(ThumbnailCacheRootDir);
-        }
-        catch (Exception ex)
-        {
-            DebugLog.Write($"Failed to create thumbnail cache root {ThumbnailCacheRootDir}: {ex.Message}");
-        }
-    }
-
-    private string BuildThumbnailCachePath()
-    {
-        try
-        {
-            var parentDirectory = Directory.GetParent(Path);
-            var parentPath = parentDirectory?.FullName ?? "";
-            var parentName = parentDirectory?.Name;
-            if (string.IsNullOrWhiteSpace(parentName))
-            {
-                parentName = "root";
-            }
-
-            var folderHash = HashText(parentPath).Substring(0, ThumbnailFolderHashLength);
-            var safeParentName = MakeSafePathSegment(parentName);
-            var cacheDir = System.IO.Path.Combine(ThumbnailCacheRootDir, $"{safeParentName}_{folderHash}");
-            Directory.CreateDirectory(cacheDir);
-
-            var lastWriteTime = File.GetLastWriteTimeUtc(Path).Ticks;
-            var thumbnailWidth = GetThumbnailDecodeWidth();
-            var input = $"{Path}_{lastWriteTime}";
-            var hash = HashText(input);
-            var legacyPath = System.IO.Path.Combine(cacheDir, $"w{thumbnailWidth}_{hash}.jpg");
-            try
-            {
-                File.Delete(legacyPath);
-            }
-            catch
-            {
-                // Old cache cleanup is best-effort; the versioned JPEG path remains usable.
-            }
-            return System.IO.Path.Combine(cacheDir, $"j1_w{thumbnailWidth}_{hash}.jpg");
-        }
-        catch (Exception ex)
-        {
-            DebugLog.Write($"Failed to build thumbnail cache path for {Path}: {ex.Message}");
-            return "";
-        }
-    }
-
-    private static string HashText(string value)
-    {
-        return Convert.ToHexStringLower(System.Security.Cryptography.MD5.HashData(Encoding.UTF8.GetBytes(value)));
-    }
-
-    private static string MakeSafePathSegment(string value)
-    {
-        var safeValue = value.Trim();
-        if (safeValue.Length == 0)
-        {
-            return "folder";
-        }
-
-        var firstInvalidIndex = safeValue.IndexOfAny(InvalidFileNameChars);
-        if (firstInvalidIndex < 0)
-        {
-            return safeValue;
-        }
-
-        var chars = safeValue.ToCharArray();
-        for (var index = firstInvalidIndex; index < chars.Length; index++)
-        {
-            if (Array.IndexOf(InvalidFileNameChars, chars[index]) >= 0)
-            {
-                chars[index] = '_';
-            }
-        }
-
-        return new string(chars);
-    }
-
     private const int SmallThumbnailWidth = 180;
     private const int MediumThumbnailWidth = 240;
     private const int LargeThumbnailWidth = 320;
-    private const int ThumbnailJpegQuality = 82;
     private const int SelectedPreviewMaxWidth = 1200;
-    private const int ThumbnailFolderHashLength = 8;
     private const double ThumbnailDecodeScale = 1.5;
-    private static readonly char[] InvalidFileNameChars = System.IO.Path.GetInvalidFileNameChars();
-    private static readonly SemaphoreSlim ThumbnailCacheWriteLimiter = new(1, 1);
-    private static readonly SemaphoreSlim SelectedPreviewLoadLimiter = new(1);
-    private static readonly object PendingThumbnailCacheWritesLock = new();
-    private static readonly HashSet<string> PendingThumbnailCacheWrites = new(StringComparer.OrdinalIgnoreCase);
-    private static readonly Queue<DeferredThumbnailCacheWrite> DeferredThumbnailCacheWrites = new();
-    private static Func<bool>? DeferredThumbnailCacheWritesPaused;
-    private static bool ThumbnailCacheMaintenancePaused;
 
     private Bitmap? _preview;
     private Bitmap? _selectedPreview;
@@ -134,20 +38,36 @@ public sealed class ImageItem : INotifyPropertyChanged
     private bool _hasThumbnailCacheState;
     private bool _isSelected;
     private bool _isMarkedSelected;
-    private bool _hasLoadedMetadata;
+    private volatile bool _hasLoadedMetadata;
+    private MetadataLoadStatus _metadataLoadStatus;
     private readonly object _metadataLoadLock = new();
-    private Task? _metadataLoadTask;
+    private readonly ImageMetadataService _metadataService;
+    private readonly DecodedImageCache _decodedImageCache;
+    private readonly ThumbnailService _thumbnailService;
+    private Task<MetadataLoadResult>? _metadataLoadTask;
     private int _realizedCount;
     private double _tileSize;
     private Task? _selectedPreviewLoadTask;
     private string? _creationDateText;
     private bool _hasLoggedThumbnailError;
+    private SearchProjection _searchProjection;
 
-    public ImageItem(string path, double tileSize)
+    internal ImageItem(
+        string path,
+        SourceFingerprint sourceFingerprint,
+        double tileSize,
+        ImageMetadataService metadataService,
+        DecodedImageCache decodedImageCache,
+        ThumbnailService thumbnailService)
     {
         Path = path;
         FileName = System.IO.Path.GetFileName(path);
+        SourceFingerprint = sourceFingerprint;
+        _searchProjection = new SearchProjection(FileName, "", "", "", HasLoadedMetadata: false);
         _tileSize = tileSize;
+        _metadataService = metadataService;
+        _decodedImageCache = decodedImageCache;
+        _thumbnailService = thumbnailService;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -155,6 +75,8 @@ public sealed class ImageItem : INotifyPropertyChanged
 
     public string Path { get; }
     public string FileName { get; }
+    internal SourceFingerprint SourceFingerprint { get; }
+    internal SearchProjection SearchProjection => Volatile.Read(ref _searchProjection);
 
     public string CreationDateText
     {
@@ -180,6 +102,7 @@ public sealed class ImageItem : INotifyPropertyChanged
     public System.Collections.Generic.LinkedListNode<ImageItem>? CacheNode { get; set; }
     internal long CachedPreviewBytes { get; set; }
     public bool HasLoadedMetadata => _hasLoadedMetadata;
+    internal MetadataLoadStatus MetadataLoadStatus => _metadataLoadStatus;
     public bool IsRealized => _realizedCount > 0;
     internal long EstimatedPreviewBytes
     {
@@ -365,83 +288,36 @@ public sealed class ImageItem : INotifyPropertyChanged
         }
     }
 
-    public Task EnsureMetadataLoadedAsync(CancellationToken token)
+    public async Task EnsureMetadataLoadedAsync(CancellationToken token)
     {
         if (_hasLoadedMetadata)
         {
-            return Task.CompletedTask;
+            return;
         }
 
-        Task loadTask;
-        lock (_metadataLoadLock)
-        {
-            if (_hasLoadedMetadata)
-            {
-                return Task.CompletedTask;
-            }
-
-            if (_metadataLoadTask is not { IsCompleted: false })
-            {
-                _metadataLoadTask = LoadMetadataAsync(token);
-            }
-
-            loadTask = _metadataLoadTask;
-        }
-
-        return loadTask.WaitAsync(token);
-    }
-
-    private async Task LoadMetadataAsync(CancellationToken token)
-    {
         try
         {
-            var entry = await Task.Run(() =>
+            var result = await GetMetadataLoadResultAsync(
+                skipCacheLookup: false,
+                persistResult: true,
+                token);
+            if (result.NeedsSave)
             {
-                if (MetadataIndex.TryLoad(Path, out var cached))
-                {
-                    return cached;
-                }
-
-                var result = ImageFileReader.Read(Path);
-                var extracted = PromptExtractor.ExtractAll(result.TextMetadata);
-                MetadataIndex.Save(Path, result, extracted);
-
-                return new MetadataIndexEntry
-                {
-                    Width = result.Width,
-                    Height = result.Height,
-                    Prompt = extracted.Prompt,
-                    NegativePrompt = extracted.NegativePrompt,
-                    Tool = extracted.GenerationSettings.Tool,
-                    Model = extracted.GenerationSettings.Model,
-                    Sampler = extracted.GenerationSettings.Sampler,
-                    Seed = extracted.GenerationSettings.Seed,
-                    Settings = extracted.GenerationSettings.Settings,
-                    Lora = extracted.GenerationSettings.Lora,
-                    Resources = extracted.GenerationSettings.Resources
-                };
-            }, token);
+                await Task.Run(() => _metadataService.Save(result), token);
+            }
 
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                if (token.IsCancellationRequested) return;
-                _width = entry.Width;
-                _height = entry.Height;
-                Prompt = entry.Prompt;
-                NegativePrompt = entry.NegativePrompt;
-                Tool = entry.Tool;
-                Model = entry.Model;
-                Sampler = entry.Sampler;
-                Seed = entry.Seed;
-                Settings = entry.Settings;
-                Lora = entry.Lora;
-                Resources = entry.Resources;
-                MarkMetadataLoaded();
-                OnPropertyChanged(nameof(DimensionsText));
-                OnPropertyChanged(nameof(IsLoading));
+                if (!token.IsCancellationRequested)
+                {
+                    ApplyMetadataResult(result);
+                }
             });
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException)
+        {
+            _metadataLoadStatus = MetadataLoadStatus.Cancelled;
+        }
         catch (Exception ex)
         {
             if (ex is not InvalidDataException { Message: "Invalid PNG signature." })
@@ -455,6 +331,48 @@ public sealed class ImageItem : INotifyPropertyChanged
         }
     }
 
+    internal Task<MetadataLoadResult> GetMetadataLoadResultAsync(
+        bool skipCacheLookup,
+        bool persistResult,
+        CancellationToken token)
+    {
+        lock (_metadataLoadLock)
+        {
+            if (_metadataLoadTask is null || _metadataLoadTask.IsCanceled || _metadataLoadTask.IsFaulted)
+            {
+                _metadataLoadTask = _metadataService.LoadAsync(
+                    Path,
+                    SourceFingerprint,
+                    skipCacheLookup,
+                    persistResult,
+                    token);
+            }
+
+            return _metadataLoadTask.WaitAsync(token);
+        }
+    }
+
+    internal void ApplyMetadataResult(MetadataLoadResult result)
+    {
+        if (_hasLoadedMetadata)
+        {
+            return;
+        }
+
+        _metadataLoadStatus = result.Status;
+        if (result.Entry is { } entry)
+        {
+            ApplyMetadataValues(entry);
+        }
+        MarkMetadataLoaded();
+
+        if (result.Exception is { } exception &&
+            exception is not InvalidDataException { Message: "Invalid PNG signature." })
+        {
+            DebugLog.Write($"Failed to load metadata for {Path}: {exception}");
+        }
+    }
+
     internal void ApplyMetadataEntry(MetadataIndexEntry entry)
     {
         if (_hasLoadedMetadata)
@@ -462,6 +380,13 @@ public sealed class ImageItem : INotifyPropertyChanged
             return;
         }
 
+        _metadataLoadStatus = MetadataLoadStatus.Success;
+        ApplyMetadataValues(entry);
+        MarkMetadataLoaded();
+    }
+
+    private void ApplyMetadataValues(MetadataIndexEntry entry)
+    {
         _width = entry.Width;
         _height = entry.Height;
         Prompt = entry.Prompt;
@@ -473,7 +398,6 @@ public sealed class ImageItem : INotifyPropertyChanged
         Settings = entry.Settings;
         Lora = entry.Lora;
         Resources = entry.Resources;
-        MarkMetadataLoaded();
         OnPropertyChanged(nameof(DimensionsText));
         OnPropertyChanged(nameof(IsLoading));
     }
@@ -497,9 +421,8 @@ public sealed class ImageItem : INotifyPropertyChanged
 
         try
         {
-            using var stream = File.OpenRead(Path);
             var decodeWidth = _width > 0 ? Math.Min(_width, SelectedPreviewMaxWidth) : SelectedPreviewMaxWidth;
-            SelectedPreview = Bitmap.DecodeToWidth(stream, decodeWidth, BitmapInterpolationMode.MediumQuality);
+            SelectedPreview = _thumbnailService.DecodeSelectedPreview(Path, decodeWidth);
         }
         catch (Exception ex)
         {
@@ -514,7 +437,7 @@ public sealed class ImageItem : INotifyPropertyChanged
             return;
         }
 
-        ImageCache.Remove(this);
+        _decodedImageCache.Remove(this);
 
         if (Preview is not null)
         {
@@ -537,7 +460,7 @@ public sealed class ImageItem : INotifyPropertyChanged
     {
         try
         {
-            await SelectedPreviewLoadLimiter.WaitAsync(token);
+            await _thumbnailService.SelectedPreviewLoadLimiter.WaitAsync(token);
             try
             {
                 if (!IsSelected)
@@ -547,9 +470,8 @@ public sealed class ImageItem : INotifyPropertyChanged
 
                 var bitmap = await Task.Run(() =>
                 {
-                    using var stream = File.OpenRead(Path);
                     var decodeWidth = _width > 0 ? Math.Min(_width, SelectedPreviewMaxWidth) : SelectedPreviewMaxWidth;
-                    return Bitmap.DecodeToWidth(stream, decodeWidth, BitmapInterpolationMode.MediumQuality);
+                    return _thumbnailService.DecodeSelectedPreview(Path, decodeWidth);
                 }, token);
                 await Dispatcher.UIThread.InvokeAsync(() =>
                 {
@@ -570,7 +492,7 @@ public sealed class ImageItem : INotifyPropertyChanged
             }
             finally
             {
-                SelectedPreviewLoadLimiter.Release();
+                _thumbnailService.SelectedPreviewLoadLimiter.Release();
             }
         }
         catch (OperationCanceledException)
@@ -588,7 +510,7 @@ public sealed class ImageItem : INotifyPropertyChanged
         {
             if (Preview is not null)
             {
-                ImageCache.Touch(this);
+                _decodedImageCache.Touch(this);
             }
             return;
         }
@@ -607,7 +529,7 @@ public sealed class ImageItem : INotifyPropertyChanged
                 {
                     try
                     {
-                        return new Bitmap(cachePath);
+                        return _thumbnailService.LoadCachedThumbnail(cachePath);
                     }
                     catch (Exception ex)
                     {
@@ -633,13 +555,12 @@ public sealed class ImageItem : INotifyPropertyChanged
                     return null;
                 }
 
-                using var stream = File.OpenRead(Path);
-                var decoded = Bitmap.DecodeToWidth(stream, GetThumbnailDecodeWidth(), BitmapInterpolationMode.MediumQuality);
+                var decoded = _thumbnailService.DecodeThumbnail(Path, GetThumbnailDecodeWidth());
                 if (!string.IsNullOrEmpty(cachePath) &&
                     isCurrent?.Invoke() != false &&
                     !MainWindow.IsFastScrolling)
                 {
-                    QueueThumbnailCacheWrite(this, cachePath);
+                    _thumbnailService.TryQueueCacheWrite(this, cachePath);
                 }
                 return decoded;
             }, token);
@@ -660,12 +581,12 @@ public sealed class ImageItem : INotifyPropertyChanged
                 if (Preview is not null)
                 {
                     bitmap.Dispose();
-                    ImageCache.Touch(this);
+                    _decodedImageCache.Touch(this);
                     return;
                 }
 
                 Preview = bitmap;
-                ImageCache.Touch(this);
+                _decodedImageCache.Touch(this);
             });
         }
         catch (OperationCanceledException)
@@ -689,252 +610,21 @@ public sealed class ImageItem : INotifyPropertyChanged
         }
 
         _hasLoadedMetadata = true;
+        Volatile.Write(ref _searchProjection, new SearchProjection(
+            FileName,
+            Prompt,
+            NegativePrompt,
+            SearchEngine.NormalizeSeparators(string.Join(
+                '\0',
+                Tool,
+                Model,
+                Sampler,
+                Seed,
+                Settings,
+                Lora,
+                Resources)),
+            HasLoadedMetadata: true));
         MetadataLoaded?.Invoke(this);
-    }
-
-    private static void QueueThumbnailCacheWrite(ImageItem item, string cachePath)
-    {
-        TryQueueDeferredThumbnailCacheWrite(item, cachePath);
-    }
-
-    internal static bool TryQueueDeferredThumbnailCacheWrite(ImageItem item, string cachePath)
-    {
-        if (string.IsNullOrEmpty(cachePath))
-        {
-            return false;
-        }
-
-        if (File.Exists(cachePath))
-        {
-            item.SetThumbnailCacheState(cachePath, exists: true);
-            return false;
-        }
-
-        lock (PendingThumbnailCacheWritesLock)
-        {
-            if (ThumbnailCacheMaintenancePaused)
-            {
-                return false;
-            }
-
-            if (!PendingThumbnailCacheWrites.Add(cachePath))
-            {
-                return false;
-            }
-
-            DeferredThumbnailCacheWrites.Enqueue(new DeferredThumbnailCacheWrite(
-                item,
-                cachePath,
-                item.GetThumbnailDecodeWidth()));
-        }
-
-        StartDeferredThumbnailCacheWriter();
-        return true;
-    }
-
-    internal static void SetDeferredThumbnailCacheWritePause(Func<bool>? isPaused)
-    {
-        DeferredThumbnailCacheWritesPaused = isPaused;
-    }
-
-    internal static void ResumeDeferredThumbnailCacheWrites()
-    {
-        StartDeferredThumbnailCacheWriter();
-    }
-
-    internal static bool TryBeginThumbnailCacheWrite(string cachePath)
-    {
-        // Intentional simplification: only one writer runs at a time. Busy misses
-        // are deferred by path so decoded bitmaps are not retained while waiting.
-        if (!ThumbnailCacheWriteLimiter.Wait(0))
-        {
-            return false;
-        }
-
-        lock (PendingThumbnailCacheWritesLock)
-        {
-            if (PendingThumbnailCacheWrites.Add(cachePath))
-            {
-                return true;
-            }
-        }
-
-        ThumbnailCacheWriteLimiter.Release();
-        return false;
-    }
-
-    internal static void EndThumbnailCacheWrite(string cachePath)
-    {
-        lock (PendingThumbnailCacheWritesLock)
-        {
-            PendingThumbnailCacheWrites.Remove(cachePath);
-        }
-
-        ThumbnailCacheWriteLimiter.Release();
-        StartDeferredThumbnailCacheWriter();
-    }
-
-    internal static void ClearDeferredThumbnailCacheWrites()
-    {
-        lock (PendingThumbnailCacheWritesLock)
-        {
-            while (DeferredThumbnailCacheWrites.TryDequeue(out var write))
-            {
-                PendingThumbnailCacheWrites.Remove(write.CachePath);
-            }
-        }
-    }
-
-    internal static async Task PauseAndDrainThumbnailCacheWritesAsync()
-    {
-        lock (PendingThumbnailCacheWritesLock)
-        {
-            ThumbnailCacheMaintenancePaused = true;
-            while (DeferredThumbnailCacheWrites.TryDequeue(out var write))
-            {
-                PendingThumbnailCacheWrites.Remove(write.CachePath);
-            }
-        }
-
-        await ThumbnailCacheWriteLimiter.WaitAsync();
-        ThumbnailCacheWriteLimiter.Release();
-    }
-
-    internal static void ResumeThumbnailCacheWrites()
-    {
-        lock (PendingThumbnailCacheWritesLock)
-        {
-            ThumbnailCacheMaintenancePaused = false;
-        }
-
-        StartDeferredThumbnailCacheWriter();
-    }
-
-    private static void StartDeferredThumbnailCacheWriter()
-    {
-        lock (PendingThumbnailCacheWritesLock)
-        {
-            if (ThumbnailCacheMaintenancePaused)
-            {
-                return;
-            }
-        }
-
-        if (ShouldPauseDeferredThumbnailCacheWrites())
-        {
-            return;
-        }
-
-        if (!ThumbnailCacheWriteLimiter.Wait(0))
-        {
-            return;
-        }
-
-        if (!TryDequeueDeferredThumbnailCacheWrite(out var write))
-        {
-            ThumbnailCacheWriteLimiter.Release();
-            return;
-        }
-
-        DebugLog.Observe(Task.Run(() =>
-        {
-            try
-            {
-                if (File.Exists(write.CachePath))
-                {
-                    write.Item.SetThumbnailCacheState(write.CachePath, exists: true);
-                    return;
-                }
-
-                SaveJpegThumbnailAtomically(write.Item.Path, write.CachePath, write.ThumbnailWidth);
-                write.Item.SetThumbnailCacheState(write.CachePath, exists: true);
-            }
-            catch (Exception ex)
-            {
-                DebugLog.Write($"Failed to write deferred thumbnail cache for {write.Item.Path} to {write.CachePath}: {ex.Message}");
-            }
-            finally
-            {
-                EndThumbnailCacheWrite(write.CachePath);
-            }
-        }), "Deferred thumbnail cache writer");
-    }
-
-    private static bool ShouldPauseDeferredThumbnailCacheWrites()
-    {
-        try
-        {
-            return DeferredThumbnailCacheWritesPaused?.Invoke() == true;
-        }
-        catch (Exception ex)
-        {
-            DebugLog.Write($"Deferred thumbnail cache pause callback failed: {ex.Message}");
-            return false;
-        }
-    }
-
-    internal static void SaveJpegThumbnailAtomically(string sourcePath, string cachePath, int thumbnailWidth)
-    {
-        var temporaryPath = $"{cachePath}.{Guid.NewGuid():N}.tmp";
-        try
-        {
-            using var codec = SKCodec.Create(sourcePath)
-                ?? throw new InvalidDataException($"Could not open thumbnail source {sourcePath}.");
-            var sourceInfo = codec.Info;
-            var width = Math.Min(sourceInfo.Width, thumbnailWidth);
-            var height = Math.Max(1, (int)Math.Round(sourceInfo.Height * (width / (double)sourceInfo.Width)));
-            var decodedSize = codec.GetScaledDimensions(width / (float)sourceInfo.Width);
-            var decodedInfo = new SKImageInfo(
-                decodedSize.Width,
-                decodedSize.Height,
-                SKColorType.Bgra8888,
-                SKAlphaType.Premul);
-            using var decoded = SKBitmap.Decode(codec, decodedInfo)
-                ?? throw new InvalidDataException($"Could not decode thumbnail source {sourcePath}.");
-            // Intentional simplification: JPEG drops alpha for maximum decode speed; use WebP if transparent outputs become important.
-            var info = new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Premul);
-            using var resized = new SKBitmap(info);
-            if (!decoded.ScalePixels(resized, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None)))
-            {
-                throw new InvalidDataException($"Could not resize thumbnail source {sourcePath}.");
-            }
-
-            using var image = SKImage.FromBitmap(resized);
-            using var data = image.Encode(SKEncodedImageFormat.Jpeg, ThumbnailJpegQuality)
-                ?? throw new InvalidDataException($"Could not encode JPEG thumbnail for {sourcePath}.");
-            using (var stream = File.Create(temporaryPath))
-            {
-                data.SaveTo(stream);
-            }
-
-            try
-            {
-                File.Move(temporaryPath, cachePath);
-            }
-            catch (IOException) when (File.Exists(cachePath))
-            {
-                // Another writer won the race; its completed cache file is equivalent.
-            }
-        }
-        finally
-        {
-            try
-            {
-                File.Delete(temporaryPath);
-            }
-            catch
-            {
-                // Best-effort cache cleanup must not interrupt image browsing.
-            }
-        }
-    }
-
-    private static bool TryDequeueDeferredThumbnailCacheWrite(out DeferredThumbnailCacheWrite write)
-    {
-        lock (PendingThumbnailCacheWritesLock)
-        {
-            return DeferredThumbnailCacheWrites.TryDequeue(out write);
-        }
     }
 
     private (string CachePath, bool Exists) GetThumbnailCacheState()
@@ -957,12 +647,12 @@ public sealed class ImageItem : INotifyPropertyChanged
 
     private void RefreshThumbnailCacheState()
     {
-        var cachePath = BuildThumbnailCachePath();
+        var cachePath = _thumbnailService.BuildCachePath(Path, GetThumbnailDecodeWidth());
         var exists = !string.IsNullOrEmpty(cachePath) && File.Exists(cachePath);
         SetThumbnailCacheState(cachePath, exists);
     }
 
-    private int GetThumbnailDecodeWidth()
+    internal int GetThumbnailDecodeWidth()
     {
         var targetWidth = (int)Math.Ceiling(_tileSize * ThumbnailDecodeScale);
         if (targetWidth <= SmallThumbnailWidth)
@@ -981,7 +671,7 @@ public sealed class ImageItem : INotifyPropertyChanged
         }
     }
 
-    private void SetThumbnailCacheState(string cachePath, bool exists)
+    internal void SetThumbnailCacheState(string cachePath, bool exists)
     {
         lock (_thumbnailCacheStateLock)
         {
@@ -990,12 +680,6 @@ public sealed class ImageItem : INotifyPropertyChanged
             _hasThumbnailCacheState = true;
         }
     }
-
-    internal readonly record struct DeferredThumbnailCacheWrite(
-        ImageItem Item,
-        string CachePath,
-        int ThumbnailWidth);
-
 
     private bool SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
     {
@@ -1014,3 +698,10 @@ public sealed class ImageItem : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
     }
 }
+
+internal sealed record SearchProjection(
+    string FileName,
+    string Prompt,
+    string NegativePrompt,
+    string NormalizedSettingsText,
+    bool HasLoadedMetadata);

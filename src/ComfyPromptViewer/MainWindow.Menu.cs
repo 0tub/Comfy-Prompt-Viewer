@@ -83,19 +83,19 @@ public partial class MainWindow
         var cacheWritesPaused = false;
         try
         {
-            await ImageItem.PauseAndDrainThumbnailCacheWritesAsync();
+            await _thumbnailService.PauseAndDrainWritesAsync();
             cacheWritesPaused = true;
-            foreach (var item in _allImageItems)
+            foreach (var item in _catalog.Items)
             {
                 item.InvalidateThumbnailCacheState();
             }
-            ImageCache.ClearAndReleaseAll();
-            if (Directory.Exists(ImageItem.ThumbnailCacheRootDir))
+            _decodedImageCache.ClearAndReleaseAll();
+            if (Directory.Exists(_thumbnailService.CacheRootDirectory))
             {
-                Directory.Delete(ImageItem.ThumbnailCacheRootDir, recursive: true);
+                Directory.Delete(_thumbnailService.CacheRootDirectory, recursive: true);
             }
 
-            Directory.CreateDirectory(ImageItem.ThumbnailCacheRootDir);
+            Directory.CreateDirectory(_thumbnailService.CacheRootDirectory);
             ShowAdvancedMaintenanceStatus("Thumbnail cache cleared.");
         }
         catch (Exception ex)
@@ -108,7 +108,7 @@ public partial class MainWindow
         {
             if (cacheWritesPaused)
             {
-                ImageItem.ResumeThumbnailCacheWrites();
+                _thumbnailService.ResumeWrites();
             }
             _thumbnailCacheClearInProgress = false;
             QueueViewportThumbnailSchedule(force: true);
@@ -119,7 +119,7 @@ public partial class MainWindow
     {
         try
         {
-            MetadataIndex.Clear();
+            _metadataRepository.Clear();
             ShowAdvancedMaintenanceStatus("Metadata cache cleared.");
         }
         catch (Exception ex)
@@ -134,8 +134,8 @@ public partial class MainWindow
     {
         try
         {
-            Directory.CreateDirectory(ImageItem.ThumbnailCacheRootDir);
-            OpenFolderInFileManager(UserPreferences.AppDataDir);
+            Directory.CreateDirectory(_thumbnailService.CacheRootDirectory);
+            OpenFolderInFileManager(AppPaths.LocalDataDirectory);
             ShowAdvancedMaintenanceStatus("App data folder opened.");
         }
         catch (Exception ex)
@@ -193,8 +193,8 @@ public partial class MainWindow
         _metadataScanner.Cancel();
         _folderLoader.Cancel();
         _thumbnailLoads.Clear();
-        ImageItem.ClearDeferredThumbnailCacheWrites();
-        ImageCache.ClearAndReleaseAll();
+        _thumbnailService.ClearDeferredWrites();
+        _decodedImageCache.ClearAndReleaseAll();
         SelectItem(null);
         ClearImageItems();
         _currentFolderPath = null;
@@ -245,7 +245,7 @@ public partial class MainWindow
     private void PopulateRecentFolders()
     {
         RecentFoldersList.Children.Clear();
-        var recent = UserPreferences.LoadRecentFolders();
+        var recent = _preferences.LoadRecentFolders();
 
         if (recent.Count == 0)
         {
@@ -416,9 +416,9 @@ public partial class MainWindow
 
     private void RemoveRecentFolder(string folderPath)
     {
-        var recent = UserPreferences.LoadRecentFolders();
+        var recent = _preferences.LoadRecentFolders();
         recent.RemoveAll(x => string.Equals(x.Path, folderPath, StringComparison.OrdinalIgnoreCase));
-        UserPreferences.SaveRecentFolders(recent);
+        _preferences.SaveRecentFolders(recent);
         PopulateRecentFolders();
     }
 

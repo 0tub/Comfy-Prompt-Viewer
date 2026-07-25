@@ -14,13 +14,13 @@ public static class DebugLog
     private static int _lastScrollItemCount;
     private static double _lastScrollTileExtent;
 
-    public static string LogPath => Path.Combine(UserPreferences.AppDataDir, "debug.log");
+    public static string LogPath => Path.Combine(AppPaths.LocalDataDirectory, "debug.log");
 
     public static void InstallGlobalHandlers()
     {
         try
         {
-            Directory.CreateDirectory(UserPreferences.AppDataDir);
+            Directory.CreateDirectory(AppPaths.LocalDataDirectory);
             lock (Lock)
             {
                 File.WriteAllText(LogPath, string.Empty);
@@ -46,7 +46,7 @@ public static class DebugLog
     {
         try
         {
-            Directory.CreateDirectory(UserPreferences.AppDataDir);
+            Directory.CreateDirectory(AppPaths.LocalDataDirectory);
             lock (Lock)
             {
                 File.AppendAllText(LogPath, $"{DateTimeOffset.Now:O} {message}{Environment.NewLine}");

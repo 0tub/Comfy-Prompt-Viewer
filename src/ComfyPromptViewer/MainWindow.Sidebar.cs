@@ -479,7 +479,7 @@ public partial class MainWindow
         ImageItem[] actionItems;
         if (_selectedItems.Contains(item))
         {
-            actionItems = _allImageItems.Where(_selectedItems.Contains).ToArray();
+            actionItems = _catalog.Items.Where(_selectedItems.Contains).ToArray();
             SetActiveItem(item);
         }
         else

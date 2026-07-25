@@ -13,6 +13,8 @@ public static class PromptExtractor
     private static readonly string[] PositiveKeys = ["positive", "prompt", "text"];
     private static readonly string[] ModelInputKeys = ["ckpt_name", "unet_name", "model_name", "checkpoint", "model"];
     private static readonly string[] NegativeMarkers = ["negative", "neg_prompt", "negative_prompt"];
+    private static readonly ExtractionStage[] ExtractionStages =
+        [ApplyDrawThings, ApplyComfyPrompt, ApplyWorkflow, ApplyParameters];
     private const int MaxModelLinkDepth = 6;
 
     public static ExtractedPromptMetadata ExtractAll(Dictionary<string, string> metadata)
@@ -22,92 +24,124 @@ public static class PromptExtractor
             return new ExtractedPromptMetadata();
         }
 
-        var prompt = "";
-        var negativePrompt = "";
-        var generationSettings = new GenerationSettings();
-        var hasComfyMetadata = metadata.ContainsKey("prompt") || metadata.ContainsKey("workflow");
-
-        var xmpText = FindDrawThingsXmp(metadata);
-        var xmp = xmpText is null ? null : ParseDrawThingsXmp(xmpText);
-        if (xmp is not null)
+        var context = new ExtractionContext
         {
-            prompt = xmp.Prompt;
-            negativePrompt = xmp.NegativePrompt;
-            if (!string.IsNullOrWhiteSpace(xmp.SettingsLine))
-            {
-                generationSettings = ExtractGenerationFromParameters(xmp.SettingsLine) ?? generationSettings;
-            }
-            generationSettings.Tool = "Draw Things";
+            HasComfyMetadata = metadata.ContainsKey("prompt") || metadata.ContainsKey("workflow")
+        };
+        foreach (var stage in ExtractionStages)
+        {
+            stage(metadata, context);
         }
 
-        if (metadata.TryGetValue("prompt", out var promptJson))
+        if (string.IsNullOrWhiteSpace(context.Prompt))
         {
-            var comfy = ExtractComfyPromptJson(promptJson);
-            if (string.IsNullOrWhiteSpace(prompt))
-            {
-                prompt = comfy.Prompt;
-            }
-            if (string.IsNullOrWhiteSpace(negativePrompt))
-            {
-                negativePrompt = comfy.NegativePrompt;
-            }
-            if (generationSettings.IsEmpty && comfy.GenerationSettings is { IsEmpty: false } comfySettings)
-            {
-                generationSettings = comfySettings;
-            }
+            context.Prompt = LongestPromptLike(metadata.Values);
         }
 
-        if (metadata.TryGetValue("workflow", out var workflowJson))
+        MergePromptResources(context.GenerationSettings, context.Prompt);
+        MergePromptResources(context.GenerationSettings, context.NegativePrompt);
+        if (context.HasComfyMetadata && string.IsNullOrWhiteSpace(context.GenerationSettings.Tool))
         {
-            var workflow = ExtractWorkflowJson(workflowJson);
-            if (string.IsNullOrWhiteSpace(prompt))
-            {
-                prompt = workflow.Prompt;
-            }
-            if (string.IsNullOrWhiteSpace(negativePrompt))
-            {
-                negativePrompt = workflow.NegativePrompt;
-            }
-            if (workflow.GenerationSettings is { IsEmpty: false } workflowSettings)
-            {
-                generationSettings = MergeGenerationSettings(generationSettings, workflowSettings);
-            }
-        }
-
-        if (metadata.TryGetValue("parameters", out var parameters))
-        {
-            if (string.IsNullOrWhiteSpace(prompt))
-            {
-                prompt = ExtractFromParameters(parameters);
-            }
-            if (string.IsNullOrWhiteSpace(negativePrompt))
-            {
-                negativePrompt = ExtractNegativeFromParameters(parameters);
-            }
-            if (generationSettings.IsEmpty)
-            {
-                generationSettings = ExtractGenerationFromParameters(parameters) ?? generationSettings;
-            }
-        }
-
-        if (string.IsNullOrWhiteSpace(prompt))
-        {
-            prompt = LongestPromptLike(metadata.Values);
-        }
-
-        MergePromptResources(generationSettings, prompt);
-        MergePromptResources(generationSettings, negativePrompt);
-        if (hasComfyMetadata && string.IsNullOrWhiteSpace(generationSettings.Tool))
-        {
-            generationSettings.Tool = "ComfyUI";
+            context.GenerationSettings.Tool = "ComfyUI";
         }
 
         return new ExtractedPromptMetadata
         {
-            Prompt = prompt,
-            NegativePrompt = negativePrompt,
-            GenerationSettings = generationSettings
+            Prompt = context.Prompt,
+            NegativePrompt = context.NegativePrompt,
+            GenerationSettings = context.GenerationSettings
         };
+    }
+
+    private static void ApplyDrawThings(Dictionary<string, string> metadata, ExtractionContext context)
+    {
+        var xmpText = FindDrawThingsXmp(metadata);
+        var xmp = xmpText is null ? null : ParseDrawThingsXmp(xmpText);
+        if (xmp is not null)
+        {
+            context.Prompt = xmp.Prompt;
+            context.NegativePrompt = xmp.NegativePrompt;
+            if (!string.IsNullOrWhiteSpace(xmp.SettingsLine))
+            {
+                context.GenerationSettings =
+                    ExtractGenerationFromParameters(xmp.SettingsLine) ?? context.GenerationSettings;
+            }
+            context.GenerationSettings.Tool = "Draw Things";
+        }
+    }
+
+    private static void ApplyComfyPrompt(Dictionary<string, string> metadata, ExtractionContext context)
+    {
+        if (metadata.TryGetValue("prompt", out var promptJson))
+        {
+            var comfy = ExtractComfyPromptJson(promptJson);
+            if (string.IsNullOrWhiteSpace(context.Prompt))
+            {
+                context.Prompt = comfy.Prompt;
+            }
+            if (string.IsNullOrWhiteSpace(context.NegativePrompt))
+            {
+                context.NegativePrompt = comfy.NegativePrompt;
+            }
+            if (context.GenerationSettings.IsEmpty &&
+                comfy.GenerationSettings is { IsEmpty: false } comfySettings)
+            {
+                context.GenerationSettings = comfySettings;
+            }
+        }
+    }
+
+    private static void ApplyWorkflow(Dictionary<string, string> metadata, ExtractionContext context)
+    {
+        if (metadata.TryGetValue("workflow", out var workflowJson))
+        {
+            var workflow = ExtractWorkflowJson(workflowJson);
+            if (string.IsNullOrWhiteSpace(context.Prompt))
+            {
+                context.Prompt = workflow.Prompt;
+            }
+            if (string.IsNullOrWhiteSpace(context.NegativePrompt))
+            {
+                context.NegativePrompt = workflow.NegativePrompt;
+            }
+            if (workflow.GenerationSettings is { IsEmpty: false } workflowSettings)
+            {
+                context.GenerationSettings =
+                    MergeGenerationSettings(context.GenerationSettings, workflowSettings);
+            }
+        }
+    }
+
+    private static void ApplyParameters(Dictionary<string, string> metadata, ExtractionContext context)
+    {
+        if (metadata.TryGetValue("parameters", out var parameters))
+        {
+            if (string.IsNullOrWhiteSpace(context.Prompt))
+            {
+                context.Prompt = ExtractFromParameters(parameters);
+            }
+            if (string.IsNullOrWhiteSpace(context.NegativePrompt))
+            {
+                context.NegativePrompt = ExtractNegativeFromParameters(parameters);
+            }
+            if (context.GenerationSettings.IsEmpty)
+            {
+                context.GenerationSettings =
+                    ExtractGenerationFromParameters(parameters) ?? context.GenerationSettings;
+            }
+        }
+    }
+
+    private delegate void ExtractionStage(
+        Dictionary<string, string> metadata,
+        ExtractionContext context);
+
+    private sealed class ExtractionContext
+    {
+        public string Prompt { get; set; } = "";
+        public string NegativePrompt { get; set; } = "";
+        public GenerationSettings GenerationSettings { get; set; } = new();
+        public bool HasComfyMetadata { get; init; }
     }
 
     private static ComfyPromptMetadata ExtractComfyPromptJson(string json)

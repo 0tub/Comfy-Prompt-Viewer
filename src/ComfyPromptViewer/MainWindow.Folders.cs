@@ -13,7 +13,7 @@ public partial class MainWindow
 {
     private async void MainWindow_Opened(object? sender, EventArgs e)
     {
-        var lastFolder = UserPreferences.LoadLastFolderPath();
+        var lastFolder = _preferences.LoadLastFolderPath();
         if (!string.IsNullOrWhiteSpace(lastFolder) && Directory.Exists(lastFolder))
         {
             await LoadFolderAsync(lastFolder);
@@ -51,59 +51,80 @@ public partial class MainWindow
 
         _metadataScanner.Cancel();
         _thumbnailLoads.Clear();
-        ImageItem.ClearDeferredThumbnailCacheWrites();
+        _thumbnailService.ClearDeferredWrites();
 
         _scrollMonitorTimer?.Stop();
         _isFastScrollingStatic = false;
         _lastFastScrollScheduleTime = 0;
         _lastScrollOffsetY = 0;
         _lastScrollTimestamp = 0;
-        ImageCache.ClearAndReleaseAll();
+        _decodedImageCache.ClearAndReleaseAll();
         SelectItem(null);
         ClearImageItems();
         FolderText.Text = TruncatePath(folderPath);
         CopyPathButton.IsVisible = true;
         _currentFolderPath = folderPath;
         CountText.Text = "Scanning...";
-        MainMenu.IsVisible = false;
-        HeaderBorder.IsVisible = true;
 
         try
         {
-            var imageFiles = await FolderLoadCoordinator.ReadFolderAsync(folderPath, includeSubfolders, token);
+            var sortMode = _sortMode;
+            var imageFiles = await FolderLoadCoordinator.ReadFolderAsync(
+                folderPath,
+                includeSubfolders,
+                (left, right) => CompareImageFileEntries(left, right, sortMode),
+                token);
 
             if (!_folderLoader.IsCurrent(loadSession))
             {
                 return;
             }
 
-            foreach (var imageFile in imageFiles)
+            while (sortMode != _sortMode)
             {
-                _allImagePaths.Add(imageFile.Path);
-                _imageLastWriteTimes[imageFile.Path] = imageFile.LastWriteTimeUtc;
+                sortMode = _sortMode;
+                await Task.Run(
+                    () => imageFiles.Sort(
+                        (left, right) => CompareImageFileEntries(left, right, sortMode)),
+                    token);
+                if (!_folderLoader.IsCurrent(loadSession))
+                {
+                    return;
+                }
             }
-            UserPreferences.SaveLastFolderPath(folderPath);
-            UserPreferences.AddRecentFolder(folderPath, imageFiles.Count);
-            DebugLog.Observe(
-                Task.Run(() => MetadataIndex.PruneMissing(imageFiles.Select(file => file.Path), includeSubfolders)),
-                "MetadataIndex.PruneMissing");
-            ApplySort();
-            CountText.Text = $"{_allImagePaths.Count:n0} images";
 
-            if (_allImagePaths.Count == 0)
+            _preferences.SaveLastFolderPath(folderPath);
+            _preferences.AddRecentFolder(folderPath, imageFiles.Count);
+            DebugLog.Observe(
+                Task.Run(() => _metadataRepository.PruneMissing(imageFiles.Select(file => file.Path), includeSubfolders)),
+                "MetadataRepository.PruneMissing");
+            CountText.Text = $"{imageFiles.Count:n0} images";
+
+            if (imageFiles.Count == 0)
             {
-                ShowMainMenu();
                 var hasNestedImages = !includeSubfolders &&
                                       await FolderLoadCoordinator.HasImagesAsync(folderPath, includeSubfolders: true);
+                if (!_folderLoader.IsCurrent(loadSession))
+                {
+                    return;
+                }
+
+                ShowMainMenu();
                 ShowMenuError(hasNestedImages
                     ? "No top-level PNG, JPG, or WebP images found. Enable Include subfolders to scan nested folders."
                     : "No PNG, JPG, or WebP images found in that folder.");
                 return;
             }
 
-            foreach (var path in _allImagePaths)
+            MainMenu.IsVisible = false;
+            HeaderBorder.IsVisible = true;
+
+            foreach (var imageFile in imageFiles)
             {
-                _allImageItems.Add(CreateImageItem(path));
+                _catalog.Add(new GalleryEntry(
+                    imageFile.Path,
+                    imageFile.Fingerprint,
+                    CreateImageItem(imageFile.Path, imageFile.Fingerprint)));
             }
 
             ApplyFilter(resetScroll: true);
@@ -111,10 +132,9 @@ public partial class MainWindow
 
             if (!string.IsNullOrEmpty(selectedPath))
             {
-                var match = _allImageItems.FirstOrDefault(item => item.Path == selectedPath);
-                if (match != null)
+                if (_catalog.TryGet(selectedPath, out var match))
                 {
-                    SelectItem(match);
+                    SelectItem(match.Item);
                 }
             }
 
@@ -167,7 +187,7 @@ public partial class MainWindow
 
         _includeSubfolders = includeSubfolders;
         SyncIncludeSubfoldersToggles();
-        UserPreferences.SaveIncludeSubfolders(includeSubfolders);
+        _preferences.SaveIncludeSubfolders(includeSubfolders);
 
         if (!string.IsNullOrEmpty(currentFolderPath))
         {
@@ -181,9 +201,9 @@ public partial class MainWindow
         MenuIncludeSubfoldersToggle.IsChecked = _includeSubfolders;
     }
 
-    private ImageItem CreateImageItem(string path)
+    private ImageItem CreateImageItem(string path, SourceFingerprint fingerprint)
     {
-        var item = new ImageItem(path, _tileSize);
+        var item = new ImageItem(path, fingerprint, _tileSize, _metadataService, _decodedImageCache, _thumbnailService);
         item.MetadataLoaded += ImageItem_MetadataLoaded;
         return item;
     }

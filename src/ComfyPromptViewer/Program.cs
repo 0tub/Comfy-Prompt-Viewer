@@ -9,7 +9,7 @@ class Program
     [STAThread]
     public static void Main(string[] args)
     {
-        ImageCache.ConfigureLinuxNativeAllocator();
+        DecodedImageCache.ConfigureLinuxNativeAllocator();
 
         if (args.Length == 1 && string.Equals(args[0], "--self-check", StringComparison.OrdinalIgnoreCase))
         {

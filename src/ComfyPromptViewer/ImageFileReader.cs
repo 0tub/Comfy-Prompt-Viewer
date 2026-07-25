@@ -10,6 +10,8 @@ public sealed record ImageReadResult(int Width, int Height, Dictionary<string, s
 
 public static class ImageFileReader
 {
+    private static readonly IImageContainerReader[] ContainerReaders =
+        [new PngContainerReader(), new JpegContainerReader(), new WebPContainerReader()];
     private const int MaxTextChunkBytes = 2 * 1024 * 1024;
     private const int MaxInflatedTextBytes = 2 * 1024 * 1024;
     private const int MaxTotalTextMetadataBytes = 4 * 1024 * 1024;
@@ -61,23 +63,18 @@ public static class ImageFileReader
         var ext = span.Slice(dotIndex);
         using var stream = File.OpenRead(path);
 
-        if (ext.Equals(".png", StringComparison.OrdinalIgnoreCase))
+        foreach (var reader in ContainerReaders)
         {
-            return ReadPng(stream);
-        }
-        if (ext.Equals(".jpg", StringComparison.OrdinalIgnoreCase) || ext.Equals(".jpeg", StringComparison.OrdinalIgnoreCase))
-        {
-            return ReadJpeg(stream);
-        }
-        if (ext.Equals(".webp", StringComparison.OrdinalIgnoreCase))
-        {
-            return ReadWebP(stream);
+            if (reader.Supports(ext))
+            {
+                return reader.Read(stream);
+            }
         }
 
         throw new InvalidDataException("Unsupported image type.");
     }
 
-    private static ImageReadResult ReadPng(Stream stream)
+    internal static ImageReadResult ReadPng(Stream stream)
     {
         Span<byte> signature = stackalloc byte[8];
         ReadExactly(stream, signature);
@@ -188,7 +185,7 @@ public static class ImageFileReader
         return new ImageReadResult(width, height, metadata);
     }
 
-    private static ImageReadResult ReadJpeg(Stream stream)
+    internal static ImageReadResult ReadJpeg(Stream stream)
     {
         if (stream.ReadByte() != 0xFF || stream.ReadByte() != 0xD8)
         {
@@ -273,7 +270,7 @@ public static class ImageFileReader
         throw new InvalidDataException("JPEG dimensions not found.");
     }
 
-    private static ImageReadResult ReadWebP(Stream stream)
+    internal static ImageReadResult ReadWebP(Stream stream)
     {
         Span<byte> header = stackalloc byte[12];
         ReadExactly(stream, header);

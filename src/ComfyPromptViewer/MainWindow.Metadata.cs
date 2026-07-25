@@ -13,7 +13,7 @@ public partial class MainWindow
         {
             if (_folderLoader.CurrentToken is not { IsCancellationRequested: false } token ||
                 !_folderLoader.IsCurrent(loadGeneration) ||
-                _allImageItems.Count == 0)
+                _catalog.Count == 0)
             {
                 return;
             }
@@ -59,12 +59,12 @@ public partial class MainWindow
 
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                if (token.IsCancellationRequested || !_folderLoader.IsCurrent(loadGeneration) || _allImageItems.Count == 0)
+                if (token.IsCancellationRequested || !_folderLoader.IsCurrent(loadGeneration) || _catalog.Count == 0)
                 {
                     return;
                 }
 
-                _metadataScanner.Start(_allImageItems, HasSearchQueryActive, () => ApplyFilter(resetScroll: false));
+                _metadataScanner.Start(_catalog.Items, HasSearchQueryActive, () => ApplyFilter(resetScroll: false));
                 UpdateCountText();
             }, DispatcherPriority.Background);
         }
@@ -80,6 +80,7 @@ public partial class MainWindow
 
     private void ImageItem_MetadataLoaded(ImageItem item)
     {
+        _searchDataGeneration++;
         QueueMetadataCountTextUpdate();
     }
 

@@ -12,6 +12,7 @@ public sealed class ThumbnailLoadCoordinator
     private const int MaxAheadLoads = 1;
 
     private readonly object _lock = new();
+    private readonly DecodedImageCache _decodedImageCache;
     private readonly LinkedList<ImageItem> _visibleQueue = new();
     private readonly LinkedList<ImageItem> _aheadQueue = new();
     private readonly Dictionary<ImageItem, QueuedThumbnail> _queuedItems = new();
@@ -22,6 +23,11 @@ public sealed class ThumbnailLoadCoordinator
     private int _generation;
     private CancellationToken _currentToken;
     public Action? VisibleWorkDrained { get; set; }
+
+    internal ThumbnailLoadCoordinator(DecodedImageCache decodedImageCache)
+    {
+        _decodedImageCache = decodedImageCache;
+    }
 
     public void Clear()
     {
@@ -104,7 +110,7 @@ public sealed class ThumbnailLoadCoordinator
     {
         if (item.Preview is not null)
         {
-            ImageCache.Touch(item);
+            _decodedImageCache.Touch(item);
             return;
         }
 
@@ -170,7 +176,7 @@ public sealed class ThumbnailLoadCoordinator
 
         if (item.Preview is not null)
         {
-            ImageCache.Touch(item);
+            _decodedImageCache.Touch(item);
             return;
         }
 

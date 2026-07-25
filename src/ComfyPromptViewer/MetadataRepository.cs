@@ -6,34 +6,39 @@ using LiteDB;
 
 namespace ComfyPromptViewer;
 
-internal static class MetadataIndex
+internal sealed class MetadataRepository : IDisposable
 {
     private const int CurrentVersion = 2;
     private const string CollectionName = "metadata";
-    private static readonly object Lock = new();
-    private static string DatabasePath = Path.Combine(UserPreferences.AppDataDir, "metadata.db");
-    private static LiteDatabase? Database;
-    private static ILiteCollection<BsonDocument>? Collection;
+    private readonly object _lock = new();
+    private readonly string _databasePath;
+    private LiteDatabase? _database;
+    private ILiteCollection<BsonDocument>? _collection;
+    private bool _disposed;
 
-    public static bool TryLoad(string path, out MetadataIndexEntry entry)
+    public MetadataRepository(string appDataDirectory)
+    {
+        _databasePath = Path.Combine(appDataDirectory, "metadata.db");
+    }
+
+    public bool TryLoad(string path, SourceFingerprint fingerprint, out MetadataIndexEntry entry)
     {
         entry = new MetadataIndexEntry();
 
         try
         {
-            var fileInfo = new FileInfo(path);
-            if (!fileInfo.Exists)
-            {
-                return false;
-            }
-
-            var lastWriteTicks = fileInfo.LastWriteTimeUtc.Ticks;
-            var fileLength = fileInfo.Length;
-            lock (Lock)
+            lock (_lock)
             {
                 var collection = GetCollection();
-                var loaded = FromDocument(collection.FindById(BuildKey(path, lastWriteTicks, fileLength)));
-                if (!IsCurrent(loaded, path, lastWriteTicks, fileLength))
+                var loaded = FromDocument(collection.FindById(BuildKey(
+                    path,
+                    fingerprint.LastWriteTimeUtcTicks,
+                    fingerprint.FileLength)));
+                if (!IsCurrent(
+                    loaded,
+                    path,
+                    fingerprint.LastWriteTimeUtcTicks,
+                    fingerprint.FileLength))
                 {
                     return false;
                 }
@@ -49,35 +54,32 @@ internal static class MetadataIndex
         }
     }
 
-    public static Dictionary<string, MetadataIndexEntry> LoadMany(IEnumerable<string> paths, CancellationToken token)
+    public Dictionary<string, MetadataIndexEntry> LoadMany(
+        IEnumerable<MetadataLookup> lookups,
+        CancellationToken token)
     {
         var entries = new Dictionary<string, MetadataIndexEntry>(StringComparer.OrdinalIgnoreCase);
 
         try
         {
-            lock (Lock)
+            lock (_lock)
             {
                 var collection = GetCollection();
-
-                foreach (var path in paths)
+                foreach (var lookup in lookups)
                 {
                     token.ThrowIfCancellationRequested();
-
-                    var fileInfo = new FileInfo(path);
-                    if (!fileInfo.Exists)
+                    var loaded = FromDocument(collection.FindById(BuildKey(
+                        lookup.Path,
+                        lookup.Fingerprint.LastWriteTimeUtcTicks,
+                        lookup.Fingerprint.FileLength)));
+                    if (IsCurrent(
+                        loaded,
+                        lookup.Path,
+                        lookup.Fingerprint.LastWriteTimeUtcTicks,
+                        lookup.Fingerprint.FileLength))
                     {
-                        continue;
+                        entries[lookup.Path] = loaded!;
                     }
-
-                    var lastWriteTicks = fileInfo.LastWriteTimeUtc.Ticks;
-                    var fileLength = fileInfo.Length;
-                    var loaded = FromDocument(collection.FindById(BuildKey(path, lastWriteTicks, fileLength)));
-                    if (!IsCurrent(loaded, path, lastWriteTicks, fileLength))
-                    {
-                        continue;
-                    }
-
-                    entries[path] = loaded!;
                 }
             }
         }
@@ -93,50 +95,59 @@ internal static class MetadataIndex
         return entries;
     }
 
-    public static void Save(string path, ImageReadResult readResult, ExtractedPromptMetadata extracted)
+    public void Save(
+        string path,
+        SourceFingerprint fingerprint,
+        ImageReadResult readResult,
+        ExtractedPromptMetadata extracted)
+    {
+        Save(CreateEntry(path, fingerprint, readResult, extracted));
+    }
+
+    internal MetadataIndexEntry CreateEntry(
+        string path,
+        SourceFingerprint fingerprint,
+        ImageReadResult readResult,
+        ExtractedPromptMetadata extracted)
+    {
+        return new MetadataIndexEntry
+        {
+            Id = BuildKey(path, fingerprint.LastWriteTimeUtcTicks, fingerprint.FileLength),
+            Version = CurrentVersion,
+            FolderPath = Path.GetDirectoryName(path) ?? "",
+            SourcePath = path,
+            LastWriteTimeUtcTicks = fingerprint.LastWriteTimeUtcTicks,
+            FileLength = fingerprint.FileLength,
+            Width = readResult.Width,
+            Height = readResult.Height,
+            Prompt = extracted.Prompt,
+            NegativePrompt = extracted.NegativePrompt,
+            Tool = extracted.GenerationSettings.Tool,
+            Model = extracted.GenerationSettings.Model,
+            Sampler = extracted.GenerationSettings.Sampler,
+            Seed = extracted.GenerationSettings.Seed,
+            Settings = extracted.GenerationSettings.Settings,
+            Lora = extracted.GenerationSettings.Lora,
+            Resources = extracted.GenerationSettings.Resources
+        };
+    }
+
+    internal void Save(MetadataIndexEntry entry)
     {
         try
         {
-            var fileInfo = new FileInfo(path);
-            if (!fileInfo.Exists)
-            {
-                DebugLog.Write($"Skipped metadata index save for missing file {path}");
-                return;
-            }
-
-            var entry = new MetadataIndexEntry
-            {
-                Id = BuildKey(path, fileInfo.LastWriteTimeUtc.Ticks, fileInfo.Length),
-                Version = CurrentVersion,
-                FolderPath = Path.GetDirectoryName(path) ?? "",
-                SourcePath = path,
-                LastWriteTimeUtcTicks = fileInfo.LastWriteTimeUtc.Ticks,
-                FileLength = fileInfo.Length,
-                Width = readResult.Width,
-                Height = readResult.Height,
-                Prompt = extracted.Prompt,
-                NegativePrompt = extracted.NegativePrompt,
-                Tool = extracted.GenerationSettings.Tool,
-                Model = extracted.GenerationSettings.Model,
-                Sampler = extracted.GenerationSettings.Sampler,
-                Seed = extracted.GenerationSettings.Seed,
-                Settings = extracted.GenerationSettings.Settings,
-                Lora = extracted.GenerationSettings.Lora,
-                Resources = extracted.GenerationSettings.Resources
-            };
-
-            lock (Lock)
+            lock (_lock)
             {
                 GetCollection().Upsert(ToDocument(entry));
             }
         }
         catch (Exception ex)
         {
-            DebugLog.Write($"Failed to save metadata index for {path}: {ex.Message}");
+            DebugLog.Write($"Failed to save metadata index for {entry.SourcePath}: {ex.Message}");
         }
     }
 
-    public static void DeletePaths(IEnumerable<string> paths)
+    public void DeletePaths(IEnumerable<string> paths)
     {
         try
         {
@@ -146,7 +157,7 @@ internal static class MetadataIndex
                 return;
             }
 
-            lock (Lock)
+            lock (_lock)
             {
                 var collection = GetCollection();
                 foreach (var path in pathSet)
@@ -171,7 +182,7 @@ internal static class MetadataIndex
         }
     }
 
-    public static void PruneMissing(IEnumerable<string> currentPaths, bool includeSubfolders)
+    public void PruneMissing(IEnumerable<string> currentPaths, bool includeSubfolders)
     {
         try
         {
@@ -196,7 +207,7 @@ internal static class MetadataIndex
                 return;
             }
 
-            lock (Lock)
+            lock (_lock)
             {
                 var collection = GetCollection();
                 foreach (var folder in folderSet)
@@ -234,22 +245,22 @@ internal static class MetadataIndex
         }
     }
 
-    public static void Clear()
+    public void Clear()
     {
         try
         {
-            lock (Lock)
+            lock (_lock)
             {
                 CloseDatabase();
 
-                if (File.Exists(DatabasePath))
+                if (File.Exists(_databasePath))
                 {
-                    File.Delete(DatabasePath);
+                    File.Delete(_databasePath);
                 }
 
                 var logPath = Path.Combine(
-                    Path.GetDirectoryName(DatabasePath) ?? "",
-                    $"{Path.GetFileNameWithoutExtension(DatabasePath)}-log.db");
+                    Path.GetDirectoryName(_databasePath) ?? "",
+                    $"{Path.GetFileNameWithoutExtension(_databasePath)}-log.db");
                 if (File.Exists(logPath))
                 {
                     File.Delete(logPath);
@@ -263,25 +274,7 @@ internal static class MetadataIndex
         }
     }
 
-    internal static IDisposable UseDatabaseForSelfCheck(string databasePath)
-    {
-        lock (Lock)
-        {
-            var previousDatabasePath = DatabasePath;
-            CloseDatabase();
-            DatabasePath = databasePath;
-            return new RestoreDatabasePath(() =>
-            {
-                lock (Lock)
-                {
-                    CloseDatabase();
-                    DatabasePath = previousDatabasePath;
-                }
-            });
-        }
-    }
-
-    internal static bool RoundTripsForSelfCheck(string path)
+    internal bool RoundTripsForSelfCheck(string path)
     {
         var result = new ImageReadResult(1, 2, new(StringComparer.OrdinalIgnoreCase));
         var extracted = new ExtractedPromptMetadata
@@ -300,8 +293,10 @@ internal static class MetadataIndex
             }
         };
 
-        Save(path, result, extracted);
-        return TryLoad(path, out var loaded) &&
+        var fileInfo = new FileInfo(path);
+        var fingerprint = new SourceFingerprint(fileInfo.LastWriteTimeUtc.Ticks, fileInfo.Length);
+        Save(path, fingerprint, result, extracted);
+        return TryLoad(path, fingerprint, out var loaded) &&
                loaded.Width == 1 &&
                loaded.Height == 2 &&
                loaded.Prompt == "cached prompt" &&
@@ -315,30 +310,31 @@ internal static class MetadataIndex
                loaded.Resources == "Embedding: easynegative";
     }
 
-    private static ILiteCollection<BsonDocument> GetCollection()
+    private ILiteCollection<BsonDocument> GetCollection()
     {
-        if (Collection is not null)
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_collection is not null)
         {
-            return Collection;
+            return _collection;
         }
 
-        Directory.CreateDirectory(Path.GetDirectoryName(DatabasePath)!);
-        var database = new LiteDatabase($"Filename={DatabasePath};Connection=direct");
+        Directory.CreateDirectory(Path.GetDirectoryName(_databasePath)!);
+        var database = new LiteDatabase($"Filename={_databasePath};Connection=direct");
         var collection = database.GetCollection(CollectionName);
         collection.EnsureIndex("SourcePath", "$.SourcePath");
         collection.EnsureIndex("FolderPath", "$.FolderPath");
         collection.EnsureIndex("Version", "$.Version");
 
-        Database = database;
-        Collection = collection;
-        return Collection;
+        _database = database;
+        _collection = collection;
+        return _collection;
     }
 
-    private static void CloseDatabase()
+    private void CloseDatabase()
     {
-        Collection = null;
-        Database?.Dispose();
-        Database = null;
+        _collection = null;
+        _database?.Dispose();
+        _database = null;
     }
 
     private static BsonDocument ToDocument(MetadataIndexEntry entry)
@@ -429,11 +425,58 @@ internal static class MetadataIndex
                entry.FileLength == fileLength;
     }
 
-    private sealed class RestoreDatabasePath(Action restore) : IDisposable
+    public void Dispose()
     {
-        public void Dispose() => restore();
+        lock (_lock)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            CloseDatabase();
+        }
     }
+
+    internal void SaveMany(IReadOnlyList<MetadataIndexEntry> entries)
+    {
+        if (entries.Count == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            lock (_lock)
+            {
+                var collection = GetCollection();
+                var database = _database!;
+                database.BeginTrans();
+                try
+                {
+                    foreach (var entry in entries)
+                    {
+                        collection.Upsert(ToDocument(entry));
+                    }
+                    database.Commit();
+                }
+                catch
+                {
+                    database.Rollback();
+                    throw;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            DebugLog.Write($"Failed to batch-save metadata index: {ex.Message}");
+        }
+    }
+
 }
+
+internal readonly record struct MetadataLookup(string Path, SourceFingerprint Fingerprint);
 
 internal sealed class MetadataIndexEntry
 {

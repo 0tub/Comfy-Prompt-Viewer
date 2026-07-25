@@ -102,7 +102,7 @@ public static class SearchEngine
         return char.IsLetterOrDigit(value) || value == '_';
     }
 
-    private static string NormalizeSeparators(string value)
+    internal static string NormalizeSeparators(string value)
     {
         return value.Replace('-', '_').Replace(' ', '_');
     }

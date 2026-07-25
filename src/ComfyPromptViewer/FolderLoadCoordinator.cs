@@ -82,10 +82,16 @@ internal sealed class FolderLoadCoordinator
     public static Task<List<ImageFileEntry>> ReadFolderAsync(
         string folderPath,
         bool includeSubfolders,
+        Comparison<ImageFileEntry> comparison,
         CancellationToken token)
     {
         return Task.Run(
-            () => ReadEntries(EnumeratePaths(folderPath, includeSubfolders, token), token),
+            () =>
+            {
+                var entries = ReadEntries(EnumerateFiles(folderPath, includeSubfolders, token), token);
+                entries.Sort(comparison);
+                return entries;
+            },
             token);
     }
 
@@ -102,8 +108,8 @@ internal sealed class FolderLoadCoordinator
         {
             try
             {
-                return EnumeratePaths(folderPath, includeSubfolders, CancellationToken.None)
-                    .Any(ImageFileReader.IsSupportedImage);
+                return EnumerateFiles(folderPath, includeSubfolders, CancellationToken.None)
+                    .Any(file => ImageFileReader.IsSupportedImage(file.Name));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -113,7 +119,7 @@ internal sealed class FolderLoadCoordinator
         });
     }
 
-    private static IEnumerable<string> EnumeratePaths(
+    private static IEnumerable<FileInfo> EnumerateFiles(
         string folderPath,
         bool includeSubfolders,
         CancellationToken token)
@@ -124,38 +130,42 @@ internal sealed class FolderLoadCoordinator
             IgnoreInaccessible = includeSubfolders
         };
 
-        foreach (var path in Directory.EnumerateFiles(folderPath, "*", options))
+        foreach (var file in new DirectoryInfo(folderPath).EnumerateFiles("*", options))
         {
             token.ThrowIfCancellationRequested();
-            yield return path;
+            yield return file;
         }
     }
 
-    private static List<ImageFileEntry> ReadEntries(IEnumerable<string> paths, CancellationToken token)
+    private static List<ImageFileEntry> ReadEntries(IEnumerable<FileInfo> files, CancellationToken token)
     {
         var entries = new List<ImageFileEntry>();
-        foreach (var path in paths)
+        foreach (var file in files)
         {
             token.ThrowIfCancellationRequested();
-            if (!ImageFileReader.IsSupportedImage(path))
+            if (!ImageFileReader.IsSupportedImage(file.Name))
             {
                 continue;
             }
 
             try
             {
-                if (File.Exists(path))
-                {
-                    entries.Add(new ImageFileEntry(path, File.GetLastWriteTimeUtc(path)));
-                }
+                entries.Add(new ImageFileEntry(
+                    file.FullName,
+                    new SourceFingerprint(file.LastWriteTimeUtc.Ticks, file.Length)));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                DebugLog.Write($"Skipped image file {path}: {ex.Message}");
+                DebugLog.Write($"Skipped image file {file.FullName}: {ex.Message}");
             }
         }
 
         return entries;
+    }
+
+    private static List<ImageFileEntry> ReadEntries(IEnumerable<string> paths, CancellationToken token)
+    {
+        return ReadEntries(paths.Select(path => new FileInfo(path)), token);
     }
 
     private static void CancelAndDispose(CancellationTokenSource? cancellation)
@@ -177,4 +187,12 @@ internal sealed class FolderLoadCoordinator
 }
 
 internal readonly record struct FolderLoadSession(CancellationToken Token, int Generation);
-internal readonly record struct ImageFileEntry(string Path, DateTime LastWriteTimeUtc);
+internal readonly record struct SourceFingerprint(long LastWriteTimeUtcTicks, long FileLength)
+{
+    public DateTime LastWriteTimeUtc => new(LastWriteTimeUtcTicks, DateTimeKind.Utc);
+}
+
+internal readonly record struct ImageFileEntry(string Path, SourceFingerprint Fingerprint)
+{
+    public DateTime LastWriteTimeUtc => Fingerprint.LastWriteTimeUtc;
+}

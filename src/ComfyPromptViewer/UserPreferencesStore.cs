@@ -5,21 +5,28 @@ using System.IO;
 
 namespace ComfyPromptViewer;
 
-public static class UserPreferences
+internal sealed class UserPreferencesStore
 {
-    public static readonly string AppDataDir = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "ComfyPromptViewer");
+    private readonly string _appDataDirectory;
+    private readonly string _tileSizePath;
+    private readonly string _lastFolderPath;
+    private readonly string _recentFoldersPath;
+    private readonly string _includeSubfoldersPath;
+    private readonly string _themeModePath;
 
-    private static readonly string TileSizePath = Path.Combine(AppDataDir, "tile-size.txt");
-    private static readonly string LastFolderPath = Path.Combine(AppDataDir, "last-folder.txt");
-    private static readonly string RecentFoldersPath = Path.Combine(AppDataDir, "recent-folders.txt");
-    private static readonly string IncludeSubfoldersPath = Path.Combine(AppDataDir, "include-subfolders.txt");
-    private static readonly string ThemeModePath = Path.Combine(AppDataDir, "theme-mode.txt");
-
-    public static double LoadTileSize(double defaultValue, double minValue, double maxValue)
+    public UserPreferencesStore(string appDataDirectory)
     {
-        if (TryReadPreference(TileSizePath, "tile size", out var text) &&
+        _appDataDirectory = appDataDirectory;
+        _tileSizePath = Path.Combine(appDataDirectory, "tile-size.txt");
+        _lastFolderPath = Path.Combine(appDataDirectory, "last-folder.txt");
+        _recentFoldersPath = Path.Combine(appDataDirectory, "recent-folders.txt");
+        _includeSubfoldersPath = Path.Combine(appDataDirectory, "include-subfolders.txt");
+        _themeModePath = Path.Combine(appDataDirectory, "theme-mode.txt");
+    }
+
+    public double LoadTileSize(double defaultValue, double minValue, double maxValue)
+    {
+        if (TryReadPreference(_tileSizePath, "tile size", out var text) &&
             double.TryParse(
                 text,
                 NumberStyles.Float,
@@ -32,32 +39,32 @@ public static class UserPreferences
         return defaultValue;
     }
 
-    public static void SaveTileSize(double value)
+    public void SaveTileSize(double value)
     {
-        SavePreference(TileSizePath, value.ToString(CultureInfo.InvariantCulture), "tile size");
+        SavePreference(_tileSizePath, value.ToString(CultureInfo.InvariantCulture), "tile size");
     }
 
-    public static string? LoadLastFolderPath()
+    public string? LoadLastFolderPath()
     {
-        return TryReadPreference(LastFolderPath, "last folder path", out var text) ? text : null;
+        return TryReadPreference(_lastFolderPath, "last folder path", out var text) ? text : null;
     }
 
-    public static void SaveLastFolderPath(string folderPath)
+    public void SaveLastFolderPath(string folderPath)
     {
-        SavePreference(LastFolderPath, folderPath, "last folder path");
+        SavePreference(_lastFolderPath, folderPath, "last folder path");
     }
 
-    public static List<RecentFolder> LoadRecentFolders()
+    public List<RecentFolder> LoadRecentFolders()
     {
         var list = new List<RecentFolder>();
         try
         {
-            if (!File.Exists(RecentFoldersPath))
+            if (!File.Exists(_recentFoldersPath))
             {
                 return list;
             }
 
-            foreach (var line in File.ReadLines(RecentFoldersPath))
+            foreach (var line in File.ReadLines(_recentFoldersPath))
             {
                 var trimmed = line.Trim();
                 if (trimmed.Length == 0) continue;
@@ -108,17 +115,17 @@ public static class UserPreferences
         return list;
     }
 
-    public static void SaveRecentFolders(List<RecentFolder> folders)
+    public void SaveRecentFolders(List<RecentFolder> folders)
     {
         try
         {
-            Directory.CreateDirectory(AppDataDir);
+            Directory.CreateDirectory(_appDataDirectory);
             var lines = new List<string>(folders.Count);
             foreach (var f in folders)
             {
                 lines.Add($"{f.Path}|{f.ImageCount}|{f.LastOpened.Ticks}");
             }
-            File.WriteAllLines(RecentFoldersPath, lines);
+            File.WriteAllLines(_recentFoldersPath, lines);
         }
         catch (Exception ex)
         {
@@ -126,7 +133,7 @@ public static class UserPreferences
         }
     }
 
-    public static void AddRecentFolder(string folderPath, int imageCount)
+    public void AddRecentFolder(string folderPath, int imageCount)
     {
         var list = LoadRecentFolders();
         list.RemoveAll(x => string.Equals(x.Path, folderPath, StringComparison.OrdinalIgnoreCase));
@@ -143,24 +150,24 @@ public static class UserPreferences
         SaveRecentFolders(list);
     }
 
-    public static bool LoadIncludeSubfolders()
+    public bool LoadIncludeSubfolders()
     {
-        return TryReadPreference(IncludeSubfoldersPath, "include-subfolders setting", out var text) &&
+        return TryReadPreference(_includeSubfoldersPath, "include-subfolders setting", out var text) &&
                bool.TryParse(text, out var value) &&
                value;
     }
 
-    public static void SaveIncludeSubfolders(bool includeSubfolders)
+    public void SaveIncludeSubfolders(bool includeSubfolders)
     {
         SavePreference(
-            IncludeSubfoldersPath,
+            _includeSubfoldersPath,
             includeSubfolders.ToString(CultureInfo.InvariantCulture),
             "include-subfolders setting");
     }
 
-    public static ThemeMode LoadThemeMode()
+    public ThemeMode LoadThemeMode()
     {
-        if (TryReadPreference(ThemeModePath, "theme mode", out var text) &&
+        if (TryReadPreference(_themeModePath, "theme mode", out var text) &&
             Enum.TryParse<ThemeMode>(text, ignoreCase: true, out var value) &&
             Enum.IsDefined(value))
         {
@@ -170,9 +177,9 @@ public static class UserPreferences
         return ThemeMode.DarkGray;
     }
 
-    public static void SaveThemeMode(ThemeMode themeMode)
+    public void SaveThemeMode(ThemeMode themeMode)
     {
-        SavePreference(ThemeModePath, themeMode.ToString(), "theme mode");
+        SavePreference(_themeModePath, themeMode.ToString(), "theme mode");
     }
 
     private static bool TryReadPreference(string path, string label, out string text)
@@ -194,11 +201,11 @@ public static class UserPreferences
         return false;
     }
 
-    private static void SavePreference(string path, string value, string label)
+    private void SavePreference(string path, string value, string label)
     {
         try
         {
-            Directory.CreateDirectory(AppDataDir);
+            Directory.CreateDirectory(_appDataDirectory);
             File.WriteAllText(path, value);
         }
         catch (Exception ex)

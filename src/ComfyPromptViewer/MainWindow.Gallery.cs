@@ -65,7 +65,7 @@ public partial class MainWindow
             _tileSizeSaveTimer.Tick += (_, _) =>
             {
                 _tileSizeSaveTimer.Stop();
-                UserPreferences.SaveTileSize(_targetTileSize);
+                _preferences.SaveTileSize(_targetTileSize);
             };
         }
 
@@ -105,28 +105,17 @@ public partial class MainWindow
 
     private void ApplySort()
     {
-        _allImagePaths.Sort(CompareImagePaths);
-
-        if (_allImageItems.Count > 1)
-        {
-            var sortOrder = new Dictionary<string, int>(_allImagePaths.Count, StringComparer.OrdinalIgnoreCase);
-            for (var index = 0; index < _allImagePaths.Count; index++)
-            {
-                sortOrder[_allImagePaths[index]] = index;
-            }
-
-            _allImageItems.Sort((left, right) => sortOrder[left.Path].CompareTo(sortOrder[right.Path]));
-        }
+        _catalog.Sort(CompareGalleryEntries);
     }
 
-    private int CompareImagePaths(string left, string right)
+    private int CompareGalleryEntries(GalleryEntry left, GalleryEntry right)
     {
         if (_sortMode == SortMode.Name)
         {
-            return CompareImagePathNames(left, right);
+            return CompareImagePathNames(left.Path, right.Path);
         }
 
-        var compare = _imageLastWriteTimes[left].CompareTo(_imageLastWriteTimes[right]);
+        var compare = left.LastWriteTimeUtc.CompareTo(right.LastWriteTimeUtc);
         if (_sortMode == SortMode.NewestFirst)
         {
             compare = -compare;
@@ -134,7 +123,25 @@ public partial class MainWindow
 
         return compare != 0
             ? compare
-            : StringComparer.OrdinalIgnoreCase.Compare(left, right);
+            : StringComparer.OrdinalIgnoreCase.Compare(left.Path, right.Path);
+    }
+
+    private static int CompareImageFileEntries(ImageFileEntry left, ImageFileEntry right, SortMode sortMode)
+    {
+        if (sortMode == SortMode.Name)
+        {
+            return CompareImagePathNames(left.Path, right.Path);
+        }
+
+        var compare = left.LastWriteTimeUtc.CompareTo(right.LastWriteTimeUtc);
+        if (sortMode == SortMode.NewestFirst)
+        {
+            compare = -compare;
+        }
+
+        return compare != 0
+            ? compare
+            : StringComparer.OrdinalIgnoreCase.Compare(left.Path, right.Path);
     }
 
     private static int CompareImagePathNames(string left, string right)
@@ -792,9 +799,9 @@ public partial class MainWindow
 
     private void UpdateCountText()
     {
-        int total = _allImageItems.Count;
+        int total = _catalog.Count;
         int filtered = _viewModel.Items.Count;
-        int loadedMetadataCount = _allImageItems.Count(item => item.HasLoadedMetadata);
+        int loadedMetadataCount = _catalog.Items.Count(item => item.HasLoadedMetadata);
 
         bool isScanning = _metadataScanner.HasActiveSession &&
                          loadedMetadataCount < total;
@@ -836,21 +843,21 @@ public partial class MainWindow
 
     private void ClearImageItems()
     {
+        CancelSearchFilter();
+        _searchDataGeneration++;
         _metadataCountUpdateTimer?.Stop();
         GalleryEmptyState.IsVisible = false;
         GalleryEmptyState.Opacity = 0;
         ClearSelectedItems();
         _selectionAnchor = null;
 
-        foreach (var item in _allImageItems)
+        foreach (var item in _catalog.Items)
         {
             item.MetadataLoaded -= ImageItem_MetadataLoaded;
         }
 
         _viewModel.Items.Clear();
-        _allImagePaths.Clear();
-        _allImageItems.Clear();
-        _imageLastWriteTimes.Clear();
+        _catalog.Clear();
         _visibleThumbnailScheduleItems.Clear();
         _aheadThumbnailScheduleItems.Clear();
         _lastPrefetchFirstVisibleRow = -1;
