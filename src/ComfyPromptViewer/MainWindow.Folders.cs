@@ -53,11 +53,6 @@ public partial class MainWindow
         _thumbnailLoads.Clear();
         _thumbnailService.ClearDeferredWrites();
 
-        _scrollMonitorTimer?.Stop();
-        _isFastScrollingStatic = false;
-        _lastFastScrollScheduleTime = 0;
-        _lastScrollOffsetY = 0;
-        _lastScrollTimestamp = 0;
         _decodedImageCache.ClearAndReleaseAll();
         SelectItem(null);
         ClearImageItems();

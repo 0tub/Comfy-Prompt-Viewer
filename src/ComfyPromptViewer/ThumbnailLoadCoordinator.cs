@@ -97,8 +97,19 @@ public sealed class ThumbnailLoadCoordinator
         lock (_lock)
         {
             _currentToken = token;
+            // A selection outside the last scheduled window must not read as abandoned.
+            _retainedViewportItems.Add(item);
             EnqueueLocked(item, ThumbnailQueueKind.Visible);
             ProcessQueuesLocked();
+        }
+    }
+
+    // Empty until the first viewport schedule, which must not abandon everything.
+    internal bool IsRetained(ImageItem item)
+    {
+        lock (_lock)
+        {
+            return _retainedViewportItems.Count == 0 || _retainedViewportItems.Contains(item);
         }
     }
 
@@ -233,7 +244,7 @@ public sealed class ThumbnailLoadCoordinator
         Action? visibleWorkDrained = null;
         try
         {
-            await item.LoadThumbnailAsync(token, () => load.IsCurrent);
+            await item.LoadThumbnailAsync(token, () => load.IsCurrent, () => IsRetained(item));
         }
         finally
         {

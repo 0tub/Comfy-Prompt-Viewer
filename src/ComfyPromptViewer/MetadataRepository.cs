@@ -60,18 +60,48 @@ internal sealed class MetadataRepository : IDisposable
     {
         var entries = new Dictionary<string, MetadataIndexEntry>(StringComparer.OrdinalIgnoreCase);
 
+        // Keyed by _id so each returned document can be paired back to the fingerprint it must satisfy.
+        var pending = new Dictionary<string, MetadataLookup>(StringComparer.Ordinal);
+        foreach (var lookup in lookups)
+        {
+            token.ThrowIfCancellationRequested();
+            pending[BuildKey(
+                lookup.Path,
+                lookup.Fingerprint.LastWriteTimeUtcTicks,
+                lookup.Fingerprint.FileLength)] = lookup;
+        }
+
+        if (pending.Count == 0)
+        {
+            return entries;
+        }
+
         try
         {
+            var keys = new BsonArray();
+            foreach (var key in pending.Keys)
+            {
+                keys.Add(new BsonValue(key));
+            }
+
             lock (_lock)
             {
                 var collection = GetCollection();
-                foreach (var lookup in lookups)
+                var documents = collection.Query()
+                    .Where("_id IN @0", keys)
+                    .ToList();
+
+                foreach (var document in documents)
                 {
                     token.ThrowIfCancellationRequested();
-                    var loaded = FromDocument(collection.FindById(BuildKey(
-                        lookup.Path,
-                        lookup.Fingerprint.LastWriteTimeUtcTicks,
-                        lookup.Fingerprint.FileLength)));
+                    if (!document.TryGetValue("_id", out var id) ||
+                        !id.IsString ||
+                        !pending.TryGetValue(id.AsString, out var lookup))
+                    {
+                        continue;
+                    }
+
+                    var loaded = FromDocument(document);
                     if (IsCurrent(
                         loaded,
                         lookup.Path,

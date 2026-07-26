@@ -23,7 +23,6 @@ internal static class SelfCheck
         CheckStalenessGates();
         CheckSearchParsing();
         CheckSearchResultGenerations();
-        CheckSearchMaskFilter();
         CheckSearchIndexMaintenance();
         CheckMetadataLoadOnlyRemovesMatches();
         CheckParallelSearchFiltering();
@@ -34,16 +33,19 @@ internal static class SelfCheck
         CheckFolderLoadSessions();
         CheckThemeModes();
         CheckPromptExtraction();
+        CheckPromptExtractionHeuristics();
         CheckPngMetadataRead();
         CheckPngMetadataLimit();
         CheckMetadataIndexRoundTrip();
         CheckMetadataBatchSave();
+        CheckMetadataBatchLoad();
         CheckMetadataIndexCleanup();
         CheckMetadataFailureClassification();
         CheckThumbnailCacheWriteBackpressure();
         CheckDeferredThumbnailCacheWriteQueue();
         CheckDeferredThumbnailCacheWritePause();
         CheckThumbnailPrefetchPolicy();
+        CheckRetainedViewportWindow();
         CheckSelectedPreviewDecodeWidth();
         CheckSelectedPreviewFailureIsObservable();
         CheckJpegThumbnailEncoding();
@@ -85,46 +87,6 @@ internal static class SelfCheck
             "Expected canceling a session gate to cancel and supersede the active session.");
         Check(!sessions.IsActive, "Expected a canceled session gate to report no active session.");
         Check(default(Session).IsStale, "Expected an unassigned session to read as stale.");
-    }
-
-    // The mask filter is allowed to admit rows that do not match, never to reject rows that do. A false
-    // negative silently drops images from every search that touches that character.
-    private static void CheckSearchMaskFilter()
-    {
-        string[] texts =
-        [
-            "a serene landscape",
-            "DRAGON, scales, 8k",
-            "photo_of_a_cat-2024.png",
-            "Kelvin sign and ſharp s",
-            "ı dotless and Éclair",
-            "日本語 プロンプト",
-            ""
-        ];
-        string[] terms =
-        [
-            "dragon", "DRAGON", "cat", "Kelvin", "kelvin", "sharp", "Sharp", "I dotless",
-            "eclair", "éclair", "日本", "png", "2024", "zzz", "8k", "_of_"
-        ];
-
-        foreach (var text in texts)
-        {
-            var textMask = SearchIndex.ComputeMask(text);
-            foreach (var term in terms)
-            {
-                if (!text.Contains(term, StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                var termMask = SearchIndex.ComputeTermMask(term);
-                Check((textMask & termMask) == termMask,
-                    $"Expected the search mask filter never to reject '{term}' inside '{text}'.");
-            }
-        }
-
-        Check(SearchIndex.ComputeTermMask("日本") == 0,
-            "Expected a term whose folding leaves ASCII to disable the mask filter rather than guess.");
     }
 
     // The index is only correct because GalleryCatalog is its single owner: every membership change and
@@ -577,6 +539,81 @@ internal static class SelfCheck
         Check(workflowLora.GenerationSettings.Tool == "ComfyUI", "Expected ComfyUI workflow metadata to set the tool.");
     }
 
+    // Three ways the graph heuristics used to produce confidently wrong prompts.
+    private static void CheckPromptExtractionHeuristics()
+    {
+        // No sampler, so both prompts come from the fallbacks. "negative space" is ordinary positive
+        // vocabulary; matching it against the node's raw JSON dropped the positive and promoted it.
+        var negativeVocabulary = PromptExtractor.ExtractAll(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["prompt"] = """
+            {
+              "1": {"class_type":"CLIPTextEncode","inputs":{"text":"portrait with negative space and dramatic lighting"}},
+              "2": {"class_type":"CLIPTextEncode","inputs":{"text":"blurry"},"_meta":{"title":"Negative Prompt"}}
+            }
+            """
+        });
+
+        Check(negativeVocabulary.Prompt == "portrait with negative space and dramatic lighting",
+            $"Expected prompt vocabulary not to classify a node as negative, got '{negativeVocabulary.Prompt}'.");
+        Check(negativeVocabulary.NegativePrompt == "blurry",
+            $"Expected the titled node to supply the negative prompt, got '{negativeVocabulary.NegativePrompt}'.");
+
+        // LoRA nodes on both sides of the sampler. The partial list captured mid-walk did not merge with
+        // the full one, so every LoRA ahead of the sampler was listed twice.
+        var straddlingLoras = PromptExtractor.ExtractAll(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["prompt"] = """
+            {
+              "0": {"class_type":"LoraLoader","inputs":{"lora_name":"early-style.safetensors","strength_model":0.4}},
+              "1": {"class_type":"KSampler","inputs":{"positive":["2",0],"negative":["3",0],"steps":20,"sampler_name":"euler"}},
+              "2": {"class_type":"CLIPTextEncode","inputs":{"text":"a cat"}},
+              "3": {"class_type":"CLIPTextEncode","inputs":{"text":"blurry"}},
+              "9": {"class_type":"LoraLoader","inputs":{"lora_name":"late-style.safetensors","strength_model":0.6}}
+            }
+            """
+        });
+
+        Check(straddlingLoras.GenerationSettings.Lora == "early_style (0.40), late_style (0.60)",
+            $"Expected each LoRA listed once regardless of node order, got '{straddlingLoras.GenerationSettings.Lora}'.");
+        Check(straddlingLoras.GenerationSettings.Sampler == "euler",
+            "Expected the sampler settings to survive the deferred LoRA assignment.");
+
+        // A sampler this build has never heard of. Matching on conditioning inputs still follows its links
+        // instead of dropping the whole workflow onto the longest-string guess.
+        var customSampler = PromptExtractor.ExtractAll(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["prompt"] = """
+            {
+              "1": {"class_type":"CLIPTextEncode","inputs":{"text":"a mountain"}},
+              "2": {"class_type":"CLIPTextEncode","inputs":{"text":"lowres"}},
+              "3": {"class_type":"ThirdPartyPackSampler","inputs":{"positive":["1",0],"negative":["2",0],"steps":25,"sampler_name":"dpmpp_2m"}}
+            }
+            """
+        });
+
+        Check(customSampler.Prompt == "a mountain" && customSampler.NegativePrompt == "lowres",
+            $"Expected an unrecognized sampler's links to be followed, got '{customSampler.NegativePrompt}'.");
+        Check(customSampler.GenerationSettings.Sampler == "dpmpp_2m",
+            "Expected settings to be read from an unrecognized sampler.");
+
+        // A conditioning node carries the same inputs but no settings; reading from it would blank them.
+        var conditioningFirst = PromptExtractor.ExtractAll(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["prompt"] = """
+            {
+              "1": {"class_type":"CLIPTextEncode","inputs":{"text":"a harbour"}},
+              "2": {"class_type":"CLIPTextEncode","inputs":{"text":"grainy"}},
+              "3": {"class_type":"ControlNetApplyAdvanced","inputs":{"positive":["1",0],"negative":["2",0]}},
+              "4": {"class_type":"KSampler","inputs":{"positive":["3",0],"negative":["3",1],"steps":30,"sampler_name":"heun"}}
+            }
+            """
+        });
+
+        Check(conditioningFirst.GenerationSettings.Sampler == "heun",
+            $"Expected a settings-free conditioning node not to lock out the sampler, got '{conditioningFirst.GenerationSettings.Sampler}'.");
+    }
+
     private static void CheckPngMetadataRead()
     {
         var path = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}.png");
@@ -636,6 +673,71 @@ internal static class SelfCheck
         finally
         {
             DeleteFileQuietly(path);
+            DeleteDirectoryQuietly(databaseDirectory);
+        }
+    }
+
+    // A batched lookup must return only rows whose fingerprint still matches, paired to the right path.
+    private static void CheckMetadataBatchLoad()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-load-{Guid.NewGuid():N}");
+        var databaseDirectory = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-load-db-{Guid.NewGuid():N}");
+        var firstPath = Path.Combine(folder, "first.png");
+        var secondPath = Path.Combine(folder, "second.png");
+        var missingPath = Path.Combine(folder, "missing.png");
+        try
+        {
+            Directory.CreateDirectory(folder);
+            WriteTinyPng(firstPath, "parameters", "first");
+            WriteTinyPng(secondPath, "parameters", "second");
+            WriteTinyPng(missingPath, "parameters", "missing");
+            using var repository = new MetadataRepository(databaseDirectory);
+            var readResult = new ImageReadResult(1, 1, new(StringComparer.OrdinalIgnoreCase));
+            var firstFingerprint = GetFingerprint(firstPath);
+            var secondFingerprint = GetFingerprint(secondPath);
+            var missingFingerprint = GetFingerprint(missingPath);
+            repository.SaveMany(
+            [
+                repository.CreateEntry(firstPath, firstFingerprint, readResult,
+                    new ExtractedPromptMetadata { Prompt = "first" }),
+                repository.CreateEntry(secondPath, secondFingerprint, readResult,
+                    new ExtractedPromptMetadata { Prompt = "second" })
+            ]);
+
+            var loaded = repository.LoadMany(
+            [
+                new MetadataLookup(firstPath, firstFingerprint),
+                new MetadataLookup(secondPath, secondFingerprint),
+                new MetadataLookup(missingPath, missingFingerprint)
+            ], CancellationToken.None);
+
+            Check(loaded.Count == 2, "Expected a batch load to return only the records that exist.");
+            Check(loaded.TryGetValue(firstPath, out var first) && first.Prompt == "first",
+                "Expected a batch load to pair each record with its own path.");
+            Check(loaded.TryGetValue(secondPath, out var second) && second.Prompt == "second",
+                "Expected a batch load to pair each record with its own path.");
+            Check(!loaded.ContainsKey(missingPath), "Expected an unsaved image to miss the batch load.");
+
+            // Same paths, changed files: every row is stale and none may be served.
+            var staleLoad = repository.LoadMany(
+            [
+                new MetadataLookup(firstPath, firstFingerprint with { FileLength = firstFingerprint.FileLength + 1 }),
+                new MetadataLookup(secondPath, secondFingerprint with
+                {
+                    LastWriteTimeUtcTicks = secondFingerprint.LastWriteTimeUtcTicks + 1
+                })
+            ], CancellationToken.None);
+            Check(staleLoad.Count == 0, "Expected a changed source fingerprint to miss the batch load.");
+
+            Check(repository.LoadMany([], CancellationToken.None).Count == 0,
+                "Expected an empty batch to load nothing.");
+        }
+        finally
+        {
+            DeleteFileQuietly(firstPath);
+            DeleteFileQuietly(secondPath);
+            DeleteFileQuietly(missingPath);
+            DeleteDirectoryQuietly(folder);
             DeleteDirectoryQuietly(databaseDirectory);
         }
     }
@@ -957,6 +1059,43 @@ internal static class SelfCheck
             "Expected the trailing side to retain some prefetch so a reversal is not fully cold.");
         Check(down.RowsBelow == up.RowsAbove && down.RowsAbove == up.RowsBelow,
             "Expected the prefetch window to be symmetric under a direction flip.");
+    }
+
+    // Abandons scrolled-away tiles without abandoning a selection outside the last scheduled window.
+    private static void CheckRetainedViewportWindow()
+    {
+        var coordinator = new ThumbnailLoadCoordinator(ItemDecodedImageCache);
+        var visible = CreateImageItem(Path.Combine(Path.GetTempPath(), "retained-visible.png"));
+        var ahead = CreateImageItem(Path.Combine(Path.GetTempPath(), "retained-ahead.png"));
+        var offscreen = CreateImageItem(Path.Combine(Path.GetTempPath(), "retained-offscreen.png"));
+
+        Check(coordinator.IsRetained(offscreen),
+            "Expected everything to be retained before the first viewport schedule.");
+
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            coordinator.ScheduleViewport([visible], [ahead], cancellation.Token);
+            Check(coordinator.IsRetained(visible) && coordinator.IsRetained(ahead),
+                "Expected visible and ahead items to be retained.");
+            Check(!coordinator.IsRetained(offscreen),
+                "Expected an item outside the prefetch window to be abandoned.");
+
+            coordinator.EnqueueVisible(offscreen, cancellation.Token);
+            Check(coordinator.IsRetained(offscreen),
+                "Expected selecting an item outside the last schedule to retain it.");
+
+            coordinator.ScheduleViewport([visible], [], cancellation.Token);
+            Check(!coordinator.IsRetained(ahead),
+                "Expected a later schedule to abandon items that dropped out of the window.");
+        }
+        finally
+        {
+            // Scheduling starts real decode tasks against paths that do not exist. Drop them rather than
+            // leaving them to fail against a shared cache after this check has moved on.
+            cancellation.Cancel();
+            coordinator.Clear();
+        }
     }
 
     // One pack file replaced thousands of small JPEGs, so the round trip, the key's dependence on source

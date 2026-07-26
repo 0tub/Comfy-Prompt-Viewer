@@ -528,7 +528,11 @@ public sealed class ImageItem : INotifyPropertyChanged
         }
     }
 
-    public async Task LoadThumbnailAsync(CancellationToken token, Func<bool>? isCurrent = null)
+    // isStillWanted gates only the cold path: a pack miss followed by a full-resolution source decode.
+    public async Task LoadThumbnailAsync(
+        CancellationToken token,
+        Func<bool>? isCurrent = null,
+        Func<bool>? isStillWanted = null)
     {
         if (Preview is not null || token.IsCancellationRequested || isCurrent?.Invoke() == false)
         {
@@ -566,13 +570,13 @@ public sealed class ImageItem : INotifyPropertyChanged
                     }
                 }
 
-                if (token.IsCancellationRequested || isCurrent?.Invoke() == false || MainWindow.IsFastScrolling)
+                if (token.IsCancellationRequested || isCurrent?.Invoke() == false || isStillWanted?.Invoke() == false)
                 {
                     return null;
                 }
 
                 var decoded = _thumbnailService.DecodeThumbnail(Path, GetThumbnailDecodeWidth());
-                if (isCurrent?.Invoke() != false && !MainWindow.IsFastScrolling)
+                if (isCurrent?.Invoke() != false && isStillWanted?.Invoke() != false)
                 {
                     _thumbnailService.TryQueueCacheWrite(this, cacheKey);
                 }

@@ -13,6 +13,8 @@ public static class PromptExtractor
     private static readonly string[] PositiveKeys = ["positive", "prompt", "text"];
     private static readonly string[] ModelInputKeys = ["ckpt_name", "unet_name", "model_name", "checkpoint", "model"];
     private static readonly string[] NegativeMarkers = ["negative", "neg_prompt", "negative_prompt"];
+    private static readonly string[] SamplerTypeNames =
+        ["KSampler", "KSamplerAdvanced", "SamplerCustom", "SamplerCustomAdvanced"];
     private static readonly ExtractionStage[] ExtractionStages =
         [ApplyDrawThings, ApplyComfyPrompt, ApplyWorkflow, ApplyParameters];
     private const int MaxModelLinkDepth = 6;
@@ -186,19 +188,21 @@ public static class PromptExtractor
                     negativePrompt = linkedNegativePrompt;
                 }
 
-                generationSettings ??= new GenerationSettings
+                if (generationSettings is null && HasSamplerSettings(node))
                 {
-                    Model = FindModelName(nodes, node) ?? "",
-                    Sampler = TryGetInputScalar(node, "sampler_name") ?? "",
-                    Seed = TryGetInputScalar(node, "seed") ?? TryGetInputScalar(node, "noise_seed") ?? "",
-                    Settings = BuildSettingsSummary([
-                        FormatSetting("Steps", TryGetInputScalar(node, "steps")),
-                        FormatSetting("CFG", TryGetInputScalar(node, "cfg")),
-                        FormatSetting("Scheduler", TryGetInputScalar(node, "scheduler")),
-                        FormatSetting("Denoise", TryGetInputScalar(node, "denoise"))
-                    ]),
-                    Lora = string.Join(", ", loras)
-                };
+                    generationSettings = new GenerationSettings
+                    {
+                        Model = FindModelName(nodes, node) ?? "",
+                        Sampler = TryGetInputScalar(node, "sampler_name") ?? "",
+                        Seed = TryGetInputScalar(node, "seed") ?? TryGetInputScalar(node, "noise_seed") ?? "",
+                        Settings = BuildSettingsSummary([
+                            FormatSetting("Steps", TryGetInputScalar(node, "steps")),
+                            FormatSetting("CFG", TryGetInputScalar(node, "cfg")),
+                            FormatSetting("Scheduler", TryGetInputScalar(node, "scheduler")),
+                            FormatSetting("Denoise", TryGetInputScalar(node, "denoise"))
+                        ])
+                    };
+                }
             }
 
             if (string.IsNullOrWhiteSpace(prompt))
@@ -220,6 +224,9 @@ public static class PromptExtractor
                 negativePrompt = bestNegativePrompt;
             }
 
+            // The full list is only known here. Writing a partial one during the walk did not lose the rest,
+            // but CombineMetadataStrings matches on the whole string, so "A" combined with "A, B" appended
+            // rather than merged and every LoRA ahead of the sampler was listed twice.
             if (loras.Count > 0)
             {
                 generationSettings ??= new GenerationSettings();
@@ -1133,38 +1140,97 @@ public static class PromptExtractor
         return !string.IsNullOrWhiteSpace(linkedNodeId);
     }
 
+    // Named samplers first, then shape: any node carrying both conditioning inputs is one whose positive
+    // and negative links can be followed. That covers custom and third-party samplers without trying to
+    // enumerate every node pack, which is what pushed those workflows onto the guessing fallbacks.
     private static bool IsKSamplerNode(JsonElement node)
     {
-        if (!node.TryGetProperty("class_type", out var classType) ||
-            classType.ValueKind != JsonValueKind.String)
-        {
-            return false;
-        }
-
-        var value = classType.GetString();
-        return string.Equals(value, "KSampler", StringComparison.OrdinalIgnoreCase) ||
-               string.Equals(value, "KSamplerAdvanced", StringComparison.OrdinalIgnoreCase);
+        return IsSamplerTypeName(TryGetStringProperty(node, "class_type")) || HasConditioningInputs(node);
     }
 
     private static bool IsWorkflowSamplerNode(JsonElement node)
     {
-        if (!node.TryGetProperty("type", out var type) ||
-            type.ValueKind != JsonValueKind.String)
-        {
-            return false;
-        }
-
-        var value = type.GetString();
-        return string.Equals(value, "KSampler", StringComparison.OrdinalIgnoreCase) ||
-               string.Equals(value, "KSamplerAdvanced", StringComparison.OrdinalIgnoreCase);
+        return IsSamplerTypeName(TryGetStringProperty(node, "type"));
     }
 
+    private static bool IsSamplerTypeName(string value)
+    {
+        foreach (var name in SamplerTypeNames)
+        {
+            if (string.Equals(value, name, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasConditioningInputs(JsonElement node)
+    {
+        return node.TryGetProperty("inputs", out var inputs) &&
+               inputs.ValueKind == JsonValueKind.Object &&
+               inputs.TryGetProperty("positive", out var positive) &&
+               positive.ValueKind == JsonValueKind.Array &&
+               inputs.TryGetProperty("negative", out var negative) &&
+               negative.ValueKind == JsonValueKind.Array;
+    }
+
+    // Shape alone admits conditioning nodes that carry no settings. Reading from one would fill the
+    // settings slot with blanks and lock out the real sampler found later in the walk.
+    private static bool HasSamplerSettings(JsonElement node)
+    {
+        return TryGetInputScalar(node, "sampler_name") is not null ||
+               TryGetInputScalar(node, "steps") is not null ||
+               TryGetInputScalar(node, "cfg") is not null ||
+               TryGetInputScalar(node, "seed") is not null ||
+               TryGetInputScalar(node, "noise_seed") is not null;
+    }
+
+    // Structural signals only: node type, title, and input names. Never string values, because the prompt
+    // text lives there and "negative space" in a positive prompt classified the whole node as negative.
     private static bool NodeLooksNegative(JsonElement node)
     {
-        var text = node.GetRawText();
+        if (MarkedNegative(TryGetStringProperty(node, "class_type")) ||
+            MarkedNegative(TryGetStringProperty(node, "type")) ||
+            MarkedNegative(TryGetStringProperty(node, "title")))
+        {
+            return true;
+        }
+
+        if (node.TryGetProperty("_meta", out var meta) &&
+            meta.ValueKind == JsonValueKind.Object &&
+            MarkedNegative(TryGetStringProperty(meta, "title")))
+        {
+            return true;
+        }
+
+        if (node.TryGetProperty("properties", out var properties) &&
+            properties.ValueKind == JsonValueKind.Object &&
+            MarkedNegative(TryGetStringProperty(properties, "Node name for S&R")))
+        {
+            return true;
+        }
+
+        if (node.TryGetProperty("inputs", out var inputs) && inputs.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var input in inputs.EnumerateObject())
+            {
+                if (MarkedNegative(input.Name))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool MarkedNegative(string value)
+    {
         foreach (var marker in NegativeMarkers)
         {
-            if (text.Contains(marker, StringComparison.OrdinalIgnoreCase))
+            if (value.Contains(marker, StringComparison.OrdinalIgnoreCase))
             {
                 return true;
             }

@@ -178,7 +178,7 @@ public partial class MainWindow
     {
         // Intentional heuristic: avoids a text layout pass; use measured rendered height if sidebar widths become less predictable.
         bool isLong = prompt.Length >= LongPositivePromptCharacterThreshold ||
-                      prompt.Count(character => character == '\n') >= LongPositivePromptLineThreshold;
+                      prompt.AsSpan().Count('\n') >= LongPositivePromptLineThreshold;
         if (!isLong)
         {
             _isPositivePromptExpanded = false;
@@ -199,7 +199,7 @@ public partial class MainWindow
     {
         // Intentional heuristic: mirrors positive prompt expansion without an extra text measurement pass.
         bool isLong = prompt.Length >= LongPositivePromptCharacterThreshold ||
-                      prompt.Count(character => character == '\n') >= LongPositivePromptLineThreshold;
+                      prompt.AsSpan().Count('\n') >= LongPositivePromptLineThreshold;
         if (!isLong)
         {
             _isNegativePromptExpanded = false;

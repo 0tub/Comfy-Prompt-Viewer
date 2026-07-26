@@ -21,6 +21,9 @@ internal sealed class DecodedImageCache
     // all-protected visible tiles walks the whole list, frees nothing, and repeats per tile per scroll.
     internal const int MaxEvictionScanPerTouch = 16;
 
+    // A re-touch adds nothing, so it only has to carry its share of the trimming, not lead it.
+    internal const int MaxEvictionScanPerReTouch = 1;
+
     internal static void ConfigureLinuxNativeAllocator()
     {
         if (!OperatingSystem.IsLinux())
@@ -43,43 +46,63 @@ internal sealed class DecodedImageCache
     {
         lock (_lock)
         {
+            var estimatedBytes = item.EstimatedPreviewBytes;
+
+            // A re-touch of an unchanged entry is byte- and count-neutral, so it is never what pushed the
+            // cache over budget and does not need a full scan. It still makes one attempt: re-touches are
+            // most of the traffic, and taking their share of the trimming to zero leaves the cache parked
+            // at its high-water mark until the next admission happens to arrive.
+            if (item.CacheNode is { } existingNode &&
+                existingNode.List == _lruList &&
+                item.CachedPreviewBytes == estimatedBytes)
+            {
+                _lruList.Remove(existingNode);
+                item.CacheNode = _lruList.AddLast(item);
+                EvictLocked(MaxEvictionScanPerReTouch);
+                return;
+            }
+
             RemoveFromCacheLocked(item);
 
-            item.CachedPreviewBytes = item.EstimatedPreviewBytes;
+            item.CachedPreviewBytes = estimatedBytes;
             _estimatedBytes += item.CachedPreviewBytes;
             item.CacheNode = _lruList.AddLast(item);
+            EvictLocked(MaxEvictionScanPerTouch);
+        }
+    }
 
-            // Protected items are moved to the tail as they are examined, so consecutive calls keep
-            // advancing through the list instead of rescanning the same protected run.
-            var attemptsRemaining = Math.Min(_lruList.Count, MaxEvictionScanPerTouch);
-            while (ExceedsBudget(_lruList.Count, _estimatedBytes) && attemptsRemaining > 0)
+    // Protected items are moved to the tail as they are examined, so consecutive calls keep advancing
+    // through the list instead of rescanning the same protected run.
+    private void EvictLocked(int allowance)
+    {
+        var attemptsRemaining = Math.Min(_lruList.Count, allowance);
+        while (ExceedsBudget(_lruList.Count, _estimatedBytes) && attemptsRemaining > 0)
+        {
+            attemptsRemaining--;
+            var firstNode = _lruList.First;
+            if (firstNode is null)
             {
-                attemptsRemaining--;
-                var firstNode = _lruList.First;
-                if (firstNode is null)
-                {
-                    break;
-                }
-
-                _lruList.Remove(firstNode);
-                var evicted = firstNode.Value;
-                _estimatedBytes -= evicted.CachedPreviewBytes;
-                evicted.CachedPreviewBytes = 0;
-                evicted.CacheNode = null;
-
-                if (evicted.IsSelected || evicted.IsRealized)
-                {
-                    evicted.CachedPreviewBytes = evicted.EstimatedPreviewBytes;
-                    _estimatedBytes += evicted.CachedPreviewBytes;
-                    evicted.CacheNode = _lruList.AddLast(evicted);
-                    continue;
-                }
-
-                Dispatcher.UIThread.Post(() =>
-                {
-                    evicted.ReleasePreview(skipIfCached: true);
-                });
+                break;
             }
+
+            _lruList.Remove(firstNode);
+            var evicted = firstNode.Value;
+            _estimatedBytes -= evicted.CachedPreviewBytes;
+            evicted.CachedPreviewBytes = 0;
+            evicted.CacheNode = null;
+
+            if (evicted.IsSelected || evicted.IsRealized)
+            {
+                evicted.CachedPreviewBytes = evicted.EstimatedPreviewBytes;
+                _estimatedBytes += evicted.CachedPreviewBytes;
+                evicted.CacheNode = _lruList.AddLast(evicted);
+                continue;
+            }
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                evicted.ReleasePreview(skipIfCached: true);
+            });
         }
     }
 

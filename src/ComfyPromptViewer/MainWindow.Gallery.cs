@@ -566,77 +566,8 @@ public partial class MainWindow
             _viewModel.Items.Count,
             _tileItemExtent);
 
-        var currentOffset = GalleryScrollViewer.Offset.Y;
-        var currentTimestamp = Environment.TickCount64;
-
-        var dt = (currentTimestamp - _lastScrollTimestamp) / 1000.0;
-        var dy = Math.Abs(currentOffset - _lastScrollOffsetY);
-        var velocity = dt > 0.005 ? dy / dt : 0.0;
-
-        _lastScrollOffsetY = currentOffset;
-        _lastScrollTimestamp = currentTimestamp;
-        _lastScrollEventTime = currentTimestamp;
-
-        if (velocity > ScrollVelocityThreshold)
-        {
-            if (!IsFastScrolling)
-            {
-                _isFastScrollingStatic = true;
-                _thumbnailLoads.Clear();
-            }
-
-            var now = Environment.TickCount64;
-            if (now - _lastFastScrollScheduleTime >= 120)
-            {
-                _lastFastScrollScheduleTime = now;
-                QueueViewportThumbnailSchedule();
-            }
-
-            if (_scrollMonitorTimer == null)
-            {
-                _scrollMonitorTimer = new DispatcherTimer(
-                    TimeSpan.FromMilliseconds(50),
-                    DispatcherPriority.Background,
-                    ScrollMonitorTimer_Tick);
-            }
-
-            if (!_scrollMonitorTimer.IsEnabled)
-            {
-                _scrollMonitorTimer.Start();
-            }
-        }
-        else
-        {
-            if (IsFastScrolling)
-            {
-                _isFastScrollingStatic = false;
-                _scrollMonitorTimer?.Stop();
-                QueueViewportThumbnailSchedule(force: true);
-            }
-            else
-            {
-                _scrollMonitorTimer?.Stop();
-                QueueViewportThumbnailSchedule();
-            }
-        }
-    }
-
-    private void ScrollMonitorTimer_Tick(object? sender, EventArgs e)
-    {
-        var elapsed = Environment.TickCount64 - _lastScrollEventTime;
-        if (elapsed >= 150)
-        {
-            _scrollMonitorTimer?.Stop();
-            if (IsFastScrolling)
-            {
-                _isFastScrollingStatic = false;
-                QueueViewportThumbnailSchedule(force: true);
-            }
-            else
-            {
-                QueueViewportThumbnailSchedule();
-            }
-        }
+        // Background-priority coalescing is the throttle; do not add a second one.
+        QueueViewportThumbnailSchedule();
     }
 
     private void GalleryScrollViewer_PointerWheelChanged(object? sender, PointerWheelEventArgs e)

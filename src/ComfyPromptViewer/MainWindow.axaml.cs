@@ -84,14 +84,6 @@ public partial class MainWindow : Window
     private TextBox? _activeContextMenuTextBox;
     private bool _isPositivePromptExpanded;
     private bool _isNegativePromptExpanded;
-    private double _lastScrollOffsetY;
-    private long _lastScrollTimestamp;
-    private long _lastScrollEventTime;
-    private long _lastFastScrollScheduleTime;
-    private static volatile bool _isFastScrollingStatic;
-    public static bool IsFastScrolling => _isFastScrollingStatic;
-    private DispatcherTimer? _scrollMonitorTimer;
-    private const double ScrollVelocityThreshold = 1200.0;
 
     public MainWindow()
     {
@@ -162,9 +154,6 @@ public partial class MainWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         CompleteDeleteConfirmation(false);
-        _scrollMonitorTimer?.Stop();
-        _isFastScrollingStatic = false;
-        _lastFastScrollScheduleTime = 0;
         StopAutoScroll();
         StopLargePreviewPan(releaseCapture: true);
         StopFolderWatcher();
