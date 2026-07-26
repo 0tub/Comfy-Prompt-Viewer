@@ -3,30 +3,23 @@ using System.Threading;
 
 namespace ComfyPromptViewer;
 
-// Every async result in this app has to be rejected when something newer superseded it. That pattern was
-// re-derived per subsystem as a bare int counter, and almost every stale-result bug was some path
-// forgetting to bump or forgetting to check. These two types are the only staleness primitive:
-//
-//   GenerationGate - a counter for work that has no cancellation token (UI animations, queued restores).
-//   SessionGate    - a counter paired with a CancellationTokenSource, for background work.
-//
-// Both hand out a stamp that knows how to check itself, so a caller cannot hold a generation without also
-// holding the way to test it. Never store the raw integer alongside a separately-owned token again.
+// The only staleness primitive: GenerationGate for work with no cancellation token, SessionGate for work
+// with one. Both hand out a stamp that checks itself, so a caller cannot hold a generation without the
+// means to test it. Do not reintroduce a bare int counter or a separately-owned token.
 
 internal sealed class GenerationGate
 {
     private int _generation;
 
-    // A stamp for the generation already running, for work that joins it rather than superseding it.
+    // Joins the running generation rather than superseding it.
     public Generation Current => new(this, Volatile.Read(ref _generation));
 
-    // Starts a new generation and returns its stamp. Every stamp handed out earlier is now stale.
+    // Supersedes every stamp handed out earlier.
     public Generation Begin()
     {
         return new Generation(this, Interlocked.Increment(ref _generation));
     }
 
-    // Invalidates every outstanding stamp without starting work of its own.
     public void Invalidate()
     {
         Interlocked.Increment(ref _generation);
@@ -83,8 +76,7 @@ internal sealed class SessionGate
         }
     }
 
-    // Cancels the previous session and opens a new one in a single step, so there is no window where a
-    // caller can observe a bumped generation with the old token still live.
+    // One step, so no caller can observe a bumped generation with the old token still live.
     public Session Restart()
     {
         CancellationTokenSource? previous;
@@ -100,8 +92,7 @@ internal sealed class SessionGate
         return session;
     }
 
-    // A stamp for the session already in flight. Used by work that joins an existing session (watcher
-    // additions joining the active metadata scan) rather than superseding it.
+    // Joins the session already in flight, e.g. watcher additions joining the active metadata scan.
     public Session Snapshot()
     {
         lock (_stateLock)
@@ -123,8 +114,7 @@ internal sealed class SessionGate
         CancelAndDispose(cancellation);
     }
 
-    // For callers that only carried the integer across a boundary (a posted UI callback). Requires an
-    // active session, because a bare generation carries no token of its own to test.
+    // For callers that carried only the integer across a boundary; a bare generation has no token to test.
     public bool IsCurrent(int generation)
     {
         lock (_stateLock)

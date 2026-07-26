@@ -44,6 +44,8 @@ internal static class SelfCheck
         CheckDeferredThumbnailCacheWriteQueue();
         CheckDeferredThumbnailCacheWritePause();
         CheckThumbnailPrefetchPolicy();
+        CheckSelectedPreviewDecodeWidth();
+        CheckSelectedPreviewFailureIsObservable();
         CheckJpegThumbnailEncoding();
         CheckThumbnailPackRoundTrip();
         CheckThumbnailCacheBudget();
@@ -872,6 +874,58 @@ internal static class SelfCheck
         {
             ItemThumbnailService.SetCacheWritePause(null);
         }
+    }
+
+    // 0 means "decode natively". Ordinary generation resolutions must land there, because for PNG the
+    // resample is pure extra work on top of a decode that happens regardless.
+    private static void CheckSelectedPreviewDecodeWidth()
+    {
+        Check(ThumbnailService.GetPreviewDecodeWidth(832, 1216) == 0,
+            "Expected a source narrower than the cap to decode natively rather than upscale.");
+        Check(ThumbnailService.GetPreviewDecodeWidth(1024, 1024) == 0,
+            "Expected a square SDXL source to decode natively.");
+        Check(ThumbnailService.GetPreviewDecodeWidth(1536, 1536) == 0,
+            "Expected a 1536 source to decode natively.");
+        Check(ThumbnailService.GetPreviewDecodeWidth(2048, 2048) == 0,
+            "Expected a 2048 source to decode natively.");
+        Check(ThumbnailService.GetPreviewDecodeWidth(2176, 2176) == 0,
+            "Expected a source marginally over the cap to skip resampling.");
+
+        Check(ThumbnailService.GetPreviewDecodeWidth(4096, 4096) == 2048,
+            "Expected an upscaled source to be capped so preview memory stays bounded.");
+        Check(ThumbnailService.GetPreviewDecodeWidth(4096, 6144) == 2048,
+            "Expected a tall upscale to be capped by width.");
+
+        // Stays under the width cap but would decode to 67 MB natively.
+        var extremeAspect = ThumbnailService.GetPreviewDecodeWidth(2048, 8192);
+        Check(extremeAspect is > 0 and < 2048,
+            "Expected the pixel budget to catch an extreme aspect ratio the width cap misses.");
+
+        Check(ThumbnailService.GetPreviewDecodeWidth(0, 0) > 0,
+            "Expected an unreadable header to fall back to the capped decode.");
+    }
+
+    // The sidebar keeps the previous image on screen until a replacement is displayed, so a decode that
+    // produces nothing has to be distinguishable from one still in flight. Otherwise a partially written
+    // or corrupt file leaves the previous picture next to the new file's metadata indefinitely.
+    private static void CheckSelectedPreviewFailureIsObservable()
+    {
+        var missing = CreateImageItem(
+            Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}-absent.png"));
+
+        Check(!missing.SelectedPreviewUnavailable,
+            "Expected a preview that has not been attempted to read as available.");
+
+        missing.LoadSelectedPreviewSync();
+
+        Check(missing.SelectedPreview is null,
+            "Expected an unreadable source to produce no preview.");
+        Check(missing.SelectedPreviewUnavailable,
+            "Expected a failed preview decode to be observable, not indistinguishable from decoding.");
+
+        missing.ReleaseSelectedPreview();
+        Check(!missing.SelectedPreviewUnavailable,
+            "Expected releasing a preview to clear the unavailable state so a retry can run.");
     }
 
     // Prefetch is allowed to overlap the viewport only when the decode is cheap. If a cold ahead load

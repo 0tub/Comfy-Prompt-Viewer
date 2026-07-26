@@ -62,6 +62,7 @@ public partial class MainWindow : Window
     private DispatcherTimer? _metadataCountUpdateTimer;
     private DispatcherTimer? _tileSizeSaveTimer;
     private ImageItem? _selectedItem;
+    private ImageItem? _sidebarPreviewOwner;
     private ImageItem? _selectionAnchor;
     private TaskCompletionSource<bool>? _deleteConfirmationCompletion;
     private ImageItem? _queuedSelectedItemRefresh;

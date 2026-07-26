@@ -13,23 +13,14 @@ internal enum SearchScope
     Filename
 }
 
-// Columnar search storage. Searchable text used to hang off each ImageItem as a projection object, so a
-// query walked the object graph: one reference load and one volatile read per item before touching any
-// text. Here every field is a flat array indexed by slot, a filter pass is a sequential walk over those
-// arrays, and partitioning is a range split.
+// Columnar search storage: one flat array per field, indexed by slot, plus a 64-bit character-presence
+// mask per row that rejects most non-matching rows without touching the string.
 //
-// Alongside the text there is one 64-bit character-presence mask per row per field. A substring can only
-// occur in a row whose mask is a superset of the term's mask, so most non-matching rows are rejected by a
-// single AND against a contiguous ulong array without ever touching the string. This is what makes a full
-// rescan cheap enough that the old "narrowing" optimization - reusing the previous match list as the
-// candidate source, which required proving that metadata loads only ever shrink match sets - is gone.
+// Not a token inverted index: queries here are substring matches, so a token index would silently change
+// what "cat" matches.
 //
-// A token inverted index would be faster still, but this app's queries are substring matches
-// (`text.Contains(term)`), not term lookups, so a token index would silently change what "cat" matches.
-// The mask is the strongest accelerator that preserves the existing semantics exactly.
-//
-// Ownership: GalleryCatalog. Every membership mutation and every metadata load already goes through it,
-// so the index cannot drift from the catalog. Do not mutate it from anywhere else.
+// Owned by GalleryCatalog, which maintains it from the same calls that own membership. Do not mutate it
+// from anywhere else.
 internal sealed class SearchIndex
 {
     private const int InitialCapacity = 256;
@@ -49,8 +40,7 @@ internal sealed class SearchIndex
 
     public void Add(ImageItem item)
     {
-        // A slot is only reused when this index is the one that handed it out; an item carrying a slot
-        // from a previous catalog gets a fresh row rather than writing over an unrelated one.
+        // Only reuse a slot this index handed out; one from a previous catalog would clobber a live row.
         if (OwnsSlot(item.SearchSlot, item))
         {
             WriteRow(item.SearchSlot, item);
@@ -84,9 +74,8 @@ internal sealed class SearchIndex
         _freeSlots.Push(slot);
     }
 
-    // Called when an item's metadata lands. This is the only mutation a query result can race, and it can
-    // only add text, never remove it, which is why a result computed from an older snapshot stays a valid
-    // superset of the current match set.
+    // The only mutation a query result can race, and it only ever adds text, which is why a result from an
+    // older snapshot stays a valid superset of the current match set.
     public void SetMetadata(ImageItem item)
     {
         var slot = item.SearchSlot;
@@ -120,8 +109,7 @@ internal sealed class SearchIndex
         _slotCount = 0;
     }
 
-    // Gathers the columns into catalog order so the background scan is purely sequential and immutable.
-    // The copy is a few array writes per item; the scan it feeds reads far more than that per item.
+    // Gathered into catalog order so the background scan is sequential and immutable.
     public SearchSnapshot CreateSnapshot(IReadOnlyList<ImageItem> orderedItems)
     {
         var count = orderedItems.Count;
@@ -143,8 +131,7 @@ internal sealed class SearchIndex
             var slot = item.SearchSlot;
             if (!OwnsSlot(slot, item))
             {
-                // An unindexed item should not exist, but treating it as filename-only and unscanned keeps
-                // it visible rather than silently dropping it from every search.
+                // Should not happen; filename-only keeps it visible rather than dropping it from search.
                 fileNames[index] = item.FileName;
                 fileNameMasks[index] = ComputeMask(item.FileName);
                 prompts[index] = "";
@@ -256,11 +243,9 @@ internal sealed class SearchIndex
         return column;
     }
 
-    // Records which case-folded characters a string contains. The filter is only ever allowed to produce
-    // false positives, never false negatives, so anything that could match under OrdinalIgnoreCase must
-    // light the same bit. ASCII folds to its uppercase form; a non-ASCII character additionally lights the
-    // bit of whichever ASCII letter its invariant upper/lower mapping lands on (U+212A -> K, U+017F -> S),
-    // which is exactly the set of characters ordinal case-insensitive comparison can equate with ASCII.
+    // False positives are fine, false negatives silently drop search results. So anything OrdinalIgnoreCase
+    // could equate must light the same bit: ASCII folds to uppercase, and a non-ASCII character also lights
+    // whichever ASCII letter its invariant upper/lower mapping reaches (U+212A -> K, U+017F -> S).
     internal static ulong ComputeMask(string text)
     {
         var mask = 0UL;
@@ -285,8 +270,8 @@ internal sealed class SearchIndex
         return mask;
     }
 
-    // A term mask must be a subset of any row that can contain it. If the term has a character whose
-    // folding is not ASCII, no safe subset exists, so the filter is disabled for that term by returning 0.
+    // Must be a subset of any row that can contain the term. A character whose folding is not ASCII has no
+    // safe subset, so 0 disables the filter for that term.
     internal static ulong ComputeTermMask(string term)
     {
         var mask = 0UL;
@@ -313,8 +298,7 @@ internal sealed class SearchIndex
     }
 }
 
-// One immutable columnar view of the gallery in catalog order. Every array has Count entries and index i
-// describes the same image in all of them.
+// Immutable columnar view in catalog order; index i describes the same image in every array.
 internal sealed class SearchSnapshot
 {
     // Below this a range split costs more than the scan it saves.
@@ -357,8 +341,7 @@ internal sealed class SearchSnapshot
 
     public int Count => _items.Length;
 
-    // Preserves catalog order. Large snapshots are partitioned by index range across cores and the
-    // partitions are concatenated in range order, which restores that order for free.
+    // Partitions by index range and concatenates in range order, which preserves catalog order for free.
     public List<ImageItem> Filter(
         CompiledQuery query,
         SearchScope searchScope,
@@ -514,8 +497,7 @@ internal sealed class SearchSnapshot
     }
 }
 
-// A parsed query with its per-term masks precomputed, so a scan of n rows compiles the query once instead
-// of n times.
+// Per-term masks precomputed once per query rather than once per row.
 internal sealed class CompiledQuery
 {
     public CompiledQuery(List<SearchTerm> positiveTerms, List<SearchTerm> negativeTerms)

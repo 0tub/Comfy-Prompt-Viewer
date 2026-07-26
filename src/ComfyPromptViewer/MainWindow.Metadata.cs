@@ -78,9 +78,8 @@ public partial class MainWindow
         }
     }
 
-    // Runs once the initial metadata scan finishes, so it never competes with folder load or scanning.
-    // Cache writes already pause while visible thumbnail work is active and are serialized one at a time,
-    // so this trickles in the background rather than bursting. Folder swaps drop the queue outright.
+    // Runs after the initial scan so it never competes with folder load or scanning; writes already pause
+    // for visible work and a folder swap drops the queue.
     private void QueueThumbnailCachePrewarm(int loadGeneration, CancellationToken token)
     {
         if (_catalog.Count == 0 || !_folderLoader.IsCurrent(loadGeneration))
@@ -146,8 +145,6 @@ public partial class MainWindow
                         return;
                     }
 
-                    // Re-opening a warm folder costs one pack-index lookup per image; there is no path to
-                    // build and no file to probe.
                     if (!item.HasCachedThumbnail())
                     {
                         _thumbnailService.TryQueueCacheWrite(item, item.GetThumbnailKey());
@@ -190,8 +187,7 @@ public partial class MainWindow
         return _hasSearchQueryActive;
     }
 
-    // The catalog is the single owner: this one call updates both the scan-progress counter and the
-    // columnar search row, so neither can be left behind by a path that forgot the other.
+    // One call updates both the scan-progress counter and the search row, so neither can be forgotten.
     private void ImageItem_MetadataLoaded(ImageItem item)
     {
         _catalog.MarkMetadataLoaded(item);

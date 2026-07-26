@@ -7,16 +7,14 @@ namespace ComfyPromptViewer;
 
 public sealed class ThumbnailLoadCoordinator
 {
-    // Decode concurrency scales with the machine but stays bounded; past a handful of workers the disk
-    // and the UI thread are the limit, not cores.
+    // Bounded: past a handful of workers the disk and UI thread are the limit, not cores.
     private static readonly int MaxActiveLoads = Math.Clamp(Environment.ProcessorCount / 2, 4, 8);
     private static readonly int MaxVisibleLoads = Math.Clamp(Environment.ProcessorCount / 2, 3, 6);
 
     // A cold ahead load decodes the full-resolution source, so it still yields entirely to the viewport.
     private const int MaxColdAheadLoads = 1;
 
-    // A warm one only decodes a small JPEG out of the thumbnail pack, which is cheap enough to overlap
-    // visible work. This is what keeps tiles filled while scrolling through an already-cached folder.
+    // A warm one is a small JPEG out of the pack, cheap enough to overlap visible work.
     private static readonly int MaxWarmAheadLoads = Math.Clamp(Environment.ProcessorCount / 4, 2, 4);
 
     private readonly object _lock = new();
@@ -28,7 +26,7 @@ public sealed class ThumbnailLoadCoordinator
     private readonly HashSet<ImageItem> _retainedViewportItems = [];
     private int _activeVisibleLoads;
     private int _activeAheadLoads;
-    // Invalidating this drops every in-flight decode; see Staleness.cs. Not a hand-rolled counter.
+    // Invalidating this drops every in-flight decode.
     private readonly GenerationGate _loadGate = new();
     private CancellationToken _currentToken;
     public Action? VisibleWorkDrained { get; set; }
@@ -162,8 +160,7 @@ public sealed class ThumbnailLoadCoordinator
             StartNextLocked(_visibleQueue, ThumbnailQueueKind.Visible);
         }
 
-        // Warmth is decided per item at start time rather than once for the queue: the prewarm pass is
-        // filling the pack underneath us, so an item that was cold when it was queued may not be now.
+        // Per item at start time: prewarm fills the pack underneath, so a queued cold item may now be warm.
         while (_aheadQueue.First is { Value: var nextAhead } &&
                CanStartAheadLoad(
                    nextAhead.HasCachedThumbnail(),
@@ -175,9 +172,8 @@ public sealed class ThumbnailLoadCoordinator
         }
     }
 
-    // A cold ahead load pays a full-resolution source decode, so it must never compete with the viewport.
-    // A warm one is a small JPEG read out of the pack, cheap enough to run alongside visible work, which
-    // is what stops tiles arriving blank when scrolling through a cached folder.
+    // Cold pays a full-resolution source decode and must never compete with the viewport; warm is cheap
+    // enough to run alongside it, which is what stops tiles arriving blank in a cached folder.
     internal static bool CanStartAheadLoad(
         bool isWarm,
         bool hasVisibleWork,

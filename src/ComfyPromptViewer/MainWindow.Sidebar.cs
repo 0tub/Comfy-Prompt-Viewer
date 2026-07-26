@@ -37,12 +37,18 @@ public partial class MainWindow
         {
             _selectedItem.PropertyChanged -= SelectedItem_PropertyChanged;
             _selectedItem.IsSelected = false;
-            _selectedItem.ReleaseSelectedPreview();
+
+            // Released when its replacement is shown, not here; releasing now blanks the sidebar.
+            if (!ReferenceEquals(_selectedItem, _sidebarPreviewOwner))
+            {
+                _selectedItem.ReleaseSelectedPreview();
+            }
         }
 
         _selectedItem = item;
         if (item is null)
         {
+            ReleaseSidebarPreview();
             SidebarEmpty.IsVisible = true;
             SidebarContent.IsVisible = false;
             SidebarMetadataPanel.Opacity = 0;
@@ -278,7 +284,31 @@ public partial class MainWindow
         SidebarNegativePromptContainer.IsVisible = item.HasNegativePrompt;
         ApplyNegativePromptPresentation(SidebarNegativePrompt.Text);
 
-        SidebarImage.Source = item.SelectedPreview ?? item.Preview;
+        // One source, so there is no second state to transition from; binding the gallery thumbnail here
+        // too is what produced the soft-then-sharp swap. The previous image holds until the new one lands.
+        if (item.SelectedPreview is { } selectedPreview)
+        {
+            SidebarImage.Source = selectedPreview;
+            var previousOwner = _sidebarPreviewOwner;
+            _sidebarPreviewOwner = item;
+            if (previousOwner is not null && !ReferenceEquals(previousOwner, item))
+            {
+                previousOwner.ReleaseSelectedPreview();
+            }
+        }
+        else if (item.SelectedPreviewUnavailable)
+        {
+            // No replacement is coming, so holding on would show the wrong picture, not a lagging one.
+            ReleaseSidebarPreview();
+        }
+    }
+
+    private void ReleaseSidebarPreview()
+    {
+        var owner = _sidebarPreviewOwner;
+        _sidebarPreviewOwner = null;
+        SidebarImage.Source = null;
+        owner?.ReleaseSelectedPreview();
     }
 
     private async void SidebarCopyButton_Click(object? sender, RoutedEventArgs e)

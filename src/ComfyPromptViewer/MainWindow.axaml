@@ -1645,6 +1645,7 @@
                                     </ContextMenu>
                                 </Canvas.ContextMenu>
                                 <Image Name="LargePreviewImage"
+                                       RenderOptions.BitmapInterpolationMode="HighQuality"
                                        Stretch="Fill" />
                             </Canvas>
                             <Button Name="PreviousPreviewButton"

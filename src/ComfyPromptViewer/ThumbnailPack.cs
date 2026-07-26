@@ -8,11 +8,9 @@ using Microsoft.Win32.SafeHandles;
 
 namespace ComfyPromptViewer;
 
-// One append-only data file plus one append-only offset log, instead of up to four small JPEGs per image
-// spread over hashed per-folder directories. That layout cost a directory hash, a CreateDirectory, a path
-// build, and a File.Exists probe per image per width, and clearing the cache meant recursively deleting
-// tens of thousands of files. Here a lookup is a dictionary hit, a read is one positional read, and
-// clearing is two truncations.
+// One append-only data file plus one append-only offset log, replacing thousands of small JPEGs across
+// hashed per-folder directories. A lookup is a dictionary hit, a read is one positional read, and clearing
+// is two truncations.
 //
 // Layout:
 //   thumbnails.pack  [magic:4][version:4] then raw JPEG payloads back to back.
@@ -160,8 +158,7 @@ internal sealed class ThumbnailPack : IDisposable
         }
     }
 
-    // Two truncations and a dictionary clear, whatever the cache size. This is the whole reason the pack
-    // exists: the old cache had to walk and delete every file.
+    // Two truncations and a dictionary clear, whatever the cache size.
     public void Clear()
     {
         lock (_writeLock)
@@ -321,8 +318,7 @@ internal sealed class ThumbnailPack : IDisposable
         _indexLength += IndexRecordSize;
     }
 
-    // A header we cannot recognize means the files are foreign or corrupt. Start over rather than reading
-    // arbitrary bytes as thumbnails.
+    // An unrecognized header means foreign or corrupt files; start over rather than decoding junk.
     private void Reset()
     {
         _entries.Clear();

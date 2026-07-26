@@ -687,8 +687,7 @@ public partial class MainWindow
         }, DispatcherPriority.Background);
     }
 
-    // Roughly one extra screen of lookahead in the direction of travel, and just enough behind to cover a
-    // reversal. Spending the whole budget symmetrically wastes most of it on rows already passed.
+    // About one screen of lookahead ahead of travel; a symmetric window wastes half on rows already passed.
     internal static (int RowsAbove, int RowsBelow) GetAheadRowWindow(int prefetchDirection)
     {
         return prefetchDirection < 0

@@ -93,9 +93,7 @@ public partial class MainWindow
 
         var searchScope = GetSearchScope();
 
-        // One columnar snapshot per query. The scan then never touches an ImageItem, so it partitions by
-        // index range and every partition reads contiguous memory. There is no narrowed candidate source
-        // to keep valid, because a full rescan is what the index is for.
+        // One columnar snapshot per query, so the scan never touches an ImageItem and partitions by range.
         var snapshot = _catalog.CreateSearchSnapshot();
 
         var session = _searchFilterGate.Restart();
@@ -105,11 +103,8 @@ public partial class MainWindow
 
             Dispatcher.UIThread.Post(() =>
             {
-                // Only a newer query invalidates this result. Metadata that loaded while the pass ran does
-                // not: loading metadata can only drop items from a match set, so a result computed from an
-                // older snapshot is a superset of the current one, and showing it beats showing nothing.
-                // The scanner's refresh and completion passes reconcile. Discarding here meant that during
-                // a cold scan almost every pass was thrown away.
+                // Only a newer query invalidates this. Metadata landing mid-pass does not: it can only drop
+                // items, so an older result is a superset and the scanner's later passes reconcile.
                 if (session.IsStale)
                 {
                     return;

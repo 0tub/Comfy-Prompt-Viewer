@@ -11,6 +11,9 @@ namespace ComfyPromptViewer;
 internal sealed class ThumbnailService : IDisposable
 {
     private const int ThumbnailJpegQuality = 82;
+    private const int SelectedPreviewMaxWidth = 2048;
+    private const long SelectedPreviewMaxPixels = 8_000_000;
+    private const double PreviewDownscaleThreshold = 1.15;
     private readonly SemaphoreSlim _cacheWriteLimiter = new(1, 1);
     private readonly object _pendingWritesLock = new();
     private readonly HashSet<ThumbnailKey> _pendingWrites = [];
@@ -41,7 +44,6 @@ internal sealed class ThumbnailService : IDisposable
         }
     }
 
-    // A dictionary hit. There is no per-image path to build, directory to create, or file to probe.
     public bool HasCachedThumbnail(in ThumbnailKey key)
     {
         return _pack.Contains(key);
@@ -78,10 +80,49 @@ internal sealed class ThumbnailService : IDisposable
         return Bitmap.DecodeToWidth(stream, width, BitmapInterpolationMode.MediumQuality);
     }
 
-    public Bitmap DecodeSelectedPreview(string sourcePath, int width)
+    public Bitmap DecodeSelectedPreview(string sourcePath, int knownSourceWidth = 0, int knownSourceHeight = 0)
     {
+        var (sourceWidth, sourceHeight) = knownSourceWidth > 0 && knownSourceHeight > 0
+            ? (knownSourceWidth, knownSourceHeight)
+            : TryReadSourceSize(sourcePath);
+
+        var decodeWidth = GetPreviewDecodeWidth(sourceWidth, sourceHeight);
         using var stream = File.OpenRead(sourcePath);
-        return Bitmap.DecodeToWidth(stream, width, BitmapInterpolationMode.MediumQuality);
+        return decodeWidth > 0
+            ? Bitmap.DecodeToWidth(stream, decodeWidth, BitmapInterpolationMode.MediumQuality)
+            : new Bitmap(stream);
+    }
+
+    // Returns 0 to decode at native size. PNG has no scaled decode, so the full image is decoded either
+    // way and a resample is pure extra work; only real upscales are worth it. The pixel budget catches
+    // aspect ratios that stay under the width cap but blow past it in total pixels.
+    internal static int GetPreviewDecodeWidth(int sourceWidth, int sourceHeight)
+    {
+        if (sourceWidth <= 0 || sourceHeight <= 0)
+        {
+            return SelectedPreviewMaxWidth;
+        }
+
+        var targetWidth = Math.Min(sourceWidth, SelectedPreviewMaxWidth);
+        var pixelBudgetWidth = (int)Math.Sqrt(
+            SelectedPreviewMaxPixels * (double)sourceWidth / sourceHeight);
+        targetWidth = Math.Min(targetWidth, Math.Max(1, pixelBudgetWidth));
+
+        return sourceWidth > targetWidth * PreviewDownscaleThreshold ? targetWidth : 0;
+    }
+
+    private static (int Width, int Height) TryReadSourceSize(string sourcePath)
+    {
+        try
+        {
+            using var codec = SKCodec.Create(sourcePath);
+            return codec is null ? (0, 0) : (codec.Info.Width, codec.Info.Height);
+        }
+        catch (Exception ex)
+        {
+            DebugLog.Write($"Failed to read source dimensions for {sourcePath}: {ex.Message}");
+            return (0, 0);
+        }
     }
 
     public bool TryQueueCacheWrite(ImageItem item, in ThumbnailKey key)
@@ -159,8 +200,7 @@ internal sealed class ThumbnailService : IDisposable
         }
     }
 
-    // Drains and pauses writes, empties the pack, then resumes. Emptying is two file truncations, so this
-    // no longer depends on how many thumbnails were cached.
+    // Emptying is two truncations, so this no longer depends on how many thumbnails were cached.
     public async Task ClearCacheAsync()
     {
         await PauseAndDrainWritesAsync();
@@ -175,8 +215,7 @@ internal sealed class ThumbnailService : IDisposable
         }
     }
 
-    // The pack format keeps two files at the cache root, so any subdirectory is a per-folder cache left
-    // behind by the old one-JPEG-per-thumbnail layout. Sweep them once instead of stranding them forever.
+    // The pack keeps two files at the root, so any subdirectory is left over from the pre-pack layout.
     private void RemoveLegacyCacheDirectories()
     {
         try
@@ -290,8 +329,7 @@ internal sealed class ThumbnailService : IDisposable
         }
     }
 
-    // Produces the JPEG bytes only. Durability is the pack's problem now, so there is no temporary file
-    // and no atomic move per thumbnail.
+    // Bytes only; durability is the pack's problem, so no temp file or atomic move per thumbnail.
     internal static byte[] EncodeJpegThumbnail(string sourcePath, int thumbnailWidth)
     {
         using var codec = SKCodec.Create(sourcePath)

@@ -17,11 +17,11 @@ public sealed class ImageItem : INotifyPropertyChanged
     private const int SmallThumbnailWidth = 180;
     private const int MediumThumbnailWidth = 240;
     private const int LargeThumbnailWidth = 320;
-    private const int SelectedPreviewMaxWidth = 1200;
     private const double ThumbnailDecodeScale = 1.5;
 
     private Bitmap? _preview;
     private Bitmap? _selectedPreview;
+    private bool _selectedPreviewUnavailable;
     private int _width;
     private int _height;
     private string _prompt = "";
@@ -75,8 +75,7 @@ public sealed class ImageItem : INotifyPropertyChanged
     public string FileName { get; }
     internal SourceFingerprint SourceFingerprint { get; }
 
-    // Row this item occupies in the catalog's SearchIndex, or -1 while it is not in a catalog. Searchable
-    // text lives in that index's columns, never on this object. Only SearchIndex assigns this.
+    // Row in the catalog's SearchIndex, or -1 when not in a catalog. Only SearchIndex assigns this.
     internal int SearchSlot { get; set; } = -1;
 
     public string CreationDateText
@@ -135,7 +134,21 @@ public sealed class ImageItem : INotifyPropertyChanged
     public Bitmap? SelectedPreview
     {
         get => _selectedPreview;
-        private set => SetField(ref _selectedPreview, value);
+        private set
+        {
+            if (SetField(ref _selectedPreview, value) && value is not null)
+            {
+                SelectedPreviewUnavailable = false;
+            }
+        }
+    }
+
+    // Separates "finished and produced nothing" from "still decoding", so a caller holding the previous
+    // image can tell that no replacement is coming.
+    public bool SelectedPreviewUnavailable
+    {
+        get => _selectedPreviewUnavailable;
+        private set => SetField(ref _selectedPreviewUnavailable, value);
     }
 
     public string Prompt
@@ -409,6 +422,7 @@ public sealed class ImageItem : INotifyPropertyChanged
             return;
         }
 
+        SelectedPreviewUnavailable = false;
         _selectedPreviewLoadTask = LoadSelectedPreviewAsync(token);
     }
 
@@ -421,12 +435,15 @@ public sealed class ImageItem : INotifyPropertyChanged
 
         try
         {
-            var decodeWidth = _width > 0 ? Math.Min(_width, SelectedPreviewMaxWidth) : SelectedPreviewMaxWidth;
-            SelectedPreview = _thumbnailService.DecodeSelectedPreview(Path, decodeWidth);
+            SelectedPreview = _thumbnailService.DecodeSelectedPreview(Path, _width, _height);
         }
         catch (Exception ex)
         {
             DebugLog.Write($"Failed to load selected preview synchronously: {ex}");
+            if (SelectedPreview is null)
+            {
+                SelectedPreviewUnavailable = true;
+            }
         }
     }
 
@@ -454,6 +471,7 @@ public sealed class ImageItem : INotifyPropertyChanged
         }
 
         SelectedPreview = null;
+        SelectedPreviewUnavailable = false;
     }
 
     private async Task LoadSelectedPreviewAsync(CancellationToken token)
@@ -470,8 +488,7 @@ public sealed class ImageItem : INotifyPropertyChanged
 
                 var bitmap = await Task.Run(() =>
                 {
-                    var decodeWidth = _width > 0 ? Math.Min(_width, SelectedPreviewMaxWidth) : SelectedPreviewMaxWidth;
-                    return _thumbnailService.DecodeSelectedPreview(Path, decodeWidth);
+                    return _thumbnailService.DecodeSelectedPreview(Path, _width, _height);
                 }, token);
                 await Dispatcher.UIThread.InvokeAsync(() =>
                 {
@@ -501,6 +518,13 @@ public sealed class ImageItem : INotifyPropertyChanged
         catch (Exception ex)
         {
             DebugLog.Write($"Failed to load selected preview for {Path}: {ex}");
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (IsSelected && SelectedPreview is null)
+                {
+                    SelectedPreviewUnavailable = true;
+                }
+            });
         }
     }
 
@@ -600,13 +624,10 @@ public sealed class ImageItem : INotifyPropertyChanged
         }
 
         _hasLoadedMetadata = true;
-        // The catalog owns search data; it updates this item's index row from the same handler that keeps
-        // its own membership counters, so the two cannot disagree.
         MetadataLoaded?.Invoke(this);
     }
 
-    // Identity of this image version at the current decode width. Memoized per width, so a scroll pass
-    // costs a comparison rather than a hash, and a tile-size change invalidates it implicitly.
+    // Memoized per width, so a scroll pass costs a comparison and a tile-size change invalidates it.
     internal ThumbnailKey GetThumbnailKey()
     {
         var width = GetThumbnailDecodeWidth();
@@ -644,8 +665,7 @@ public sealed class ImageItem : INotifyPropertyChanged
         return targetWidth <= MediumThumbnailWidth ? MediumThumbnailWidth : LargeThumbnailWidth;
     }
 
-    // One dictionary lookup in the pack index. There is no cached "does the file exist" state to keep
-    // fresh, because the pack answers that directly and a cleared pack answers it correctly at once.
+    // One pack-index lookup, so there is no cached existence state to keep fresh.
     internal bool HasCachedThumbnail()
     {
         return _thumbnailService.HasCachedThumbnail(GetThumbnailKey());
