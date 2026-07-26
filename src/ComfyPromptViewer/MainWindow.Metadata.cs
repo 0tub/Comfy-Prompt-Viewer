@@ -111,24 +111,36 @@ public partial class MainWindow
             return;
         }
 
-        _prewarmRemaining += items.Count;
-        UpdateCountText();
         DebugLog.Observe(
             PrewarmThumbnailCacheAsync(items, loadGeneration, token),
             "Thumbnail cache prewarm");
     }
 
+    // Two passes. The first is one in-memory pack lookup per image and decides whether there is any work at
+    // all, so reopening a folder that is already cached queues nothing, wakes no writer, and shows no
+    // progress. Only the second pass counts toward the label, which is why it now tracks thumbnails that are
+    // genuinely missing instead of images walked.
     private async Task PrewarmThumbnailCacheAsync(
         IReadOnlyList<ImageItem> items,
         int loadGeneration,
         CancellationToken token)
     {
+        var announced = 0;
         var completed = 0;
         try
         {
             await Task.Run(async () =>
             {
-                foreach (var item in items)
+                var pending = CollectPrewarmCandidates(items, loadGeneration);
+                if (pending.Count == 0)
+                {
+                    return;
+                }
+
+                announced = pending.Count;
+                AddPrewarmWork(announced, loadGeneration);
+
+                foreach (var item in pending)
                 {
                     // Enqueue against a high-water mark so a large folder does not sit in the queue whole.
                     while (_thumbnailService.PendingWriteCount >= PrewarmQueueHighWaterMark)
@@ -145,14 +157,11 @@ public partial class MainWindow
                         return;
                     }
 
-                    if (!item.HasCachedThumbnail())
-                    {
-                        _thumbnailService.TryQueueCacheWrite(item, item.GetThumbnailKey());
-                    }
+                    _thumbnailService.TryQueueCacheWrite(item, item.GetThumbnailKey());
 
                     if (Interlocked.Increment(ref completed) % PrewarmProgressBatch == 0)
                     {
-                        ReportPrewarmProgress(PrewarmProgressBatch);
+                        ReportPrewarmProgress(PrewarmProgressBatch, loadGeneration);
                     }
                 }
             }, token);
@@ -162,11 +171,58 @@ public partial class MainWindow
         }
         finally
         {
-            ReportPrewarmProgress(items.Count - (completed / PrewarmProgressBatch * PrewarmProgressBatch));
+            // Whatever the last partial batch did not report, so an early return still clears the label.
+            ReportPrewarmProgress(
+                announced - (completed / PrewarmProgressBatch * PrewarmProgressBatch),
+                loadGeneration);
         }
     }
 
-    private void ReportPrewarmProgress(int completedCount)
+    // An item's decode bucket is only refreshed for visible and ahead tiles, so an off-screen item can still
+    // be carrying the tile size the folder was opened with. Aligning it here keeps the pass from caching a
+    // width the gallery will never ask for and then leaving those images cold at the size actually shown.
+    private List<ImageItem> CollectPrewarmCandidates(IReadOnlyList<ImageItem> items, int loadGeneration)
+    {
+        var pending = new List<ImageItem>();
+        foreach (var item in items)
+        {
+            if (!_folderLoader.IsCurrent(loadGeneration) || !_prewarmThumbnails)
+            {
+                pending.Clear();
+                break;
+            }
+
+            item.SetTileSize(_tileSize);
+            if (!item.HasCachedThumbnail())
+            {
+                pending.Add(item);
+            }
+        }
+
+        return pending;
+    }
+
+    // Both counter posts carry the load generation: a pass that was still current when it queued work can
+    // land after a folder swap, and a stale add would report caching for a folder that is gone while a
+    // stale decrement would eat the new folder's progress.
+    private void AddPrewarmWork(int count, int loadGeneration)
+    {
+        Dispatcher.UIThread.Post(
+            () =>
+            {
+                if (!_folderLoader.IsCurrent(loadGeneration))
+                {
+                    return;
+                }
+
+                _prewarmTotal += count;
+                _prewarmRemaining += count;
+                UpdateCountText();
+            },
+            DispatcherPriority.Background);
+    }
+
+    private void ReportPrewarmProgress(int completedCount, int loadGeneration)
     {
         if (completedCount <= 0)
         {
@@ -176,7 +232,17 @@ public partial class MainWindow
         Dispatcher.UIThread.Post(
             () =>
             {
+                if (!_folderLoader.IsCurrent(loadGeneration))
+                {
+                    return;
+                }
+
                 _prewarmRemaining = Math.Max(0, _prewarmRemaining - completedCount);
+                if (_prewarmRemaining == 0)
+                {
+                    _prewarmTotal = 0;
+                }
+
                 UpdateCountText();
             },
             DispatcherPriority.Background);

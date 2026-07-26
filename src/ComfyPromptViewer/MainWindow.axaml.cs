@@ -72,6 +72,7 @@ public partial class MainWindow : Window
     private bool _includeSubfolders;
     private bool _prewarmThumbnails;
     private int _prewarmRemaining;
+    private int _prewarmTotal;
     private double _targetTileSize;
     private double _tileSize;
     private double _tileItemExtent;

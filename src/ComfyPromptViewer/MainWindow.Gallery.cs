@@ -771,9 +771,11 @@ public partial class MainWindow
                 : $"{filtered:n0} of {total} images";
         }
 
-        if (!isScanning && _prewarmRemaining > 0)
+        // Counted against thumbnails that were actually missing, not against the folder: a fully cached
+        // folder has no pass to report on.
+        if (!isScanning && _prewarmRemaining > 0 && _prewarmTotal > 0)
         {
-            CountText.Text += $" (Caching thumbnails {total - _prewarmRemaining:n0}/{total:n0})";
+            CountText.Text += $" (Caching thumbnails {_prewarmTotal - _prewarmRemaining:n0}/{_prewarmTotal:n0})";
         }
 
         if (_selectedItems.Count > 1)
@@ -790,6 +792,7 @@ public partial class MainWindow
     {
         CancelSearchFilter();
         _prewarmRemaining = 0;
+        _prewarmTotal = 0;
         _metadataCountUpdateTimer?.Stop();
         GalleryEmptyState.IsVisible = false;
         GalleryEmptyState.Opacity = 0;

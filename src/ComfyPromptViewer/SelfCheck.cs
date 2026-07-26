@@ -28,6 +28,7 @@ internal static class SelfCheck
         CheckParallelSearchFiltering();
         CheckGalleryScrollAnchoring();
         CheckGalleryItemReconciliation();
+        CheckGalleryInsertionDiff();
         CheckGalleryCatalog();
         CheckSortedInsertion();
         CheckFolderLoadSessions();
@@ -266,6 +267,52 @@ internal static class SelfCheck
             "Expected a reorder to use a gallery reset instead of per-item moves.");
         Check(!MainWindow.CanSynchronizeGalleryItemsIncrementally([a, b, c], [added, a, b, c], maximumChanges: 0),
             "Expected the incremental gallery change limit to be enforced.");
+    }
+
+    // The allocation-free watcher path. A wrong diff here silently corrupts the gallery order rather than
+    // failing loudly, so every rejection case is covered as well as the applied result.
+    private static void CheckGalleryInsertionDiff()
+    {
+        var a = CreateImageItem(Path.Combine(Path.GetTempPath(), "insert-a.png"));
+        var b = CreateImageItem(Path.Combine(Path.GetTempPath(), "insert-b.png"));
+        var c = CreateImageItem(Path.Combine(Path.GetTempPath(), "insert-c.png"));
+        var first = CreateImageItem(Path.Combine(Path.GetTempPath(), "insert-first.png"));
+        var middle = CreateImageItem(Path.Combine(Path.GetTempPath(), "insert-middle.png"));
+        var insertions = new List<MainWindow.GalleryInsertion>();
+
+        bool Apply(List<ImageItem> current, IReadOnlyList<ImageItem> target, int maximumInsertions)
+        {
+            if (!MainWindow.TryFindGalleryInsertions(current, target, maximumInsertions, insertions))
+            {
+                return false;
+            }
+
+            foreach (var insertion in insertions)
+            {
+                current.Insert(insertion.Index, insertion.Item);
+            }
+
+            return true;
+        }
+
+        var items = new List<ImageItem> { a, b, c };
+        Check(Apply(items, [first, a, middle, b, c], maximumInsertions: 4),
+            "Expected interleaved watcher insertions to be recognized.");
+        Check(items is [var i0, var i1, var i2, var i3, var i4] &&
+              ReferenceEquals(i0, first) && ReferenceEquals(i1, a) && ReferenceEquals(i2, middle) &&
+              ReferenceEquals(i3, b) && ReferenceEquals(i4, c),
+            "Expected applied insertions to reproduce the target sequence exactly.");
+
+        Check(!MainWindow.TryFindGalleryInsertions([a, b, c], [a, c], 4, insertions),
+            "Expected a removal to fall back to the general gallery sync path.");
+        Check(!MainWindow.TryFindGalleryInsertions([a, b, c], [c, b, a], 4, insertions),
+            "Expected a reorder to fall back to the general gallery sync path.");
+        Check(!MainWindow.TryFindGalleryInsertions([a, b, c], [a, b, c], 4, insertions),
+            "Expected an unchanged sequence to report no insertions.");
+        Check(!MainWindow.TryFindGalleryInsertions([a, b, c], [first, middle, a, b, c], 1, insertions),
+            "Expected the insertion limit to be enforced.");
+        Check(!MainWindow.TryFindGalleryInsertions([a, b, c], [first, a, b, middle], 4, insertions),
+            "Expected an insertion paired with a removal to fall back to the general gallery sync path.");
     }
 
     private static void CheckGalleryCatalog()

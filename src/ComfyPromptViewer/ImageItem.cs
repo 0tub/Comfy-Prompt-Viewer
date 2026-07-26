@@ -628,6 +628,15 @@ public sealed class ImageItem : INotifyPropertyChanged
         }
 
         _hasLoadedMetadata = true;
+
+        // The completed task holds a second copy of the entry for as long as the folder stays open. The
+        // values it carried are on this item now, and every caller checks HasLoadedMetadata before asking
+        // again, so nothing re-reads it.
+        lock (_metadataLoadLock)
+        {
+            _metadataLoadTask = null;
+        }
+
         MetadataLoaded?.Invoke(this);
     }
 

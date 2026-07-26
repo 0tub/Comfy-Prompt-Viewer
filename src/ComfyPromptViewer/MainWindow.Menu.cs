@@ -427,6 +427,7 @@ public partial class MainWindow
         {
             _thumbnailService.ClearDeferredWrites();
             _prewarmRemaining = 0;
+            _prewarmTotal = 0;
             UpdateCountText();
             ShowAdvancedMaintenanceStatus("Thumbnail prewarming off.");
             return;

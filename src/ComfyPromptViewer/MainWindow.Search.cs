@@ -169,16 +169,100 @@ public partial class MainWindow
         ToggleGalleryEmptyState(showEmpty);
     }
 
+    // Reused across syncs so a one-file watcher batch does not allocate two catalog-sized collections.
+    // Cleared after every use: holding a folder's items here would outlive the folder itself.
+    private readonly HashSet<ImageItem> _gallerySyncTargetSet = [];
+    private readonly Dictionary<ImageItem, int> _gallerySyncCurrentIndexes = [];
+    private readonly List<GalleryInsertion> _gallerySyncInsertions = [];
+
+    internal readonly record struct GalleryInsertion(int Index, ImageItem Item);
+
+    private bool TrySynchronizeGalleryInsertions(IReadOnlyList<ImageItem> filtered)
+    {
+        var insertions = _gallerySyncInsertions;
+        if (!TryFindGalleryInsertions(_viewModel.Items, filtered, MaxIncrementalGalleryChanges, insertions))
+        {
+            insertions.Clear();
+            return false;
+        }
+
+        // Ascending order, so every earlier position is already final when the next insert lands.
+        foreach (var insertion in insertions)
+        {
+            _viewModel.Items.Insert(insertion.Index, insertion.Item);
+        }
+
+        insertions.Clear();
+        return true;
+    }
+
+    // A watcher batch is normally a handful of inserts into an otherwise unchanged list. Two cursors settle
+    // that in one comparison pass with no allocation, which matters because this runs per added file and
+    // the set-based fallback is O(catalog) in both time and bytes. Returns false for anything else -
+    // removals, reorders, or more insertions than the caller is willing to apply one at a time.
+    //
+    // On true, applying the reported insertions in order turns currentItems into targetItems exactly, so
+    // there is no separate duplicate check to keep in sync: a target the walk cannot reproduce is rejected.
+    internal static bool TryFindGalleryInsertions(
+        IReadOnlyList<ImageItem> currentItems,
+        IReadOnlyList<ImageItem> targetItems,
+        int maximumInsertions,
+        List<GalleryInsertion> insertions)
+    {
+        insertions.Clear();
+        var insertionCount = targetItems.Count - currentItems.Count;
+        if (insertionCount <= 0 || insertionCount > maximumInsertions)
+        {
+            return false;
+        }
+
+        var currentIndex = 0;
+        for (var index = 0; index < targetItems.Count; index++)
+        {
+            var item = targetItems[index];
+            if (currentIndex < currentItems.Count && ReferenceEquals(currentItems[currentIndex], item))
+            {
+                currentIndex++;
+                continue;
+            }
+
+            if (insertions.Count == insertionCount)
+            {
+                // Something other than an insertion changed; let the general path decide what to do.
+                return false;
+            }
+
+            insertions.Add(new GalleryInsertion(index, item));
+        }
+
+        // Postcondition, not a filter: the loop above already rejects anything that would leave current
+        // items unconsumed. It states the property the caller relies on rather than trusting the arithmetic.
+        return currentIndex == currentItems.Count;
+    }
+
     private void SynchronizeGalleryItems(IReadOnlyList<ImageItem> filtered)
     {
-        if (!CanSynchronizeGalleryItemsIncrementally(_viewModel.Items, filtered, MaxIncrementalGalleryChanges))
+        if (TrySynchronizeGalleryInsertions(filtered))
         {
+            return;
+        }
+
+        if (!CanSynchronizeGalleryItemsIncrementally(
+                _viewModel.Items,
+                filtered,
+                MaxIncrementalGalleryChanges,
+                _gallerySyncTargetSet,
+                _gallerySyncCurrentIndexes))
+        {
+            _gallerySyncTargetSet.Clear();
+            _gallerySyncCurrentIndexes.Clear();
             _viewModel.Items.Clear();
             _viewModel.Items.AddRange(filtered);
             return;
         }
 
-        var targetItems = new HashSet<ImageItem>(filtered);
+        // The check above already filled this with the target sequence.
+        var targetItems = _gallerySyncTargetSet;
         for (var index = 0; index < filtered.Count;)
         {
             var item = filtered[index];
@@ -209,6 +293,9 @@ public partial class MainWindow
         {
             _viewModel.Items.RemoveAt(_viewModel.Items.Count - 1);
         }
+
+        _gallerySyncTargetSet.Clear();
+        _gallerySyncCurrentIndexes.Clear();
     }
 
     internal static bool CanSynchronizeGalleryItemsIncrementally(
@@ -216,18 +303,42 @@ public partial class MainWindow
         IReadOnlyList<ImageItem> targetItems,
         int maximumChanges)
     {
+        return CanSynchronizeGalleryItemsIncrementally(
+            currentItems,
+            targetItems,
+            maximumChanges,
+            [],
+            []);
+    }
+
+    // The two collections are scratch space, not state: callers pass reusable instances so this does not
+    // allocate two catalog-sized collections per watcher batch. On a true return, targetSet holds the
+    // target sequence and the caller may read it.
+    internal static bool CanSynchronizeGalleryItemsIncrementally(
+        IReadOnlyList<ImageItem> currentItems,
+        IReadOnlyList<ImageItem> targetItems,
+        int maximumChanges,
+        HashSet<ImageItem> targetSet,
+        Dictionary<ImageItem, int> currentIndexes)
+    {
+        targetSet.Clear();
+        currentIndexes.Clear();
+
         if (maximumChanges < 0)
         {
             return false;
         }
 
-        var targetSet = new HashSet<ImageItem>(targetItems);
+        foreach (var item in targetItems)
+        {
+            targetSet.Add(item);
+        }
+
         if (targetSet.Count != targetItems.Count)
         {
             return false;
         }
 
-        var currentIndexes = new Dictionary<ImageItem, int>(currentItems.Count);
         var changeCount = 0;
         for (var index = 0; index < currentItems.Count; index++)
         {
