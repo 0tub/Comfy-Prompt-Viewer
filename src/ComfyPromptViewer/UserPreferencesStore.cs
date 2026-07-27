@@ -14,6 +14,8 @@ internal sealed class UserPreferencesStore
     private readonly string _includeSubfoldersPath;
     private readonly string _prewarmThumbnailsPath;
     private readonly string _themeModePath;
+    private readonly string _windowPlacementPath;
+    private readonly string _sidebarWidthPath;
 
     public UserPreferencesStore(string appDataDirectory)
     {
@@ -24,6 +26,8 @@ internal sealed class UserPreferencesStore
         _includeSubfoldersPath = Path.Combine(appDataDirectory, "include-subfolders.txt");
         _prewarmThumbnailsPath = Path.Combine(appDataDirectory, "prewarm-thumbnails.txt");
         _themeModePath = Path.Combine(appDataDirectory, "theme-mode.txt");
+        _windowPlacementPath = Path.Combine(appDataDirectory, "window-placement.txt");
+        _sidebarWidthPath = Path.Combine(appDataDirectory, "sidebar-width.txt");
     }
 
     public double LoadTileSize(double defaultValue, double minValue, double maxValue)
@@ -199,6 +203,63 @@ internal sealed class UserPreferencesStore
         SavePreference(_themeModePath, themeMode.ToString(), "theme mode");
     }
 
+    // Stored as `width|height|x|y|maximized`. Position is in screen pixels because that is the unit
+    // Window.Position uses; restoring it is only safe after checking it still lands on a connected screen.
+    public WindowPlacement? LoadWindowPlacement()
+    {
+        if (!TryReadPreference(_windowPlacementPath, "window placement", out var text))
+        {
+            return null;
+        }
+
+        var parts = text.Split('|');
+        if (parts.Length < 5 ||
+            !double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var width) ||
+            !double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var height) ||
+            !int.TryParse(parts[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var x) ||
+            !int.TryParse(parts[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out var y) ||
+            !bool.TryParse(parts[4], out var isMaximized))
+        {
+            return null;
+        }
+
+        if (double.IsNaN(width) || double.IsNaN(height) || width <= 0 || height <= 0)
+        {
+            return null;
+        }
+
+        return new WindowPlacement(width, height, x, y, isMaximized);
+    }
+
+    public void SaveWindowPlacement(WindowPlacement placement)
+    {
+        var value = string.Join(
+            '|',
+            placement.Width.ToString(CultureInfo.InvariantCulture),
+            placement.Height.ToString(CultureInfo.InvariantCulture),
+            placement.X.ToString(CultureInfo.InvariantCulture),
+            placement.Y.ToString(CultureInfo.InvariantCulture),
+            placement.IsMaximized.ToString(CultureInfo.InvariantCulture));
+        SavePreference(_windowPlacementPath, value, "window placement");
+    }
+
+    public double LoadSidebarWidth(double defaultValue, double minValue, double maxValue)
+    {
+        if (TryReadPreference(_sidebarWidthPath, "sidebar width", out var text) &&
+            double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var savedValue) &&
+            !double.IsNaN(savedValue))
+        {
+            return Math.Clamp(savedValue, minValue, maxValue);
+        }
+
+        return defaultValue;
+    }
+
+    public void SaveSidebarWidth(double value)
+    {
+        SavePreference(_sidebarWidthPath, value.ToString(CultureInfo.InvariantCulture), "sidebar width");
+    }
+
     private static bool TryReadPreference(string path, string label, out string text)
     {
         try
@@ -231,6 +292,13 @@ internal sealed class UserPreferencesStore
         }
     }
 }
+
+public readonly record struct WindowPlacement(
+    double Width,
+    double Height,
+    int X,
+    int Y,
+    bool IsMaximized);
 
 public enum ThemeMode
 {

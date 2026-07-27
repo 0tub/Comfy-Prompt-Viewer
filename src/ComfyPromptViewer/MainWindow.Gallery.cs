@@ -172,6 +172,77 @@ public partial class MainWindow
         return low;
     }
 
+    // A ColumnDefinition is not a Control, so XAML generates no field for it; the sidebar column is the
+    // third definition on MainGrid (gallery, splitter, sidebar).
+    private ColumnDefinition? SidebarColumn =>
+        MainGrid?.ColumnDefinitions.Count > 2 ? MainGrid.ColumnDefinitions[2] : null;
+
+    // The splitter owns the sidebar width now, but a window narrow enough to squeeze the gallery still has
+    // to win. The column's own MinWidth/MaxWidth bound the drag; this only pulls the width back in when the
+    // window shrinks under it.
+    private void ClampSidebarWidthToWindow(double windowWidth)
+    {
+        if (SidebarColumn is null)
+        {
+            return;
+        }
+
+        var current = SidebarColumn.Width.IsAbsolute ? SidebarColumn.Width.Value : MaxSidebarWidth;
+        var clamped = ComputeClampedSidebarWidth(current, windowWidth);
+
+        if (Math.Abs(clamped - current) > 0.5)
+        {
+            SetSidebarWidth(clamped, persist: false);
+        }
+    }
+
+    // The window ratio is a ceiling, never a target: a wide window leaves the dragged width alone, and only
+    // a window too narrow to keep the gallery usable pulls it back down.
+    internal static double ComputeClampedSidebarWidth(double currentWidth, double windowWidth)
+    {
+        var maxForWindow = Math.Max(MinSidebarWidth, windowWidth * MaxSidebarWidthWindowRatio);
+        return Math.Clamp(currentWidth, MinSidebarWidth, Math.Min(MaxSidebarWidth, maxForWindow));
+    }
+
+    private void SetSidebarWidth(double width, bool persist)
+    {
+        if (SidebarColumn is null)
+        {
+            return;
+        }
+
+        var clamped = Math.Clamp(width, MinSidebarWidth, MaxSidebarWidth);
+        SidebarColumn.Width = new GridLength(clamped, GridUnitType.Pixel);
+
+        if (persist)
+        {
+            _preferences.SaveSidebarWidth(clamped);
+        }
+    }
+
+    private void SidebarSplitter_DragStarted(object? sender, VectorEventArgs e)
+    {
+        _isSidebarSplitterDragging = true;
+    }
+
+    // GridSplitter raises a DragCompleted while it normalizes column lengths during initial layout, which
+    // would otherwise persist a width the user never chose and let it creep across runs. Only a drag that
+    // actually started counts.
+    private void SidebarSplitter_DragCompleted(object? sender, VectorEventArgs e)
+    {
+        if (!_isSidebarSplitterDragging)
+        {
+            return;
+        }
+
+        _isSidebarSplitterDragging = false;
+
+        if (SidebarColumn is { Width.IsAbsolute: true } column)
+        {
+            _preferences.SaveSidebarWidth(Math.Clamp(column.Width.Value, MinSidebarWidth, MaxSidebarWidth));
+        }
+    }
+
     private void GalleryItem_PointerPressed(object? sender, PointerPressedEventArgs e)
     {
         if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed &&
@@ -296,18 +367,9 @@ public partial class MainWindow
 
     private void Window_SizeChanged(object? sender, SizeChangedEventArgs e)
     {
-        var windowWidth = e.NewSize.Width;
         var windowHeight = e.NewSize.Height;
 
-        double targetSidebarWidth = Math.Clamp(
-            windowWidth * SidebarWidthWindowRatio,
-            MinSidebarWidth,
-            MaxSidebarWidth);
-        
-        if (MainGrid != null && MainGrid.ColumnDefinitions.Count > 1)
-        {
-            MainGrid.ColumnDefinitions[1].Width = new GridLength(targetSidebarWidth, GridUnitType.Pixel);
-        }
+        ClampSidebarWidthToWindow(e.NewSize.Width);
 
         double targetImageHeight = Math.Clamp(
             windowHeight * SidebarPreviewHeightWindowRatio,

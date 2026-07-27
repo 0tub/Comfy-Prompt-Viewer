@@ -53,6 +53,62 @@ internal static class SelfCheck
         CheckThumbnailPackRoundTrip();
         CheckThumbnailCacheBudget();
         CheckThumbnailDecodeWidths();
+        CheckSidebarWidthClamping();
+        CheckWindowPlacementRoundTrip();
+    }
+
+    private static void CheckSidebarWidthClamping()
+    {
+        // A comfortable window leaves a dragged width exactly where the user put it.
+        Check(MainWindow.ComputeClampedSidebarWidth(420, 1600) == 420,
+            "Expected a wide window to preserve the dragged sidebar width.");
+
+        // Narrowing the window pulls the sidebar back rather than letting it eat the gallery.
+        var narrow = MainWindow.ComputeClampedSidebarWidth(520, 900);
+        Check(narrow < 520, "Expected a narrow window to shrink an oversized sidebar.");
+        Check(narrow <= 900 * 0.45 + 0.001, "Expected the clamped sidebar to respect the window ratio ceiling.");
+
+        // The floor wins over the ratio, so the sidebar never collapses to nothing on a tiny window.
+        Check(MainWindow.ComputeClampedSidebarWidth(300, 200) == 260,
+            "Expected the sidebar minimum width to win over the window ratio.");
+
+        // The absolute maximum still applies on an ultrawide window.
+        Check(MainWindow.ComputeClampedSidebarWidth(9000, 5000) == 560,
+            "Expected the sidebar maximum width to bound an absurd stored value.");
+    }
+
+    private static void CheckWindowPlacementRoundTrip()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"cpv-placement-{Guid.NewGuid():N}");
+        try
+        {
+            var store = new UserPreferencesStore(directory);
+            Check(store.LoadWindowPlacement() is null, "Expected no window placement before one is saved.");
+
+            store.SaveWindowPlacement(new WindowPlacement(1280.5, 800.25, -1720, 40, true));
+            var loaded = store.LoadWindowPlacement();
+            Check(loaded is not null, "Expected a saved window placement to load.");
+            Check(loaded!.Value.Width == 1280.5 && loaded.Value.Height == 800.25,
+                "Expected window placement size to round-trip exactly.");
+            // Negative coordinates are normal for a monitor left of the primary one.
+            Check(loaded.Value.X == -1720 && loaded.Value.Y == 40,
+                "Expected a negative window position to round-trip.");
+            Check(loaded.Value.IsMaximized, "Expected the maximized flag to round-trip.");
+
+            File.WriteAllText(Path.Combine(directory, "window-placement.txt"), "garbage|not|a|placement|x");
+            Check(store.LoadWindowPlacement() is null, "Expected an unparseable placement to be ignored.");
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+            catch (Exception ex)
+            {
+                DebugLog.Write($"Failed to clean up placement self-check directory: {ex.Message}");
+            }
+        }
     }
 
     // The two staleness primitives replaced six hand-rolled counters. Everything that used to be an

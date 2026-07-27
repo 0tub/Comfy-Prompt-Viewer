@@ -847,7 +847,13 @@
             </Grid>
         </Border>
 
-        <Grid Name="MainGrid" Grid.Row="1" ColumnDefinitions="*,380">
+        <Grid Name="MainGrid" Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" MinWidth="320" />
+                <ColumnDefinition Width="Auto" />
+                <!-- Index 2 in MainGrid.ColumnDefinitions; MainWindow.SidebarColumn resolves it. -->
+                <ColumnDefinition Width="380" MinWidth="260" MaxWidth="560" />
+            </Grid.ColumnDefinitions>
             <Panel Grid.Column="0">
                 <ScrollViewer Name="GalleryScrollViewer"
                               VerticalScrollBarVisibility="Visible"
@@ -936,7 +942,20 @@
                 </StackPanel>
             </Panel>
 
-            <Border Grid.Column="1" Background="{DynamicResource SurfaceSidebar}" BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="1,0,0,0">
+            <GridSplitter Name="SidebarSplitter"
+                          Grid.Column="1"
+                          Width="6"
+                          MinWidth="6"
+                          HorizontalAlignment="Stretch"
+                          VerticalAlignment="Stretch"
+                          Background="Transparent"
+                          ResizeDirection="Columns"
+                          ResizeBehavior="PreviousAndNext"
+                          Cursor="SizeWestEast"
+                          AutomationProperties.Name="Resize metadata sidebar"
+                          ToolTip.Tip="Drag to resize the metadata sidebar" />
+
+            <Border Grid.Column="2" Background="{DynamicResource SurfaceSidebar}" BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="1,0,0,0">
                 <Grid RowDefinitions="Auto,*" Margin="16">
                     <StackPanel>
                         <TextBlock Name="SidebarHeaderTitle" Text="Metadata" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontHeading}" FontSize="16" FontWeight="Normal" TextTrimming="CharacterEllipsis" />
@@ -1322,7 +1341,7 @@
             </Border>
 
             <Border Name="MainMenu"
-                    Grid.ColumnSpan="2"
+                    Grid.ColumnSpan="3"
                     Background="{DynamicResource SurfaceBase}"
                     IsVisible="True">
                 <Grid RowDefinitions="Auto,Auto,*"
@@ -1671,7 +1690,7 @@
         </Border>
 
         <Border Name="DeleteConfirmationOverlay"
-                Grid.ColumnSpan="2"
+                Grid.ColumnSpan="3"
                 IsVisible="False"
                 Background="{DynamicResource LargePreviewOverlayBackground}">
             <Border Width="390"
