@@ -16,6 +16,7 @@ It supports images from ComfyUI, Forge Neo, Draw Things, and Stable Diffusion We
 - Right-click gallery cards or the large preview to copy prompts, negative prompts, or image paths; open the file location; or delete the image.
 - Multi-select cards to copy their positive prompts together or delete them as one confirmed batch.
 - Sort by date or filename, switch color themes, and quickly reopen recent folders.
+- Drag the divider to resize the metadata sidebar; window size, position, and sidebar width are remembered between runs.
 - Watch the active folder for created, modified, renamed, or removed images.
 - Cache thumbnails and parsed metadata locally for faster repeat browsing, with optional background prewarming of the whole folder.
 
@@ -40,8 +41,10 @@ portrait cinematic -watermark
 - `Space`, `Enter`, or double-click: open the selected image preview.
 - `Esc`, `Space`, or `Enter`: close the large preview.
 - Mouse wheel: scroll the gallery; zoom the large preview.
+- Pinch on a trackpad or touchscreen: zoom the large preview.
 - Drag in the large preview: pan a zoomed image.
 - Middle-click in the gallery: start autoscroll.
+- `Ctrl+C` in a sidebar prompt: copy the selected text.
 
 ## Getting Started
 
@@ -52,21 +55,21 @@ Download the latest self-contained packaged build from the [GitHub Releases page
 
 Prerequisite:
 
-- [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0)
+- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
 
 ```powershell
 dotnet run --project src\ComfyPromptViewer\ComfyPromptViewer.csproj
 ```
 
 ### Build Standalone Executables
-- **Windows**: Run `.\publish.ps1` (outputs `src\ComfyPromptViewer\bin\Release\net9.0\win-x64\publish\ComfyPromptViewer.exe`)
-- **Linux**: Run `./publish.sh` (outputs `src/ComfyPromptViewer/bin/Release/net9.0/linux-x64/publish/ComfyPromptViewer`)
+- **Windows**: Run `.\publish.ps1` (outputs `src\ComfyPromptViewer\bin\Release\net10.0\win-x64\publish\ComfyPromptViewer.exe`)
+- **Linux**: Run `./publish.sh` (outputs `src/ComfyPromptViewer/bin/Release/net10.0/linux-x64/publish/ComfyPromptViewer`)
 
 ### Checks
 After a Debug build, run the built-in self-check:
 
 ```powershell
-dotnet src\ComfyPromptViewer\bin\Debug\net9.0\ComfyPromptViewer.dll --self-check
+dotnet src\ComfyPromptViewer\bin\Debug\net10.0\ComfyPromptViewer.dll --self-check
 ```
 
 ## License

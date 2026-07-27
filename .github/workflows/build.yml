@@ -32,7 +32,7 @@ jobs:
     - name: Setup .NET SDK
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: '9.0.x'
+        dotnet-version: '10.0.x'
 
     - name: Publish Standalone Binary
       shell: bash
@@ -52,7 +52,7 @@ jobs:
     - name: Prepare Artifact
       shell: bash
       run: |
-        cd src/ComfyPromptViewer/bin/Release/net9.0/${{ matrix.target }}/publish
+        cd src/ComfyPromptViewer/bin/Release/net10.0/${{ matrix.target }}/publish
         rm -f *.pdb
         rm -f *.so
         mv ComfyPromptViewer${{ matrix.suffix }} ComfyPromptViewer-${{ matrix.target }}${{ matrix.suffix }}
@@ -62,7 +62,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: ComfyPromptViewer-${{ matrix.target }}
-        path: src/ComfyPromptViewer/bin/Release/net9.0/${{ matrix.target }}/publish/ComfyPromptViewer-${{ matrix.target }}${{ matrix.suffix }}
+        path: src/ComfyPromptViewer/bin/Release/net10.0/${{ matrix.target }}/publish/ComfyPromptViewer-${{ matrix.target }}${{ matrix.suffix }}
         retention-days: 14
 
   release:

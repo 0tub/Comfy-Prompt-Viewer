@@ -20,12 +20,12 @@ dotnet publish "$PROJECT_PATH" \
 
 if [ $? -eq 0 ]; then
     # Clean up third-party PDB symbol files and native libraries copied into the publish directory
-    rm -f src/ComfyPromptViewer/bin/Release/net9.0/linux-x64/publish/*.pdb
-    rm -f src/ComfyPromptViewer/bin/Release/net9.0/linux-x64/publish/*.so
+    rm -f src/ComfyPromptViewer/bin/Release/net10.0/linux-x64/publish/*.pdb
+    rm -f src/ComfyPromptViewer/bin/Release/net10.0/linux-x64/publish/*.so
     
     echo -e "\nPublish completed successfully!"
     echo "Your standalone executable is located at:"
-    echo "src/ComfyPromptViewer/bin/Release/net9.0/linux-x64/publish/ComfyPromptViewer"
+    echo "src/ComfyPromptViewer/bin/Release/net10.0/linux-x64/publish/ComfyPromptViewer"
 else
     echo "Publish failed. Please check the logs above."
     exit 1

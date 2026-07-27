@@ -7,6 +7,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
+using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 
 namespace ComfyPromptViewer;
@@ -738,15 +739,16 @@ public partial class MainWindow
             }
             else
             {
-                var dir = Path.GetDirectoryName(filePath);
-                if (dir is not null)
+                // Windows and macOS above reveal-and-select, which no cross-platform API exposes. Everywhere
+                // else the best available behavior is opening the containing folder, and that is exactly
+                // what ILauncher does without shelling out to xdg-open.
+                var dir = Path.GetDirectoryName(Path.GetFullPath(filePath));
+                var launcher = TopLevel.GetTopLevel(this)?.Launcher;
+                if (dir is not null && launcher is not null)
                 {
-                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-                    {
-                        FileName = "xdg-open",
-                        Arguments = $"\"{dir}\"",
-                        UseShellExecute = true
-                    });
+                    DebugLog.Observe(
+                        launcher.LaunchDirectoryInfoAsync(new DirectoryInfo(dir)),
+                        $"Open containing folder for {filePath}");
                 }
             }
         }

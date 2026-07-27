@@ -19,11 +19,11 @@ dotnet publish $projectPath `
 
 if ($LASTEXITCODE -eq 0) {
     # Clean up third-party PDB symbol files copied into the publish directory
-    Get-ChildItem -Path "src\ComfyPromptViewer\bin\Release\net9.0\win-x64\publish\*.pdb" -ErrorAction SilentlyContinue | Remove-Item -Force
+    Get-ChildItem -Path "src\ComfyPromptViewer\bin\Release\net10.0\win-x64\publish\*.pdb" -ErrorAction SilentlyContinue | Remove-Item -Force
 
     Write-Host "`nPublish completed successfully!" -ForegroundColor Green
     Write-Host "Your standalone executable is located at:" -ForegroundColor Yellow
-    Write-Host "src\ComfyPromptViewer\bin\Release\net9.0\win-x64\publish\ComfyPromptViewer.exe" -ForegroundColor Cyan
+    Write-Host "src\ComfyPromptViewer\bin\Release\net10.0\win-x64\publish\ComfyPromptViewer.exe" -ForegroundColor Cyan
 } else {
     Write-Error "Publish failed. If you get a file access lock error, make sure the application is closed and try again."
 }

@@ -11,6 +11,7 @@ using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml.MarkupExtensions;
 using Avalonia.Media;
+using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 
@@ -117,13 +118,20 @@ public partial class MainWindow
         }
     }
 
-    private void OpenAppDataButton_Click(object? sender, RoutedEventArgs e)
+    private async void OpenAppDataButton_Click(object? sender, RoutedEventArgs e)
     {
         try
         {
             Directory.CreateDirectory(_thumbnailService.CacheRootDirectory);
-            OpenFolderInFileManager(AppPaths.LocalDataDirectory);
-            ShowAdvancedMaintenanceStatus("App data folder opened.");
+            if (await OpenFolderInFileManagerAsync(AppPaths.LocalDataDirectory))
+            {
+                ShowAdvancedMaintenanceStatus("App data folder opened.");
+            }
+            else
+            {
+                ClearAdvancedMaintenanceStatus();
+                ShowMenuError("Could not open the app data folder.");
+            }
         }
         catch (Exception ex)
         {
@@ -201,30 +209,18 @@ public partial class MainWindow
         MenuErrorBanner.Opacity = 1;
     }
 
-    private static void OpenFolderInFileManager(string folderPath)
+    // ILauncher is the platform's own "hand this to the default handler" path, so there is no
+    // explorer.exe / open / xdg-open branching to keep in sync, and no UseShellExecute behavior to
+    // reason about under single-file publish.
+    private async Task<bool> OpenFolderInFileManagerAsync(string folderPath)
     {
-        if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows))
+        var launcher = TopLevel.GetTopLevel(this)?.Launcher;
+        if (launcher is null)
         {
-            System.Diagnostics.Process.Start("explorer.exe", Path.GetFullPath(folderPath));
+            return false;
         }
-        else if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.OSX))
-        {
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = "open",
-                Arguments = $"\"{folderPath}\"",
-                UseShellExecute = true
-            });
-        }
-        else
-        {
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = "xdg-open",
-                Arguments = $"\"{folderPath}\"",
-                UseShellExecute = true
-            });
-        }
+
+        return await launcher.LaunchDirectoryInfoAsync(new DirectoryInfo(Path.GetFullPath(folderPath)));
     }
 
     // Recent-folder rows are built in code, so they need the same DynamicResource lookup the XAML gets.
