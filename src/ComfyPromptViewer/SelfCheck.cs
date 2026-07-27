@@ -49,12 +49,14 @@ internal static class SelfCheck
         CheckMetadataFailureClassification();
         CheckThumbnailCacheWriteBackpressure();
         CheckDeferredThumbnailCacheWriteQueue();
+        CheckDeferredThumbnailCacheWriteGivesUpAfterFailure();
         CheckDeferredThumbnailCacheWritePause();
         CheckThumbnailPrefetchPolicy();
         CheckRetainedViewportWindow();
         CheckSelectedPreviewDecodeWidth();
         CheckSelectedPreviewFailureIsObservable();
         CheckJpegThumbnailEncoding();
+        CheckLongPathJpegThumbnailEncoding();
         CheckThumbnailPackRoundTrip();
         CheckThumbnailFolderScopeIdentity();
         CheckFolderThumbnailCacheIsolation();
@@ -1069,6 +1071,33 @@ internal static class SelfCheck
         }
     }
 
+    // The deferred queue refills from the viewport on every scroll pass, so a source that cannot be encoded
+    // has to be given up on. Retrying it was writing an identical log line per pass, dozens per minute.
+    private static void CheckDeferredThumbnailCacheWriteGivesUpAfterFailure()
+    {
+        var item = CreateImageItem(
+            Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}-missing.png"));
+        var failingKey = NewThumbnailKey("give-up-failing");
+
+        Check(ItemThumbnailService.TryQueueCacheWrite(item, failingKey),
+            "Expected the first deferred thumbnail cache write to queue.");
+        DrainThumbnailCacheWrites();
+        Check(!ItemThumbnailService.TryQueueCacheWrite(item, failingKey),
+            "Expected a deferred thumbnail cache write that already failed not to be queued again.");
+
+        // Only the attempt that failed is remembered. A replaced file or a resized tile yields a different
+        // key, and that has to get a real attempt rather than inherit the give-up.
+        Check(ItemThumbnailService.TryQueueCacheWrite(item, NewThumbnailKey("give-up-retry")),
+            "Expected a different thumbnail key for the same item to still be attempted.");
+        DrainThumbnailCacheWrites();
+    }
+
+    private static void DrainThumbnailCacheWrites()
+    {
+        ItemThumbnailService.PauseAndDrainWritesAsync().GetAwaiter().GetResult();
+        ItemThumbnailService.ResumeWrites();
+    }
+
     private static void CheckDeferredThumbnailCacheWritePause()
     {
         var activeKey = NewThumbnailKey("pause-active");
@@ -1435,17 +1464,45 @@ internal static class SelfCheck
         var sourcePath = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}.png");
         try
         {
-            File.WriteAllBytes(sourcePath, Convert.FromBase64String(
-                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="));
-            var encoded = ThumbnailService.EncodeJpegThumbnail(sourcePath, thumbnailWidth: 180);
-            Check(encoded.Length > 3 && encoded[0] == 0xff && encoded[1] == 0xd8 && encoded[2] == 0xff,
-                "Expected thumbnail cache output to contain a JPEG signature.");
+            File.WriteAllBytes(sourcePath, TinyPngBytes);
+            CheckEncodesToJpeg(sourcePath, "Expected thumbnail cache output to contain a JPEG signature.");
         }
         finally
         {
             TryDelete(sourcePath);
         }
     }
+
+    // Prompt-named generator output nests deep enough to pass MAX_PATH, and Skia's by-name file open silently
+    // fails there while every managed decode on the same file succeeds - so only the cache write broke, once
+    // per scroll pass, forever. The encode has to work from a path this long.
+    // Run this one from ComfyPromptViewer.exe, not `dotnet ComfyPromptViewer.dll`: the dotnet host's manifest
+    // is longPathAware, so under it even the broken by-name open succeeds and this check cannot fail.
+    private static void CheckLongPathJpegThumbnailEncoding()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}");
+        var sourcePath = Path.Combine(root, new string('d', 120), new string('e', 120), "thumbnail-source.png");
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
+            Check(sourcePath.Length > 260, "Expected the long-path fixture to exceed MAX_PATH.");
+            File.WriteAllBytes(sourcePath, TinyPngBytes);
+            CheckEncodesToJpeg(sourcePath, "Expected a source path past MAX_PATH to still encode a thumbnail.");
+        }
+        finally
+        {
+            DeleteDirectoryQuietly(root);
+        }
+    }
+
+    private static void CheckEncodesToJpeg(string sourcePath, string message)
+    {
+        var encoded = ThumbnailService.EncodeJpegThumbnail(sourcePath, thumbnailWidth: 180);
+        Check(encoded.Length > 3 && encoded[0] == 0xff && encoded[1] == 0xd8 && encoded[2] == 0xff, message);
+    }
+
+    private static byte[] TinyPngBytes => Convert.FromBase64String(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
 
     private static void TryDelete(string path)
     {

@@ -25,6 +25,9 @@ internal sealed class ThumbnailService : IDisposable
     private readonly SemaphoreSlim _maintenanceLock = new(1, 1);
     private readonly object _pendingWritesLock = new();
     private readonly HashSet<ScopedThumbnailKey> _pendingWrites = [];
+    // Writes that already threw. The queue refills from the viewport on every scroll pass, so without this a
+    // single unencodable file re-runs a full decode and writes an identical log line forever.
+    private readonly HashSet<ScopedThumbnailKey> _failedWrites = [];
     private readonly Queue<ThumbnailCacheWrite> _deferredWrites = new();
     private volatile ThumbnailFolderScope? _activeScope;
     private Func<bool>? _writesPaused;
@@ -215,7 +218,7 @@ internal sealed class ThumbnailService : IDisposable
     {
         try
         {
-            using var codec = SKCodec.Create(sourcePath);
+            using var codec = CreateCodec(sourcePath);
             return codec is null ? (0, 0) : (codec.Info.Width, codec.Info.Height);
         }
         catch (Exception ex)
@@ -237,7 +240,7 @@ internal sealed class ThumbnailService : IDisposable
         var scopedKey = new ScopedThumbnailKey(scope, key);
         lock (_pendingWritesLock)
         {
-            if (_maintenancePaused || !_pendingWrites.Add(scopedKey))
+            if (_maintenancePaused || _failedWrites.Contains(scopedKey) || !_pendingWrites.Add(scopedKey))
             {
                 return false;
             }
@@ -332,6 +335,11 @@ internal sealed class ThumbnailService : IDisposable
         try
         {
             await PauseAndDrainWritesAsync();
+            lock (_pendingWritesLock)
+            {
+                _failedWrites.Clear();
+            }
+
             var active = _activeScope;
             active?.Pack.Clear();
             await Task.Run(() =>
@@ -463,6 +471,10 @@ internal sealed class ThumbnailService : IDisposable
     // the prewarm pass that filled it.
     private void RemoveDeferredWritesForScopeLocked(ThumbnailFolderScope scope)
     {
+        // Retiring or clearing a folder resets what is known about it, so its failures are forgotten too and
+        // reopening the folder attempts them again.
+        _failedWrites.RemoveWhere(failed => failed.Scope == scope);
+
         var pending = _deferredWrites.Count;
         for (var index = 0; index < pending; index++)
         {
@@ -534,13 +546,29 @@ internal sealed class ThumbnailService : IDisposable
             }
             catch (Exception ex)
             {
-                DebugLog.Write($"Failed to write deferred thumbnail cache for {write.Item.Path}: {ex.Message}");
+                if (RecordWriteFailure(write.Scope, write.Key))
+                {
+                    DebugLog.Write($"Failed to write deferred thumbnail cache for {write.Item.Path}: {ex.Message}");
+                }
             }
             finally
             {
                 EndCacheWrite(write.Scope, write.Key);
             }
         }), "Deferred thumbnail cache writer");
+    }
+
+    // Returns true only for the first failure of a given attempt, which is what keeps one broken file to one
+    // log line. The key covers the source's write time and the decode width, so a file that is replaced on
+    // disk - or a tile that changes size - produces a different key and gets a real retry; a transient failure
+    // on an unchanged file is the one case this deliberately does not retry, because it cannot tell that case
+    // from a permanently unreadable source and retrying forever is what caused the flood.
+    private bool RecordWriteFailure(ThumbnailFolderScope scope, in ThumbnailKey key)
+    {
+        lock (_pendingWritesLock)
+        {
+            return _failedWrites.Add(new ScopedThumbnailKey(scope, key));
+        }
     }
 
     private bool ShouldPauseWrites()
@@ -559,7 +587,7 @@ internal sealed class ThumbnailService : IDisposable
     // Bytes only; durability is the pack's problem, so no temp file or atomic move per thumbnail.
     internal static byte[] EncodeJpegThumbnail(string sourcePath, int thumbnailWidth)
     {
-        using var codec = SKCodec.Create(sourcePath)
+        using var codec = CreateCodec(sourcePath)
             ?? throw new InvalidDataException($"Could not open thumbnail source {sourcePath}.");
         var sourceInfo = codec.Info;
         var width = Math.Min(sourceInfo.Width, thumbnailWidth);
@@ -583,6 +611,25 @@ internal sealed class ThumbnailService : IDisposable
         using var data = image.Encode(SKEncodedImageFormat.Jpeg, ThumbnailJpegQuality)
             ?? throw new InvalidDataException($"Could not encode JPEG thumbnail for {sourcePath}.");
         return data.ToArray();
+    }
+
+    // Never SKCodec.Create(path). That opens the file by name through Skia's native file stream, so it is
+    // capped at MAX_PATH unless the process manifest is longPathAware and the machine has long paths enabled
+    // - neither of which holds for the shipped exe - and it reports the cap as a plain null. Prompt-named
+    // generator output clears 260 characters routinely, which is why those files decoded fine for display
+    // (every other read here goes through a managed FileStream, and .NET applies the \\?\ prefix itself)
+    // while the cache write failed on each pass. Handing Skia a managed stream puts this read on the same
+    // footing. The codec adopts the stream, and disposes it itself if creation fails.
+    private static SKCodec? CreateCodec(string sourcePath)
+    {
+        var stream = new SKManagedStream(File.OpenRead(sourcePath), disposeManagedStream: true);
+        var codec = SKCodec.Create(stream);
+        if (codec is null)
+        {
+            stream.Dispose();
+        }
+
+        return codec;
     }
 
     private bool TryDequeue(out ThumbnailCacheWrite write)
