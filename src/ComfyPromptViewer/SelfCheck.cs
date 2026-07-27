@@ -1265,26 +1265,43 @@ internal static class SelfCheck
     {
         var item = CreateImageItem(Path.Combine(Path.GetTempPath(), "decode-width-selfcheck.png"));
 
-        // Every tile size must decode close to its render size, never far above it.
-        foreach (var tileSize in new double[] { 80, 100, 120, 160, 200, 240, 320 })
+        // Across every tile size and every DPI the app is likely to meet, the decode must cover the tile's
+        // real pixel width without running far past it.
+        foreach (var renderScaling in new[] { 1.0, 1.25, 1.5, 2.0 })
         {
-            item.SetTileSize(tileSize);
-            var decodeWidth = item.GetThumbnailDecodeWidth();
-            Check(decodeWidth >= tileSize,
-                $"Expected the decode width for tile size {tileSize} to cover the rendered tile.");
-            Check(decodeWidth <= tileSize * 2,
-                $"Expected the decode width for tile size {tileSize} to stay within twice the rendered tile.");
+            foreach (var tileSize in new double[] { 80, 100, 120, 160, 200, 240, 320 })
+            {
+                item.SetTileSize(tileSize, renderScaling);
+                var decodeWidth = item.GetThumbnailDecodeWidth();
+                var physicalWidth = tileSize * renderScaling;
+
+                Check(decodeWidth >= physicalWidth,
+                    $"Expected the decode width for tile size {tileSize} at {renderScaling}x to cover the rendered tile.");
+                Check(decodeWidth <= physicalWidth * 2,
+                    $"Expected the decode width for tile size {tileSize} at {renderScaling}x to stay within twice the rendered tile.");
+            }
         }
 
-        item.SetTileSize(80);
+        // At 100% the buckets are unchanged from the pre-DPI-aware ladder for the tile sizes that mattered.
+        item.SetTileSize(80, 1.0);
         Check(item.GetThumbnailDecodeWidth() == 120,
             "Expected the smallest tile size to use the tiny decode bucket.");
-        item.SetTileSize(120);
-        Check(item.GetThumbnailDecodeWidth() == 180,
-            "Expected the default tile size to keep its existing decode bucket.");
-        item.SetTileSize(320);
+        item.SetTileSize(320, 1.0);
         Check(item.GetThumbnailDecodeWidth() == 320,
             "Expected the largest tile size to use the large decode bucket.");
+
+        // A HiDPI display must climb the ladder rather than decode a tile at less than its pixel width.
+        item.SetTileSize(120, 2.0);
+        Check(item.GetThumbnailDecodeWidth() == 240,
+            "Expected a 120 tile on a 200% display to decode at its 240px physical width.");
+        item.SetTileSize(320, 2.0);
+        Check(item.GetThumbnailDecodeWidth() == 640,
+            "Expected a 320 tile on a 200% display to reach the largest decode bucket.");
+
+        // Scaling is clamped, so an absurd DPI cannot ask for an unbounded decode.
+        item.SetTileSize(320, 16.0);
+        Check(item.GetThumbnailDecodeWidth() == 640,
+            "Expected extreme render scaling to clamp to the largest decode bucket.");
     }
 
     private static void CheckJpegThumbnailEncoding()

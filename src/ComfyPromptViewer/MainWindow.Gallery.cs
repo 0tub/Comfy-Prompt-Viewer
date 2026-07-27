@@ -747,7 +747,7 @@ public partial class MainWindow
             for (var index = Math.Max(0, startIndex); index <= endIndex; index++)
             {
                 var item = _viewModel.Items[index];
-                item.SetTileSize(_tileSize);
+                item.SetTileSize(_tileSize, _renderScaling);
                 target.Add(item);
             }
         }

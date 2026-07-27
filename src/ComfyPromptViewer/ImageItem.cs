@@ -13,11 +13,17 @@ namespace ComfyPromptViewer;
 
 public sealed class ImageItem : INotifyPropertyChanged
 {
+    // Buckets are physical-pixel widths. The top two only come into play on HiDPI displays: a 320 DIP tile
+    // needs 640 real pixels at 200% scaling, and decoding 320 there is the blur this ladder exists to avoid.
     private const int TinyThumbnailWidth = 120;
     private const int SmallThumbnailWidth = 180;
     private const int MediumThumbnailWidth = 240;
     private const int LargeThumbnailWidth = 320;
-    private const double ThumbnailDecodeScale = 1.5;
+    private const int HugeThumbnailWidth = 480;
+    private const int MaxThumbnailWidth = 640;
+    // Scaling above this decodes at the cap instead; past 320 DIP tiles on a 200% display the extra pixels
+    // cost more cache than they buy.
+    private const double MaxThumbnailRenderScaling = 4.0;
 
     private Bitmap? _preview;
     private Bitmap? _selectedPreview;
@@ -47,6 +53,7 @@ public sealed class ImageItem : INotifyPropertyChanged
     private Task<MetadataLoadResult>? _metadataLoadTask;
     private int _realizedCount;
     private double _tileSize;
+    private double _renderScaling = 1.0;
     private Task? _selectedPreviewLoadTask;
     private string? _creationDateText;
     private bool _hasLoggedThumbnailError;
@@ -258,14 +265,17 @@ public sealed class ImageItem : INotifyPropertyChanged
         private set => SetField(ref _resources, value);
     }
 
-    public void SetTileSize(double tileSize)
+    // Render scaling rides along with tile size because both feed the same decode-width decision and both
+    // are only worth re-aligning for items the window is about to show.
+    public void SetTileSize(double tileSize, double renderScaling)
     {
-        if (Math.Abs(_tileSize - tileSize) < 0.1)
+        if (Math.Abs(_tileSize - tileSize) < 0.1 && Math.Abs(_renderScaling - renderScaling) < 0.01)
         {
             return;
         }
 
         _tileSize = tileSize;
+        _renderScaling = renderScaling;
     }
 
     public bool IsSelected
@@ -661,10 +671,11 @@ public sealed class ImageItem : INotifyPropertyChanged
 
     internal int GetThumbnailDecodeWidth()
     {
-        // Buckets track ThumbnailDecodeScale closely so a tile never decodes far wider than it renders.
-        // Without the tiny bucket the smallest tiles decoded at 180px, over twice their display width,
-        // which is what pushes the decoded cache past its byte budget when many tiles are visible.
-        var targetWidth = (int)Math.Ceiling(_tileSize * ThumbnailDecodeScale);
+        // The target is the tile's width in real device pixels, which is what the renderer actually samples.
+        // The bucket ladder rounds that up, so a tile never decodes far wider than it draws and a tile-size
+        // or DPI change lands on a stable cache key instead of a new width per pixel.
+        var targetWidth = (int)Math.Ceiling(_tileSize * Math.Clamp(_renderScaling, 1.0, MaxThumbnailRenderScaling));
+
         if (targetWidth <= TinyThumbnailWidth)
         {
             return TinyThumbnailWidth;
@@ -675,7 +686,17 @@ public sealed class ImageItem : INotifyPropertyChanged
             return SmallThumbnailWidth;
         }
 
-        return targetWidth <= MediumThumbnailWidth ? MediumThumbnailWidth : LargeThumbnailWidth;
+        if (targetWidth <= MediumThumbnailWidth)
+        {
+            return MediumThumbnailWidth;
+        }
+
+        if (targetWidth <= LargeThumbnailWidth)
+        {
+            return LargeThumbnailWidth;
+        }
+
+        return targetWidth <= HugeThumbnailWidth ? HugeThumbnailWidth : MaxThumbnailWidth;
     }
 
     // One pack-index lookup, so there is no cached existence state to keep fresh.

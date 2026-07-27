@@ -192,7 +192,7 @@ public partial class MainWindow
                 break;
             }
 
-            item.SetTileSize(_tileSize);
+            item.SetTileSize(_tileSize, _renderScaling);
             if (!item.HasCachedThumbnail())
             {
                 pending.Add(item);

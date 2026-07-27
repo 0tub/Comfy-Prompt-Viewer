@@ -80,6 +80,9 @@ public partial class MainWindow : Window
     private double _targetTileSize;
     private double _tileSize;
     private double _tileItemExtent;
+    // Physical pixels per DIP for the display this window is on. Feeds the thumbnail decode bucket, so a
+    // 120 DIP tile on a 200% monitor decodes 240px instead of a soft 180.
+    private double _renderScaling = 1.0;
     private bool _isInitializing = true;
     private bool _isViewportThumbnailScheduleQueued;
     private bool _thumbnailCacheClearInProgress;
@@ -146,6 +149,8 @@ public partial class MainWindow : Window
 
         _isInitializing = false;
         RestoreWindowPlacement();
+        _renderScaling = GetCurrentRenderScaling();
+        this.ScalingChanged += Window_ScalingChanged;
         this.SizeChanged += Window_SizeChanged;
         this.SizeChanged += Window_SizeChangedTrackPlacement;
         this.PositionChanged += Window_PositionChanged;
@@ -224,6 +229,26 @@ public partial class MainWindow : Window
         {
             _normalWindowPosition = e.Point;
         }
+    }
+
+    private double GetCurrentRenderScaling()
+    {
+        var scaling = RenderScaling;
+        return double.IsFinite(scaling) && scaling > 0 ? scaling : 1.0;
+    }
+
+    // Dragging the window to a monitor with different DPI changes how many real pixels a tile occupies, so
+    // the decode buckets have to be re-aligned and the viewport rescheduled at the new width.
+    private void Window_ScalingChanged(object? sender, EventArgs e)
+    {
+        var scaling = GetCurrentRenderScaling();
+        if (Math.Abs(_renderScaling - scaling) < 0.01)
+        {
+            return;
+        }
+
+        _renderScaling = scaling;
+        QueueViewportThumbnailSchedule(force: true);
     }
 
     private void Window_SizeChangedTrackPlacement(object? sender, SizeChangedEventArgs e)
