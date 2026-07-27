@@ -73,34 +73,78 @@ public partial class MainWindow
         }
     }
 
-    private async void ClearCacheButton_Click(object? sender, RoutedEventArgs e)
+    // Only the open folder's pack. Its thumbnails go; every other folder's cache is untouched, which is the
+    // whole point of the per-folder layout.
+    private async void ClearFolderCacheButton_Click(object? sender, RoutedEventArgs e)
     {
         if (_thumbnailCacheClearInProgress)
         {
             return;
         }
 
-        _thumbnailCacheClearInProgress = true;
+        if (_folderCacheScope is not { IsRetired: false } scope)
+        {
+            ShowFolderCacheStatus("No folder cache to clear.");
+            return;
+        }
+
+        SetCacheMaintenanceEnabled(false);
         _thumbnailLoads.Clear();
         try
         {
             _decodedImageCache.ClearAndReleaseAll();
-            // Two file truncations regardless of cache size, and no per-item state to invalidate: every
-            // item resolves "is this cached" through the pack index, which is now empty.
-            await _thumbnailService.ClearCacheAsync();
-            ShowAdvancedMaintenanceStatus("Thumbnail cache cleared.");
+            await _thumbnailService.ClearFolderCacheAsync(scope);
+            ShowFolderCacheStatus("Folder thumbnail cache cleared.");
         }
         catch (Exception ex)
         {
-            DebugLog.Write($"Failed to clear thumbnail cache: {ex}");
+            DebugLog.Write($"Failed to clear folder thumbnail cache: {ex}");
+            ShowFolderCacheStatus($"Could not clear folder cache: {ex.Message}");
+        }
+        finally
+        {
+            SetCacheMaintenanceEnabled(true);
+            // The decoded bitmaps just went with the pack entries, so the visible tiles have to be reloaded.
+            QueueViewportThumbnailSchedule(force: true);
+        }
+    }
+
+    private async void ClearAllCachesButton_Click(object? sender, RoutedEventArgs e)
+    {
+        if (_thumbnailCacheClearInProgress)
+        {
+            return;
+        }
+
+        SetCacheMaintenanceEnabled(false);
+        _thumbnailLoads.Clear();
+        try
+        {
+            _decodedImageCache.ClearAndReleaseAll();
+            // Two file truncations for the open folder, plus a directory delete per other folder cache and
+            // the pre-upgrade global pack. No per-item state to invalidate: every item resolves "is this
+            // cached" through its folder's pack index.
+            await _thumbnailService.ClearAllCachesAsync();
+            ShowAdvancedMaintenanceStatus("All thumbnail caches cleared.");
+        }
+        catch (Exception ex)
+        {
+            DebugLog.Write($"Failed to clear thumbnail caches: {ex}");
             ClearAdvancedMaintenanceStatus();
             ShowMenuError($"Could not clear cache: {ex.Message}");
         }
         finally
         {
-            _thumbnailCacheClearInProgress = false;
+            SetCacheMaintenanceEnabled(true);
             QueueViewportThumbnailSchedule(force: true);
         }
+    }
+
+    private void SetCacheMaintenanceEnabled(bool isEnabled)
+    {
+        _thumbnailCacheClearInProgress = !isEnabled;
+        ClearFolderCacheButton.IsEnabled = isEnabled;
+        ClearAllCachesButton.IsEnabled = isEnabled;
     }
 
     private void ClearMetadataCacheButton_Click(object? sender, RoutedEventArgs e)
@@ -141,30 +185,44 @@ public partial class MainWindow
         }
     }
 
-    private async void ShowAdvancedMaintenanceStatus(string message)
-    {
-        var session = _advancedMaintenanceStatusGate.Restart();
+    private void ShowAdvancedMaintenanceStatus(string message) =>
+        ShowTransientStatus(AdvancedMaintenanceStatus, _advancedMaintenanceStatusGate, message);
 
-        AdvancedMaintenanceStatus.Text = message;
-        AdvancedMaintenanceStatus.Opacity = 0;
-        AdvancedMaintenanceStatus.IsVisible = true;
+    private void ClearAdvancedMaintenanceStatus() =>
+        ClearTransientStatus(AdvancedMaintenanceStatus, _advancedMaintenanceStatusGate);
+
+    private void ShowFolderCacheStatus(string message) =>
+        ShowTransientStatus(FolderCacheStatus, _folderCacheStatusGate, message);
+
+    private void ClearFolderCacheStatus() =>
+        ClearTransientStatus(FolderCacheStatus, _folderCacheStatusGate);
+
+    // Fades a label in, holds it, fades it out. The gate is per label, so the maintenance panel and the
+    // folder-cache control can each be showing their own message without cancelling the other's.
+    private static async void ShowTransientStatus(TextBlock status, SessionGate gate, string message)
+    {
+        var session = gate.Restart();
+
+        status.Text = message;
+        status.Opacity = 0;
+        status.IsVisible = true;
         await Task.Yield();
         if (session.IsStale)
         {
             return;
         }
 
-        AdvancedMaintenanceStatus.Opacity = 1;
+        status.Opacity = 1;
 
         try
         {
-            await Task.Delay(AdvancedMaintenanceStatusDuration, session.Token);
-            AdvancedMaintenanceStatus.Opacity = 0;
-            await Task.Delay(120, session.Token);
+            await Task.Delay(TransientStatusDuration, session.Token);
+            status.Opacity = 0;
+            await Task.Delay(TransientStatusFadeDuration, session.Token);
             if (session.IsCurrent)
             {
-                AdvancedMaintenanceStatus.IsVisible = false;
-                AdvancedMaintenanceStatus.Text = "";
+                status.IsVisible = false;
+                status.Text = "";
             }
         }
         catch (OperationCanceledException)
@@ -172,12 +230,12 @@ public partial class MainWindow
         }
     }
 
-    private void ClearAdvancedMaintenanceStatus()
+    private static void ClearTransientStatus(TextBlock status, SessionGate gate)
     {
-        _advancedMaintenanceStatusGate.Cancel();
-        AdvancedMaintenanceStatus.Opacity = 0;
-        AdvancedMaintenanceStatus.IsVisible = false;
-        AdvancedMaintenanceStatus.Text = "";
+        gate.Cancel();
+        status.Opacity = 0;
+        status.IsVisible = false;
+        status.Text = "";
     }
 
     private void ShowMainMenu()
@@ -191,6 +249,11 @@ public partial class MainWindow
         SelectItem(null);
         ClearImageItems();
         _currentFolderPath = null;
+        // Detached synchronously; only the drain and the pack close finish in the background, so a folder
+        // reopened immediately cannot adopt this scope.
+        _folderCacheScope = null;
+        DebugLog.Observe(_thumbnailService.RetireFolderScopeAsync(), "Thumbnail folder scope retirement");
+        ClearFolderCacheStatus();
         HeaderBorder.IsVisible = false;
         MainMenu.IsVisible = true;
         
@@ -436,11 +499,11 @@ public partial class MainWindow
             _prewarmRemaining = 0;
             _prewarmTotal = 0;
             UpdateCountText();
-            ShowAdvancedMaintenanceStatus("Thumbnail prewarming off.");
+            ShowAdvancedMaintenanceStatus("Background thumbnail caching off.");
             return;
         }
 
-        ShowAdvancedMaintenanceStatus("Thumbnail prewarming on.");
+        ShowAdvancedMaintenanceStatus("Background thumbnail caching on.");
         if (_catalog.Count > 0 &&
             _folderLoader.CurrentToken is { IsCancellationRequested: false } token)
         {

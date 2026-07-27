@@ -18,7 +18,8 @@ It supports images from ComfyUI, Forge Neo, Draw Things, and Stable Diffusion We
 - Sort by date or filename, switch color themes, and quickly reopen recent folders.
 - Drag the divider to resize the metadata sidebar; window size, position, and sidebar width are remembered between runs.
 - Watch the active folder for created, modified, renamed, or removed images.
-- Cache thumbnails and parsed metadata locally for faster repeat browsing, with optional background prewarming of the whole folder.
+- Cache thumbnails and parsed metadata locally for faster repeat browsing, optionally caching the whole folder's thumbnails in the background.
+- Clear cached thumbnails for just the folder you are viewing, or for every folder at once.
 
 ## Search Syntax
 

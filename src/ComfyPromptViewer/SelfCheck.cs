@@ -17,6 +17,11 @@ internal static class SelfCheck
     private static readonly DecodedImageCache ItemDecodedImageCache = new();
     private static readonly ThumbnailService ItemThumbnailService =
         new(Path.Combine(Path.GetTempPath(), "comfypromptviewer-selfcheck-items"));
+    private static readonly ThumbnailFolderScope ItemThumbnailScope =
+        ItemThumbnailService
+            .OpenFolderScopeAsync(Path.Combine(Path.GetTempPath(), "comfypromptviewer-selfcheck-scope"))
+            .GetAwaiter()
+            .GetResult();
 
     public static void Run()
     {
@@ -51,6 +56,8 @@ internal static class SelfCheck
         CheckSelectedPreviewFailureIsObservable();
         CheckJpegThumbnailEncoding();
         CheckThumbnailPackRoundTrip();
+        CheckThumbnailFolderScopeIdentity();
+        CheckFolderThumbnailCacheIsolation();
         CheckThumbnailCacheBudget();
         CheckThumbnailDecodeWidths();
         CheckSidebarWidthClamping();
@@ -1007,7 +1014,8 @@ internal static class SelfCheck
             tileSize: 120,
             metadataService: ItemMetadataService,
             decodedImageCache: ItemDecodedImageCache,
-            thumbnailService: ItemThumbnailService);
+            thumbnailService: ItemThumbnailService,
+            cacheScope: ItemThumbnailScope);
     }
 
     private static SourceFingerprint GetFingerprint(string path)
@@ -1026,14 +1034,14 @@ internal static class SelfCheck
         var firstKey = NewThumbnailKey("backpressure-1");
         var secondKey = NewThumbnailKey("backpressure-2");
 
-        Check(ItemThumbnailService.TryBeginCacheWrite(firstKey), "Expected first thumbnail cache write slot.");
+        Check(ItemThumbnailService.TryBeginCacheWrite(ItemThumbnailScope, firstKey), "Expected first thumbnail cache write slot.");
         try
         {
-            Check(!ItemThumbnailService.TryBeginCacheWrite(secondKey), "Expected busy thumbnail cache writer to reject queued writes.");
+            Check(!ItemThumbnailService.TryBeginCacheWrite(ItemThumbnailScope, secondKey), "Expected busy thumbnail cache writer to reject queued writes.");
         }
         finally
         {
-            ItemThumbnailService.EndCacheWrite(firstKey);
+            ItemThumbnailService.EndCacheWrite(ItemThumbnailScope, firstKey);
         }
     }
 
@@ -1043,7 +1051,7 @@ internal static class SelfCheck
         var deferredKey = NewThumbnailKey("queue-deferred");
         var item = CreateImageItem(Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}-missing.png"));
 
-        Check(ItemThumbnailService.TryBeginCacheWrite(activeKey), "Expected active thumbnail cache write slot.");
+        Check(ItemThumbnailService.TryBeginCacheWrite(ItemThumbnailScope, activeKey), "Expected active thumbnail cache write slot.");
         try
         {
             var queuedBefore = ItemThumbnailService.PendingWriteCount;
@@ -1057,7 +1065,7 @@ internal static class SelfCheck
         }
         finally
         {
-            ItemThumbnailService.EndCacheWrite(activeKey);
+            ItemThumbnailService.EndCacheWrite(ItemThumbnailScope, activeKey);
         }
     }
 
@@ -1071,8 +1079,8 @@ internal static class SelfCheck
         try
         {
             Check(ItemThumbnailService.TryQueueCacheWrite(item, deferredKey), "Expected paused deferred thumbnail cache write to queue.");
-            Check(ItemThumbnailService.TryBeginCacheWrite(activeKey), "Expected paused deferred thumbnail cache writer not to take active slot.");
-            ItemThumbnailService.EndCacheWrite(activeKey);
+            Check(ItemThumbnailService.TryBeginCacheWrite(ItemThumbnailScope, activeKey), "Expected paused deferred thumbnail cache writer not to take active slot.");
+            ItemThumbnailService.EndCacheWrite(ItemThumbnailScope, activeKey);
             ItemThumbnailService.ClearDeferredWrites();
         }
         finally
@@ -1249,6 +1257,124 @@ internal static class SelfCheck
         finally
         {
             DeleteDirectoryQuietly(directory);
+        }
+    }
+
+    // The scope directory is derived from the folder path, so any two spellings a user can reach the same
+    // folder by have to collapse to one cache. A miss here silently builds a second cache for the folder.
+    private static void CheckThumbnailFolderScopeIdentity()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "comfypromptviewer-selfcheck-scope-identity");
+        var plain = ThumbnailFolderScope.NormalizeFolderPath(root);
+
+        Check(ThumbnailFolderScope.NormalizeFolderPath(root + Path.DirectorySeparatorChar) == plain,
+            "Expected a trailing separator to resolve to the same folder cache scope.");
+        Check(ThumbnailFolderScope.NormalizeFolderPath(root + Path.DirectorySeparatorChar + Path.DirectorySeparatorChar) == plain,
+            "Expected repeated trailing separators to resolve to the same folder cache scope.");
+
+        if (OperatingSystem.IsWindows())
+        {
+            Check(ThumbnailFolderScope.NormalizeFolderPath(root.ToUpperInvariant()) == plain,
+                "Expected Windows path casing to resolve to the same folder cache scope.");
+        }
+
+        // A root path has nothing to trim, and trimming it to nothing would collapse every drive together.
+        var systemRoot = Path.GetPathRoot(Path.GetTempPath());
+        if (!string.IsNullOrEmpty(systemRoot))
+        {
+            Check(ThumbnailFolderScope.NormalizeFolderPath(systemRoot).Length > 0,
+                "Expected a filesystem root to normalize to a non-empty folder cache scope key.");
+        }
+
+        // A nested folder opened as its own root is deliberately its own cache.
+        Check(ThumbnailFolderScope.NormalizeFolderPath(Path.Combine(root, "nested")) != plain,
+            "Expected a nested folder opened as its own root to get its own cache scope.");
+
+        // The directory name carries the folder name so the app data folder is readable, but every spelling
+        // of one folder still has to land on the same directory.
+        var directoryName = ThumbnailFolderScope.BuildDirectoryName(plain);
+        Check(directoryName.StartsWith("comfypromptviewer-selfcheck-scope", StringComparison.Ordinal),
+            "Expected the folder cache directory name to label itself with the folder name.");
+        Check(ThumbnailFolderScope.BuildDirectoryName(
+                ThumbnailFolderScope.NormalizeFolderPath(root + Path.DirectorySeparatorChar)) == directoryName,
+            "Expected every spelling of one folder to build the same cache directory name.");
+
+        foreach (var invalid in Path.GetInvalidFileNameChars())
+        {
+            Check(!directoryName.Contains(invalid),
+                $"Expected the folder cache directory name to drop the invalid character 0x{(int)invalid:x2}.");
+        }
+
+        // Long folder names must not push the cache path toward MAX_PATH, and a name made entirely of
+        // invalid characters still has to produce a usable directory.
+        var longName = ThumbnailFolderScope.BuildDirectoryName(
+            ThumbnailFolderScope.NormalizeFolderPath(Path.Combine(root, new string('x', 300))));
+        Check(longName.Length <= 40 + 1 + 32,
+            "Expected the folder cache directory name to bound its readable segment.");
+        Check(ThumbnailFolderScope.BuildDirectoryName("").Length == 32,
+            "Expected an unlabelable folder key to fall back to a bare hash directory name.");
+    }
+
+    // The point of the per-folder layout: identical keys in two scopes do not collide, and clearing one
+    // folder leaves the other's thumbnails readable.
+    private static void CheckFolderThumbnailCacheIsolation()
+    {
+        var appData = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-folders-{Guid.NewGuid():N}");
+        var folderA = Path.Combine(appData, "source-a");
+        var folderB = Path.Combine(appData, "source-b");
+        var service = new ThumbnailService(appData);
+        try
+        {
+            // The same source path in two scopes produces the same key; only the scope separates them.
+            var key = ThumbnailPack.CreateKey(Path.Combine(folderA, "image.png"), 1000, 180);
+            byte[] payloadA = [1, 2, 3, 4];
+            byte[] payloadB = [5, 6, 7, 8, 9];
+
+            var scopeA = service.OpenFolderScopeAsync(folderA).GetAwaiter().GetResult();
+            Check(scopeA.Pack.Write(key, payloadA), "Expected a write into the first folder cache to succeed.");
+
+            // Reopening the same folder with a trailing separator must reuse the live scope, not build a
+            // second one beside it.
+            var sameScope = service
+                .OpenFolderScopeAsync(folderA + Path.DirectorySeparatorChar)
+                .GetAwaiter()
+                .GetResult();
+            Check(ReferenceEquals(sameScope, scopeA), "Expected reopening the same folder to reuse its cache scope.");
+
+            var scopeB = service.OpenFolderScopeAsync(folderB).GetAwaiter().GetResult();
+            Check(scopeA.IsRetired, "Expected a folder swap to retire the previous cache scope.");
+            Check(!service.HasCachedThumbnail(scopeA, key),
+                "Expected a retired scope to report a miss so stale work stops instead of racing a closing pack.");
+            Check(!scopeB.Pack.Contains(key), "Expected an identical key in a second folder scope not to collide.");
+
+            Check(scopeB.Pack.Write(key, payloadB), "Expected a write into the second folder cache to succeed.");
+            Check(scopeB.Pack.TryRead(key, out var readB) && readB.AsSpan().SequenceEqual(payloadB),
+                "Expected the second folder cache to round trip its own payload.");
+
+            // Clearing folder B must not touch folder A's pack.
+            service.ClearFolderCacheAsync(scopeB).GetAwaiter().GetResult();
+            Check(!scopeB.Pack.Contains(key), "Expected clearing a folder cache to drop its entries.");
+
+            var reopenedA = service.OpenFolderScopeAsync(folderA).GetAwaiter().GetResult();
+            Check(reopenedA.Pack.TryRead(key, out var readA) && readA.AsSpan().SequenceEqual(payloadA),
+                "Expected clearing one folder cache to leave another folder's thumbnails readable on reopen.");
+
+            // The legacy global pack is only removed by the global clear, never by the upgrade itself.
+            var legacyPack = Path.Combine(service.CacheRootDirectory, "thumbnails.pack");
+            var legacyIndex = Path.Combine(service.CacheRootDirectory, "thumbnails.idx");
+            File.WriteAllBytes(legacyPack, [0, 1, 2, 3]);
+            File.WriteAllBytes(legacyIndex, [0, 1, 2, 3]);
+
+            service.ClearAllCachesAsync().GetAwaiter().GetResult();
+            Check(!reopenedA.Pack.Contains(key), "Expected the global clear to empty the active folder cache.");
+            Check(!Directory.Exists(scopeB.Directory), "Expected the global clear to remove other folder caches.");
+            Check(!File.Exists(legacyPack) && !File.Exists(legacyIndex),
+                "Expected the global clear to remove the pre-upgrade global thumbnail cache.");
+        }
+        finally
+        {
+            service.Dispose();
+            DeleteDirectoryQuietly(appData);
         }
     }
 

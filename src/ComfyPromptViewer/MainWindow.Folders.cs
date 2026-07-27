@@ -60,6 +60,17 @@ public partial class MainWindow
         CopyPathButton.IsVisible = true;
         _currentFolderPath = folderPath;
         CountText.Text = "Scanning...";
+        ClearFolderCacheStatus();
+
+        // Retires and drains the previous folder's cache scope before opening this one, so no leftover work
+        // is still holding that pack when its handles close, and none of it can reach this folder's pack.
+        var cacheScope = await _thumbnailService.OpenFolderScopeAsync(folderPath);
+        if (!loadSession.IsCurrent)
+        {
+            return;
+        }
+
+        _folderCacheScope = cacheScope;
 
         try
         {
@@ -198,7 +209,14 @@ public partial class MainWindow
 
     private ImageItem CreateImageItem(string path, SourceFingerprint fingerprint)
     {
-        var item = new ImageItem(path, fingerprint, _tileSize, _metadataService, _decodedImageCache, _thumbnailService);
+        var item = new ImageItem(
+            path,
+            fingerprint,
+            _tileSize,
+            _metadataService,
+            _decodedImageCache,
+            _thumbnailService,
+            _folderCacheScope);
         item.MetadataLoaded += ImageItem_MetadataLoaded;
         return item;
     }

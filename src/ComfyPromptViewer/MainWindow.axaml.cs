@@ -34,8 +34,11 @@ public partial class MainWindow : Window
     private static readonly TimeSpan InitialMetadataScannerPollInterval = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan MetadataCountUpdateInterval = TimeSpan.FromMilliseconds(150);
     private static readonly TimeSpan TileSizeSaveInterval = TimeSpan.FromMilliseconds(250);
-    private static readonly TimeSpan AdvancedMaintenanceStatusDuration = TimeSpan.FromSeconds(2.5);
+    private static readonly TimeSpan TransientStatusDuration = TimeSpan.FromSeconds(2.5);
+    private static readonly TimeSpan TransientStatusFadeDuration = TimeSpan.FromMilliseconds(120);
     private const int InitialMetadataScannerMaxPolls = 15;
+    // How long a metadata scan has to run before its progress is worth showing. Warm folders finish first.
+    private const long ScanProgressVisibleDelayMs = 250;
     private const int MaxIncrementalGalleryChanges = 32;
     private const int AheadRowsInScrollDirection = 8;
     private const int AheadRowsAgainstScrollDirection = 2;
@@ -59,6 +62,7 @@ public partial class MainWindow : Window
     // thumbnail-load staleness belong to their coordinators; these four are the UI-side gates. Do not add
     // a bare int counter or a hand-managed CancellationTokenSource.
     private readonly SessionGate _advancedMaintenanceStatusGate = new();
+    private readonly SessionGate _folderCacheStatusGate = new();
     private readonly SessionGate _searchFilterGate = new();
     private readonly GenerationGate _galleryScrollRestoreGate = new();
     private readonly GenerationGate _galleryEmptyStateGate = new();
@@ -73,10 +77,14 @@ public partial class MainWindow : Window
     private SortMode _sortMode = SortMode.NewestFirst;
     private ThemeMode _themeMode;
     private string? _currentFolderPath;
+    // The thumbnail cache namespace for the open folder. Every ImageItem created while it is set - initial
+    // load and watcher additions alike - captures it.
+    private ThumbnailFolderScope? _folderCacheScope;
     private bool _includeSubfolders;
     private bool _prewarmThumbnails;
     private int _prewarmRemaining;
     private int _prewarmTotal;
+    private long _metadataScanStartedAt;
     private double _targetTileSize;
     private double _tileSize;
     private double _tileItemExtent;
@@ -303,6 +311,7 @@ public partial class MainWindow : Window
         _metadataScanner.Cancel();
         _folderLoader.Cancel();
         _advancedMaintenanceStatusGate.Cancel();
+        _folderCacheStatusGate.Cancel();
         _thumbnailLoads.Clear();
         _thumbnailService.ClearDeferredWrites();
         _thumbnailService.SetCacheWritePause(null);

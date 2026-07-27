@@ -65,6 +65,7 @@ public partial class MainWindow
                     return;
                 }
 
+                _metadataScanStartedAt = Environment.TickCount64;
                 _metadataScanner.Start(
                     _catalog.Items,
                     HasSearchQueryActive,

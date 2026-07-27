@@ -8,9 +8,11 @@ using Microsoft.Win32.SafeHandles;
 
 namespace ComfyPromptViewer;
 
-// One append-only data file plus one append-only offset log, replacing thousands of small JPEGs across
-// hashed per-folder directories. A lookup is a dictionary hit, a read is one positional read, and clearing
-// is two truncations.
+// One append-only data file plus one append-only offset log, replacing thousands of small JPEGs. A lookup
+// is a dictionary hit, a read is one positional read, and clearing is two truncations.
+//
+// One pack per opened folder, under thumbnails\folders\<folder-hash>\ — see ThumbnailFolderScope. That is
+// what makes "clear this folder's thumbnails" possible without touching every other folder's.
 //
 // Layout:
 //   thumbnails.pack  [magic:4][version:4] then raw JPEG payloads back to back.
@@ -358,3 +360,101 @@ internal sealed class ThumbnailPack : IDisposable
 }
 
 internal readonly record struct ThumbnailKey(ulong High, ulong Low);
+
+// The cache namespace for one opened folder: its own directory, its own pack, its own lifetime.
+//
+// Every ImageItem and every queued cache write captures the scope it was created under, so work left over
+// from a previous folder writes into that folder's (retired) pack instead of the newly opened one, and
+// clearing one folder's thumbnails cannot reach another's. Include subfolders is deliberately not part of
+// the identity: the same root opened recursively and non-recursively shares one cache.
+internal sealed class ThumbnailFolderScope : IDisposable
+{
+    // Enough of the folder name to recognize it in Explorer without pushing the cache path toward MAX_PATH.
+    private const int MaxReadableSegmentLength = 40;
+
+    private volatile bool _isRetired;
+
+    public ThumbnailFolderScope(string folderCacheRoot, string folderPath)
+    {
+        FolderKey = NormalizeFolderPath(folderPath);
+        Directory = Path.Combine(folderCacheRoot, BuildDirectoryName(FolderKey));
+        Pack = new ThumbnailPack(Directory);
+    }
+
+    public string FolderKey { get; }
+    public string Directory { get; }
+    public ThumbnailPack Pack { get; }
+
+    // Set during a folder swap before the pack is disposed. Readers and writers check it so a late worker
+    // sees a miss rather than racing a closing handle.
+    public bool IsRetired => _isRetired;
+
+    public void Retire()
+    {
+        _isRetired = true;
+    }
+
+    // Trailing separators and Windows path casing have to land on the same scope; otherwise reopening the
+    // same folder typed slightly differently would silently build a second cache beside the first.
+    public static string NormalizeFolderPath(string folderPath)
+    {
+        var full = Path.GetFullPath(folderPath);
+        var trimmed = full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (trimmed.Length == 0 || (trimmed.Length == 2 && trimmed[1] == ':'))
+        {
+            // A drive root or a filesystem root has nothing to trim.
+            trimmed = full;
+        }
+
+        return OperatingSystem.IsWindows() ? trimmed.ToLowerInvariant() : trimmed;
+    }
+
+    // "<folder name>-<hash>". A bare hash is unusable to anyone who opens the app data folder to see what is
+    // taking up disk. The hash still carries all of the uniqueness; the leading segment is only a label, so
+    // it is derived from the normalized key rather than the raw path - deriving it from the raw path would
+    // give D:\Out and D:\out different directories for the same scope.
+    internal static string BuildDirectoryName(string folderKey)
+    {
+        var hash = HashFolderKey(folderKey);
+        var readable = BuildReadableSegment(folderKey);
+        return readable.Length == 0 ? hash : $"{readable}-{hash}";
+    }
+
+    private static string BuildReadableSegment(string folderKey)
+    {
+        var leaf = Path.GetFileName(folderKey);
+        if (leaf.Length == 0)
+        {
+            // A drive or filesystem root has no leaf, so label it with the root itself.
+            leaf = folderKey;
+        }
+
+        var invalid = Path.GetInvalidFileNameChars();
+        var builder = new StringBuilder(Math.Min(leaf.Length, MaxReadableSegmentLength));
+        foreach (var character in leaf)
+        {
+            if (builder.Length == MaxReadableSegmentLength)
+            {
+                break;
+            }
+
+            builder.Append(Array.IndexOf(invalid, character) >= 0 ? '_' : character);
+        }
+
+        // Windows rejects a trailing dot or space, and a trailing underscore is just the separator repeated.
+        return builder.ToString().TrimEnd('.', ' ', '_');
+    }
+
+    private static string HashFolderKey(string folderKey)
+    {
+        Span<byte> hash = stackalloc byte[16];
+        MD5.HashData(Encoding.UTF8.GetBytes(folderKey), hash);
+        return Convert.ToHexStringLower(hash);
+    }
+
+    public void Dispose()
+    {
+        _isRetired = true;
+        Pack.Dispose();
+    }
+}

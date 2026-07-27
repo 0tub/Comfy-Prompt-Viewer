@@ -64,7 +64,8 @@ public sealed class ImageItem : INotifyPropertyChanged
         double tileSize,
         ImageMetadataService metadataService,
         DecodedImageCache decodedImageCache,
-        ThumbnailService thumbnailService)
+        ThumbnailService thumbnailService,
+        ThumbnailFolderScope? cacheScope)
     {
         Path = path;
         FileName = System.IO.Path.GetFileName(path);
@@ -73,6 +74,7 @@ public sealed class ImageItem : INotifyPropertyChanged
         _metadataService = metadataService;
         _decodedImageCache = decodedImageCache;
         _thumbnailService = thumbnailService;
+        CacheScope = cacheScope;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -81,6 +83,10 @@ public sealed class ImageItem : INotifyPropertyChanged
     public string Path { get; }
     public string FileName { get; }
     internal SourceFingerprint SourceFingerprint { get; }
+
+    // The folder cache this item reads and writes. Captured at construction so that when the folder swaps,
+    // a decode still in flight resolves against its own (retired) pack rather than the new folder's.
+    internal ThumbnailFolderScope? CacheScope { get; }
 
     // Row in the catalog's SearchIndex, or -1 when not in a catalog. Only SearchIndex assigns this.
     internal int SearchSlot { get; set; } = -1;
@@ -565,7 +571,7 @@ public sealed class ImageItem : INotifyPropertyChanged
                 var cacheKey = GetThumbnailKey();
                 try
                 {
-                    if (_thumbnailService.TryLoadCachedThumbnail(cacheKey) is { } cached)
+                    if (_thumbnailService.TryLoadCachedThumbnail(CacheScope, cacheKey) is { } cached)
                     {
                         return cached;
                     }
@@ -702,7 +708,7 @@ public sealed class ImageItem : INotifyPropertyChanged
     // One pack-index lookup, so there is no cached existence state to keep fresh.
     internal bool HasCachedThumbnail()
     {
-        return _thumbnailService.HasCachedThumbnail(GetThumbnailKey());
+        return _thumbnailService.HasCachedThumbnail(CacheScope, GetThumbnailKey());
     }
 
     private bool SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)

@@ -14,22 +14,42 @@ internal sealed class ThumbnailService : IDisposable
     private const int SelectedPreviewMaxWidth = 2048;
     private const long SelectedPreviewMaxPixels = 8_000_000;
     private const double PreviewDownscaleThreshold = 1.15;
+    // Every folder cache lives under this one subdirectory of the cache root, which is also why the
+    // pre-pack cleanup below has to skip it: it is the only subdirectory there that is not legacy.
+    private const string FolderCacheDirectoryName = "folders";
+    private const string PackFileName = "thumbnails.pack";
+    private const string IndexFileName = "thumbnails.idx";
     private readonly SemaphoreSlim _cacheWriteLimiter = new(1, 1);
+    // Serializes scope swaps against clearing, so a pack handle is never disposed while a maintenance pass
+    // is deleting the directory it lives in.
+    private readonly SemaphoreSlim _maintenanceLock = new(1, 1);
     private readonly object _pendingWritesLock = new();
-    private readonly HashSet<ThumbnailKey> _pendingWrites = [];
+    private readonly HashSet<ScopedThumbnailKey> _pendingWrites = [];
     private readonly Queue<ThumbnailCacheWrite> _deferredWrites = new();
-    private readonly ThumbnailPack _pack;
+    private volatile ThumbnailFolderScope? _activeScope;
     private Func<bool>? _writesPaused;
     private bool _maintenancePaused;
 
     public ThumbnailService(string appDataDirectory)
     {
         CacheRootDirectory = Path.Combine(appDataDirectory, "thumbnails");
-        _pack = new ThumbnailPack(CacheRootDirectory);
+        FolderCacheRootDirectory = Path.Combine(CacheRootDirectory, FolderCacheDirectoryName);
+
+        try
+        {
+            Directory.CreateDirectory(FolderCacheRootDirectory);
+        }
+        catch (Exception ex)
+        {
+            DebugLog.Write($"Failed to create thumbnail cache root {FolderCacheRootDirectory}: {ex.Message}");
+        }
+
         DebugLog.Observe(Task.Run(RemoveLegacyCacheDirectories), "Legacy thumbnail cache cleanup");
     }
 
     public string CacheRootDirectory { get; }
+    public string FolderCacheRootDirectory { get; }
+    public ThumbnailFolderScope? ActiveFolderScope => _activeScope;
     public SemaphoreSlim SelectedPreviewLoadLimiter { get; } = new(1);
 
     // Lets bulk producers throttle themselves instead of queueing a whole folder at once.
@@ -44,14 +64,94 @@ internal sealed class ThumbnailService : IDisposable
         }
     }
 
-    public bool HasCachedThumbnail(in ThumbnailKey key)
+    // Opens (or reuses) the cache scope for a folder and retires the previous one. Reopening the same
+    // folder - a reload, or an Include subfolders toggle - keeps its pack rather than churning the handles.
+    public async Task<ThumbnailFolderScope> OpenFolderScopeAsync(string folderPath)
     {
-        return _pack.Contains(key);
+        var folderKey = ThumbnailFolderScope.NormalizeFolderPath(folderPath);
+        await _maintenanceLock.WaitAsync();
+        try
+        {
+            if (_activeScope is { IsRetired: false } current &&
+                string.Equals(current.FolderKey, folderKey, StringComparison.Ordinal))
+            {
+                return current;
+            }
+
+            await DrainAndDisposeAsync(DetachActiveScope());
+            var scope = new ThumbnailFolderScope(FolderCacheRootDirectory, folderPath);
+            _activeScope = scope;
+            return scope;
+        }
+        finally
+        {
+            _maintenanceLock.Release();
+        }
     }
 
-    public Bitmap? TryLoadCachedThumbnail(in ThumbnailKey key)
+    // Detaching is synchronous on purpose. A caller that only observes the returned task - going back to the
+    // main menu - must still have given up the scope by the time it returns, or a folder reopened right
+    // afterwards could adopt a scope that is about to be disposed.
+    public Task RetireFolderScopeAsync()
     {
-        if (!_pack.TryRead(key, out var data))
+        var previous = DetachActiveScope();
+        return previous is null ? Task.CompletedTask : RetireDetachedScopeAsync(previous);
+    }
+
+    private async Task RetireDetachedScopeAsync(ThumbnailFolderScope scope)
+    {
+        await _maintenanceLock.WaitAsync();
+        try
+        {
+            await DrainAndDisposeAsync(scope);
+        }
+        finally
+        {
+            _maintenanceLock.Release();
+        }
+    }
+
+    // Marking the scope retired is what stops stale work: a queued write or a running decode from the
+    // previous folder sees a retired scope and gives up instead of finding a live handle.
+    private ThumbnailFolderScope? DetachActiveScope()
+    {
+        var previous = _activeScope;
+        if (previous is null)
+        {
+            return null;
+        }
+
+        _activeScope = null;
+        previous.Retire();
+        lock (_pendingWritesLock)
+        {
+            RemoveDeferredWritesForScopeLocked(previous);
+        }
+
+        return previous;
+    }
+
+    // Only after the in-flight write finishes is it safe to close the pack underneath it.
+    private async Task DrainAndDisposeAsync(ThumbnailFolderScope? scope)
+    {
+        if (scope is null)
+        {
+            return;
+        }
+
+        await _cacheWriteLimiter.WaitAsync();
+        _cacheWriteLimiter.Release();
+        scope.Dispose();
+    }
+
+    public bool HasCachedThumbnail(ThumbnailFolderScope? scope, in ThumbnailKey key)
+    {
+        return scope is { IsRetired: false } && scope.Pack.Contains(key);
+    }
+
+    public Bitmap? TryLoadCachedThumbnail(ThumbnailFolderScope? scope, in ThumbnailKey key)
+    {
+        if (scope is not { IsRetired: false } || !scope.Pack.TryRead(key, out var data))
         {
             return null;
         }
@@ -64,14 +164,14 @@ internal sealed class ThumbnailService : IDisposable
         catch
         {
             // A payload that will not decode is worse than a miss; drop it so the next pass re-encodes.
-            _pack.Remove(key);
+            scope.Pack.Remove(key);
             throw;
         }
     }
 
-    public void RemoveCachedThumbnail(in ThumbnailKey key)
+    public void RemoveCachedThumbnail(ThumbnailFolderScope? scope, in ThumbnailKey key)
     {
-        _pack.Remove(key);
+        scope?.Pack.Remove(key);
     }
 
     public Bitmap DecodeThumbnail(string sourcePath, int width)
@@ -127,20 +227,24 @@ internal sealed class ThumbnailService : IDisposable
 
     public bool TryQueueCacheWrite(ImageItem item, in ThumbnailKey key)
     {
-        if (_pack.Contains(key))
+        // The item's own scope, not the active one: a folder swap must not be able to redirect leftover
+        // work into the newly opened folder's pack.
+        if (item.CacheScope is not { IsRetired: false } scope || scope.Pack.Contains(key))
         {
             return false;
         }
 
+        var scopedKey = new ScopedThumbnailKey(scope, key);
         lock (_pendingWritesLock)
         {
-            if (_maintenancePaused || !_pendingWrites.Add(key))
+            if (_maintenancePaused || !_pendingWrites.Add(scopedKey))
             {
                 return false;
             }
 
             _deferredWrites.Enqueue(new ThumbnailCacheWrite(
                 item,
+                scope,
                 key,
                 item.GetThumbnailDecodeWidth()));
         }
@@ -159,7 +263,7 @@ internal sealed class ThumbnailService : IDisposable
         StartWriter();
     }
 
-    internal bool TryBeginCacheWrite(in ThumbnailKey key)
+    internal bool TryBeginCacheWrite(ThumbnailFolderScope? scope, in ThumbnailKey key)
     {
         if (!_cacheWriteLimiter.Wait(0))
         {
@@ -168,7 +272,7 @@ internal sealed class ThumbnailService : IDisposable
 
         lock (_pendingWritesLock)
         {
-            if (_pendingWrites.Add(key))
+            if (_pendingWrites.Add(new ScopedThumbnailKey(scope, key)))
             {
                 return true;
             }
@@ -178,11 +282,11 @@ internal sealed class ThumbnailService : IDisposable
         return false;
     }
 
-    internal void EndCacheWrite(in ThumbnailKey key)
+    internal void EndCacheWrite(ThumbnailFolderScope? scope, in ThumbnailKey key)
     {
         lock (_pendingWritesLock)
         {
-            _pendingWrites.Remove(key);
+            _pendingWrites.Remove(new ScopedThumbnailKey(scope, key));
         }
 
         _cacheWriteLimiter.Release();
@@ -193,29 +297,113 @@ internal sealed class ThumbnailService : IDisposable
     {
         lock (_pendingWritesLock)
         {
-            while (_deferredWrites.TryDequeue(out var write))
-            {
-                _pendingWrites.Remove(write.Key);
-            }
+            DrainDeferredWritesLocked();
         }
     }
 
-    // Emptying is two truncations, so this no longer depends on how many thumbnails were cached.
-    public async Task ClearCacheAsync()
+    // Clearing one folder is still two truncations, and it cannot touch any other folder's pack.
+    public async Task ClearFolderCacheAsync(ThumbnailFolderScope scope)
     {
-        await PauseAndDrainWritesAsync();
+        await _maintenanceLock.WaitAsync();
         try
         {
-            _pack.Clear();
-            await Task.Run(RemoveLegacyCacheDirectories);
+            lock (_pendingWritesLock)
+            {
+                _maintenancePaused = true;
+                RemoveDeferredWritesForScopeLocked(scope);
+            }
+
+            await _cacheWriteLimiter.WaitAsync();
+            _cacheWriteLimiter.Release();
+            scope.Pack.Clear();
         }
         finally
         {
             ResumeWrites();
+            _maintenanceLock.Release();
         }
     }
 
-    // The pack keeps two files at the root, so any subdirectory is left over from the pre-pack layout.
+    // The active folder's pack is truncated in place because its handles are open; every other folder cache
+    // and the pre-pack global cache are deleted outright.
+    public async Task ClearAllCachesAsync()
+    {
+        await _maintenanceLock.WaitAsync();
+        try
+        {
+            await PauseAndDrainWritesAsync();
+            var active = _activeScope;
+            active?.Pack.Clear();
+            await Task.Run(() =>
+            {
+                RemoveFolderCaches(active?.Directory);
+                RemoveLegacyGlobalPack();
+                RemoveLegacyCacheDirectories();
+            });
+        }
+        finally
+        {
+            ResumeWrites();
+            _maintenanceLock.Release();
+        }
+    }
+
+    private void RemoveFolderCaches(string? keepDirectory)
+    {
+        try
+        {
+            if (!Directory.Exists(FolderCacheRootDirectory))
+            {
+                return;
+            }
+
+            var comparison = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+
+            foreach (var directory in Directory.EnumerateDirectories(FolderCacheRootDirectory))
+            {
+                if (keepDirectory is not null && string.Equals(directory, keepDirectory, comparison))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    Directory.Delete(directory, recursive: true);
+                }
+                catch (Exception ex)
+                {
+                    DebugLog.Write($"Failed to remove folder thumbnail cache {directory}: {ex.Message}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            DebugLog.Write($"Failed to enumerate folder thumbnail caches: {ex.Message}");
+        }
+    }
+
+    // The pre-folder-scope global pack. It is left in place through the upgrade and only removed here, so a
+    // user who never clears keeps whatever disk it occupies rather than losing it silently mid-session.
+    private void RemoveLegacyGlobalPack()
+    {
+        foreach (var fileName in new[] { PackFileName, IndexFileName })
+        {
+            var path = Path.Combine(CacheRootDirectory, fileName);
+            try
+            {
+                File.Delete(path);
+            }
+            catch (Exception ex)
+            {
+                DebugLog.Write($"Failed to remove legacy thumbnail cache file {path}: {ex.Message}");
+            }
+        }
+    }
+
+    // Any subdirectory of the cache root other than the folder-cache root is left over from the pre-pack
+    // per-folder layout of loose JPEGs.
     private void RemoveLegacyCacheDirectories()
     {
         try
@@ -227,6 +415,14 @@ internal sealed class ThumbnailService : IDisposable
 
             foreach (var directory in Directory.EnumerateDirectories(CacheRootDirectory))
             {
+                if (string.Equals(
+                        Path.GetFileName(directory),
+                        FolderCacheDirectoryName,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
                 try
                 {
                     Directory.Delete(directory, recursive: true);
@@ -248,14 +444,41 @@ internal sealed class ThumbnailService : IDisposable
         lock (_pendingWritesLock)
         {
             _maintenancePaused = true;
-            while (_deferredWrites.TryDequeue(out var write))
-            {
-                _pendingWrites.Remove(write.Key);
-            }
+            DrainDeferredWritesLocked();
         }
 
         await _cacheWriteLimiter.WaitAsync();
         _cacheWriteLimiter.Release();
+    }
+
+    private void DrainDeferredWritesLocked()
+    {
+        while (_deferredWrites.TryDequeue(out var write))
+        {
+            _pendingWrites.Remove(new ScopedThumbnailKey(write.Scope, write.Key));
+        }
+    }
+
+    // Order is preserved for the scopes that survive, so a folder clear does not reshuffle the queue behind
+    // the prewarm pass that filled it.
+    private void RemoveDeferredWritesForScopeLocked(ThumbnailFolderScope scope)
+    {
+        var pending = _deferredWrites.Count;
+        for (var index = 0; index < pending; index++)
+        {
+            if (!_deferredWrites.TryDequeue(out var write))
+            {
+                break;
+            }
+
+            if (write.Scope == scope)
+            {
+                _pendingWrites.Remove(new ScopedThumbnailKey(write.Scope, write.Key));
+                continue;
+            }
+
+            _deferredWrites.Enqueue(write);
+        }
     }
 
     public void ResumeWrites()
@@ -270,7 +493,9 @@ internal sealed class ThumbnailService : IDisposable
 
     public void Dispose()
     {
-        _pack.Dispose();
+        var scope = _activeScope;
+        _activeScope = null;
+        scope?.Dispose();
     }
 
     private void StartWriter()
@@ -298,12 +523,14 @@ internal sealed class ThumbnailService : IDisposable
         {
             try
             {
-                if (_pack.Contains(write.Key))
+                // Re-checked here rather than at dequeue: the folder can swap while this write waits its
+                // turn, and a retired scope's pack is closing or already closed.
+                if (write.Scope.IsRetired || write.Scope.Pack.Contains(write.Key))
                 {
                     return;
                 }
 
-                _pack.Write(write.Key, EncodeJpegThumbnail(write.Item.Path, write.ThumbnailWidth));
+                write.Scope.Pack.Write(write.Key, EncodeJpegThumbnail(write.Item.Path, write.ThumbnailWidth));
             }
             catch (Exception ex)
             {
@@ -311,7 +538,7 @@ internal sealed class ThumbnailService : IDisposable
             }
             finally
             {
-                EndCacheWrite(write.Key);
+                EndCacheWrite(write.Scope, write.Key);
             }
         }), "Deferred thumbnail cache writer");
     }
@@ -368,6 +595,11 @@ internal sealed class ThumbnailService : IDisposable
 
     private readonly record struct ThumbnailCacheWrite(
         ImageItem Item,
+        ThumbnailFolderScope Scope,
         ThumbnailKey Key,
         int ThumbnailWidth);
+
+    // Deduplication has to be per folder now: the same source path can appear under two folder roots, and
+    // the key deliberately does not know which cache it belongs to.
+    private readonly record struct ScopedThumbnailKey(ThumbnailFolderScope? Scope, ThumbnailKey Key);
 }

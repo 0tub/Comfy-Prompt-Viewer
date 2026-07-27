@@ -625,12 +625,37 @@
                     </StackPanel>
 
                     <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                        <TextBlock Name="FolderCacheStatus"
+                                   Text=""
+                                   Foreground="{DynamicResource TextAccent}"
+                                   FontSize="11"
+                                   MaxWidth="260"
+                                   TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center"
+                                   IsVisible="False"
+                                   Opacity="0">
+                            <TextBlock.Transitions>
+                                <Transitions>
+                                    <DoubleTransition Property="Opacity" Duration="0:0:0.12" Easing="CubicEaseOut" />
+                                </Transitions>
+                            </TextBlock.Transitions>
+                        </TextBlock>
                         <Border Classes="count-pill" Height="30" Padding="10,0" VerticalAlignment="Center">
                             <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
                                 <TextBlock Text="🖼" FontSize="11" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center" />
                                 <TextBlock Name="CountText" Text="0 images" VerticalAlignment="Center" />
                             </StackPanel>
                         </Border>
+                        <Button Name="ClearFolderCacheButton"
+                                Classes="zoom-btn"
+                                Width="30"
+                                Height="30"
+                                VerticalAlignment="Center"
+                                Click="ClearFolderCacheButton_Click"
+                                ToolTip.Tip="Clear this folder's thumbnail cache"
+                                AutomationProperties.Name="Clear Folder Thumbnail Cache">
+                            <TextBlock Text="🧹" Classes="emoji-icon" FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Button>
                         <Button Name="ShortcutsButton"
                                 Classes="zoom-btn"
                                 Width="30"
@@ -1510,16 +1535,19 @@
                                 
                                 <StackPanel Name="AdvancedPanel" Spacing="8" Margin="16,4,0,0" IsVisible="False">
                                     <CheckBox Name="PrewarmThumbnailsToggle"
-                                              Content="Prewarm thumbnail cache"
+                                              Content="Cache thumbnails in the background"
                                               Click="PrewarmThumbnailsToggle_Click"
                                               FontSize="13"
                                               Foreground="{DynamicResource TextSecondary}"
-                                              AutomationProperties.Name="Prewarm thumbnail cache"
-                                              ToolTip.Tip="Cache every thumbnail in the background after scanning, so later scrolling is never cold" />
-                                    <Button Classes="menu-maintenance-btn" Click="ClearCacheButton_Click" ToolTip.Tip="Clear local thumbnail cache">
+                                              AutomationProperties.Name="Cache thumbnails in the background"
+                                              ToolTip.Tip="Cache every thumbnail once scanning finishes, so scrolling through the folder never waits for one to be built" />
+                                    <Button Name="ClearAllCachesButton"
+                                            Classes="menu-maintenance-btn"
+                                            Click="ClearAllCachesButton_Click"
+                                            ToolTip.Tip="Clear the thumbnail cache for every folder">
                                         <StackPanel Orientation="Horizontal" Spacing="8">
                                             <TextBlock Text="🗑" Classes="emoji-icon" FontSize="13" VerticalAlignment="Center" Foreground="{DynamicResource TextMuted}" />
-                                            <TextBlock Text="Clear Thumbnail Cache" FontSize="13" VerticalAlignment="Center" />
+                                            <TextBlock Text="Clear All Thumbnail Caches" FontSize="13" VerticalAlignment="Center" />
                                         </StackPanel>
                                     </Button>
                                     <Button Classes="menu-maintenance-btn" Click="ClearMetadataCacheButton_Click" ToolTip.Tip="Clear parsed metadata cache">

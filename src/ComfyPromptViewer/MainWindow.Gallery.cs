@@ -788,38 +788,41 @@ public partial class MainWindow
             _metadataCountUpdateTimer?.Stop();
         }
 
-        CountText.Opacity = 0.2;
+        // A folder whose metadata is already cached resolves its whole catalog well inside this delay, so
+        // the progress suffix never appears for one. Painting it immediately meant a warm folder flashed
+        // "Scanning prompts" for work that finished before it could be read.
+        bool showScanProgress = isScanning &&
+                                Environment.TickCount64 - _metadataScanStartedAt >= ScanProgressVisibleDelayMs;
 
-        if (isScanning)
-        {
-            if (total == filtered)
-            {
-                CountText.Text = $"{total:n0} images (Scanning prompts {loadedMetadataCount}/{total})";
-            }
-            else
-            {
-                CountText.Text = $"{filtered:n0} of {total} images (Scanning prompts {loadedMetadataCount}/{total})";
-            }
-        }
-        else
-        {
-            CountText.Text = total == filtered
-                ? $"{total:n0} images"
-                : $"{filtered:n0} of {total} images";
-        }
+        var counts = total == filtered
+            ? $"{total:n0} images"
+            : $"{filtered:n0} of {total} images";
+        var text = showScanProgress
+            ? $"{counts} (Scanning prompts {loadedMetadataCount}/{total})"
+            : counts;
 
         // Counted against thumbnails that were actually missing, not against the folder: a fully cached
         // folder has no pass to report on.
         if (!isScanning && _prewarmRemaining > 0 && _prewarmTotal > 0)
         {
-            CountText.Text += $" (Caching thumbnails {_prewarmTotal - _prewarmRemaining:n0}/{_prewarmTotal:n0})";
+            text += $" (Caching thumbnails {_prewarmTotal - _prewarmRemaining:n0}/{_prewarmTotal:n0})";
         }
 
         if (_selectedItems.Count > 1)
         {
-            CountText.Text += $" | {_selectedItems.Count:n0} selected";
+            text += $" | {_selectedItems.Count:n0} selected";
         }
 
+        if (CountText.Text == text)
+        {
+            return;
+        }
+
+        // Dip and recover is the "this value changed" pulse, and CountText carries a 100 ms opacity
+        // transition. Running it unconditionally fired on every selection change and several times per
+        // folder load, which reads as the label flickering rather than as an update.
+        CountText.Text = text;
+        CountText.Opacity = 0.2;
         Dispatcher.UIThread.Post(() => {
             CountText.Opacity = 1.0;
         }, DispatcherPriority.Render);
