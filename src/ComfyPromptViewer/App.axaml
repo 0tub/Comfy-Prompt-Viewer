@@ -1,8 +1,11 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="ComfyPromptViewer.App"
-             RequestedThemeVariant="Default">
-             <!-- "Default" ThemeVariant follows system theme variant. "Dark" or "Light" are other available options. -->
+             RequestedThemeVariant="Dark">
+             <!-- Every app palette is a custom ThemeVariant inheriting from Dark, registered by
+                  ThemeManager.Initialize and selected by ThemeManager.Apply. "Dark" here is only the value
+                  in force before the saved palette is applied; the app has no light palette, so following
+                  the system variant would leave un-overridden Fluent resources light on a dark surface. -->
 
     <Application.Resources>
             <FontFamily x:Key="FontHeading">avares://ComfyPromptViewer/Assets/Fonts#Fraunces</FontFamily>
@@ -10,101 +13,21 @@
             <FontFamily x:Key="FontUI">avares://ComfyPromptViewer/Assets/Fonts#Noto Sans</FontFamily>
             <x:Double x:Key="GalleryTileSize">120</x:Double>
 
-            <Color x:Key="SystemAccentColor">#8B3A2E</Color>
-            <SolidColorBrush x:Key="SystemControlHighlightAccentBrush" Color="#8B3A2E" />
-            <SolidColorBrush x:Key="AccentFillColorDefaultBrush" Color="#8B3A2E" />
-            <SolidColorBrush x:Key="AccentFillColorSecondaryBrush" Color="#8B3A2E" />
-            <SolidColorBrush x:Key="AccentFillColorTertiaryBrush" Color="#8B3A2E" />
-            <SolidColorBrush x:Key="BackgroundBase" Color="#17120D" />
-            <SolidColorBrush x:Key="SurfaceBase" Color="#17120D" />
-            <SolidColorBrush x:Key="LargePreviewOverlayBackground" Color="#17120D" Opacity="0.85" />
-            <SolidColorBrush x:Key="SurfaceCard" Color="#272016" />
-            <SolidColorBrush x:Key="SurfaceSidebar" Color="#1C1610" />
-            <SolidColorBrush x:Key="SurfaceElevated" Color="#261E16" />
-            <SolidColorBrush x:Key="SurfaceInput" Color="#2C2318" />
-            <SolidColorBrush x:Key="BorderSubtle" Color="#3A2E22" />
-            <SolidColorBrush x:Key="ToolbarBorderSubtle" Color="#4A3A2A" />
-            <SolidColorBrush x:Key="BorderAccent" Color="#8B3A2E" />
-            <SolidColorBrush x:Key="CardHoverBorder" Color="#4A3D30" />
-            <SolidColorBrush x:Key="TextPrimary" Color="#F5EDE0" />
-            <SolidColorBrush x:Key="TextSecondary" Color="#C4AE92" />
-            <SolidColorBrush x:Key="TextMuted" Color="#8C7660" />
-            <SolidColorBrush x:Key="TextAccent" Color="#D4795A" />
-            <SolidColorBrush x:Key="PromptText" Color="#C4AE92" />
-            <SolidColorBrush x:Key="EmptyStateSubtext" Color="#74604E" />
+            <!-- Palette-independent resources only. Every key that varies by theme lives in the theme
+                 dictionaries ThemeManager builds from its palette table; defining one here as well would
+                 shadow the theme dictionary and freeze that color across palettes. -->
             <SolidColorBrush x:Key="LiveDotText" Color="#5A8A5A" />
             <SolidColorBrush x:Key="DangerSurface" Color="#2D1F21" />
             <SolidColorBrush x:Key="DangerBorder" Color="#5C262C" />
             <SolidColorBrush x:Key="DangerText" Color="#F0B2A8" />
 
-            <!-- Slider Overrides to Prevent Green Accent Color -->
-            <SolidColorBrush x:Key="SliderThumbBackground" Color="#8B3A2E" />
-            <SolidColorBrush x:Key="SliderThumbBackgroundPointerOver" Color="#D4795A" />
-            <SolidColorBrush x:Key="SliderThumbBackgroundPressed" Color="#8B3A2E" />
-            <SolidColorBrush x:Key="SliderThumbBackgroundDisabled" Color="#3A2E22" />
-
-            <SolidColorBrush x:Key="SliderTrackFill" Color="#3A2E22" />
-            <SolidColorBrush x:Key="SliderTrackFillPointerOver" Color="#3A2E22" />
-            <SolidColorBrush x:Key="SliderTrackFillPressed" Color="#3A2E22" />
-            <SolidColorBrush x:Key="SliderTrackFillDisabled" Color="#2C2318" />
-
-            <SolidColorBrush x:Key="SliderTrackValueFill" Color="#8B3A2E" />
-            <SolidColorBrush x:Key="SliderTrackValueFillPointerOver" Color="#8B3A2E" />
-            <SolidColorBrush x:Key="SliderTrackValueFillPressed" Color="#8B3A2E" />
-            <SolidColorBrush x:Key="SliderTrackValueFillDisabled" Color="#3A2E22" />
-
-            <!-- ComboBox Theme Overrides to Match App Aesthetic -->
-            <SolidColorBrush x:Key="ComboBoxBackground" Color="#2C2318" />
-            <SolidColorBrush x:Key="ComboBoxBackgroundPointerOver" Color="#261E16" />
-            <SolidColorBrush x:Key="ComboBoxBackgroundPressed" Color="#2C2318" />
-            <SolidColorBrush x:Key="ComboBoxBackgroundDisabled" Color="#1C1610" />
-            
-            <SolidColorBrush x:Key="ComboBoxBorderBrush" Color="#3A2E22" />
-            <SolidColorBrush x:Key="ComboBoxBorderBrushPointerOver" Color="#8B3A2E" />
-            <SolidColorBrush x:Key="ComboBoxBorderBrushPressed" Color="#8B3A2E" />
-            <SolidColorBrush x:Key="ComboBoxBorderBrushDisabled" Color="#3A2E22" />
-            
-            <SolidColorBrush x:Key="ComboBoxDropdownBackground" Color="#272016" />
-            <SolidColorBrush x:Key="ComboBoxDropDownBackground" Color="#272016" />
-            <SolidColorBrush x:Key="ComboBoxDropdownBorderBrush" Color="#3A2E22" />
-            <SolidColorBrush x:Key="ComboBoxDropDownBorderBrush" Color="#3A2E22" />
-            
-            <SolidColorBrush x:Key="ComboBoxForeground" Color="#F5EDE0" />
-            <SolidColorBrush x:Key="ComboBoxForegroundPointerOver" Color="#F5EDE0" />
-            <SolidColorBrush x:Key="ComboBoxForegroundPressed" Color="#F5EDE0" />
-            <SolidColorBrush x:Key="ComboBoxForegroundDisabled" Color="#8C7660" />
-
             <SolidColorBrush x:Key="ComboBoxItemBackground" Color="Transparent" />
-            <SolidColorBrush x:Key="ComboBoxItemBackgroundPointerOver" Color="#2C2318" />
-            <SolidColorBrush x:Key="ComboBoxItemBackgroundPressed" Color="#2C2318" />
-            <SolidColorBrush x:Key="ComboBoxItemBackgroundSelected" Color="#8B3A2E" />
-            <SolidColorBrush x:Key="ComboBoxItemBackgroundSelectedPointerOver" Color="#A64A3D" />
-            <SolidColorBrush x:Key="ComboBoxItemBackgroundSelectedPressed" Color="#8B3A2E" />
             <SolidColorBrush x:Key="ComboBoxItemBackgroundDisabled" Color="Transparent" />
 
-            <SolidColorBrush x:Key="ComboBoxItemForeground" Color="#C4AE92" />
-            <SolidColorBrush x:Key="ComboBoxItemForegroundPointerOver" Color="#F5EDE0" />
-            <SolidColorBrush x:Key="ComboBoxItemForegroundPressed" Color="#F5EDE0" />
-            <SolidColorBrush x:Key="ComboBoxItemForegroundSelected" Color="#F5EDE0" />
-            <SolidColorBrush x:Key="ComboBoxItemForegroundSelectedPointerOver" Color="#F5EDE0" />
-            <SolidColorBrush x:Key="ComboBoxItemForegroundSelectedPressed" Color="#F5EDE0" />
-            <SolidColorBrush x:Key="ComboBoxItemForegroundDisabled" Color="#8C7660" />
-
-            <!-- ContextMenu / MenuFlyout Overrides to Match Theme -->
-            <SolidColorBrush x:Key="MenuFlyoutPresenterBackground" Color="#17120D" />
-            <SolidColorBrush x:Key="MenuFlyoutPresenterBorderBrush" Color="#3A2E22" />
             <Thickness x:Key="MenuFlyoutPresenterBorderThickness">1</Thickness>
             <CornerRadius x:Key="MenuFlyoutPresenterCornerRadius">6</CornerRadius>
-
             <SolidColorBrush x:Key="MenuFlyoutItemBackground" Color="Transparent" />
-            <SolidColorBrush x:Key="MenuFlyoutItemBackgroundPointerOver" Color="#272016" />
-            <SolidColorBrush x:Key="MenuFlyoutItemBackgroundPressed" Color="#2C2318" />
             <SolidColorBrush x:Key="MenuFlyoutItemBackgroundDisabled" Color="Transparent" />
-
-            <SolidColorBrush x:Key="MenuFlyoutItemForeground" Color="#C4AE92" />
-            <SolidColorBrush x:Key="MenuFlyoutItemForegroundPointerOver" Color="#F5EDE0" />
-            <SolidColorBrush x:Key="MenuFlyoutItemForegroundPressed" Color="#F5EDE0" />
-            <SolidColorBrush x:Key="MenuFlyoutItemForegroundDisabled" Color="#8C7660" />
         </Application.Resources>
 
     <Application.Styles>

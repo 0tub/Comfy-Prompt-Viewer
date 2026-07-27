@@ -9,6 +9,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
+using Avalonia.Markup.Xaml.MarkupExtensions;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -226,6 +227,16 @@ public partial class MainWindow
         }
     }
 
+    // Recent-folder rows are built in code, so they need the same DynamicResource lookup the XAML gets.
+    // `Application.Current.FindResource(key)` is not theme-variant aware and now throws for every themed key,
+    // because those keys live in ThemeManager's theme dictionaries rather than directly in
+    // Application.Resources. Binding also keeps these rows correct when the theme combo (which sits on this
+    // very screen) changes the palette while the list is on display.
+    private static void BindThemeResource(Control control, AvaloniaProperty property, string resourceKey)
+    {
+        control[!property] = new DynamicResourceExtension(resourceKey);
+    }
+
     private void PopulateRecentFolders()
     {
         RecentFoldersList.Children.Clear();
@@ -269,8 +280,6 @@ public partial class MainWindow
             {
                 Width = 32,
                 Height = 32,
-                Background = (IBrush)Application.Current!.FindResource("SurfaceInput")!,
-                BorderBrush = (IBrush)Application.Current!.FindResource("BorderSubtle")!,
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(6),
                 Margin = new Thickness(0, 0, 12, 0),
@@ -282,6 +291,8 @@ public partial class MainWindow
                     VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center
                 }
             };
+            BindThemeResource(iconBorder, Border.BackgroundProperty, "SurfaceInput");
+            BindThemeResource(iconBorder, Border.BorderBrushProperty, "BorderSubtle");
             Grid.SetColumn(iconBorder, 0);
             grid.Children.Add(iconBorder);
 
@@ -294,20 +305,20 @@ public partial class MainWindow
             var nameText = new TextBlock
             {
                 Text = folderName,
-                Foreground = (IBrush)Application.Current!.FindResource("TextPrimary")!,
                 FontSize = 13.5,
                 FontWeight = FontWeight.Medium,
                 TextTrimming = TextTrimming.CharacterEllipsis
             };
+            BindThemeResource(nameText, TextBlock.ForegroundProperty, "TextPrimary");
 
             var pathText = new TextBlock
             {
                 Text = folderPath,
-                Foreground = (IBrush)Application.Current!.FindResource("TextMuted")!,
-                FontFamily = (FontFamily)Application.Current!.FindResource("FontMono")!,
                 FontSize = 10.5,
                 TextTrimming = TextTrimming.PrefixCharacterEllipsis
             };
+            BindThemeResource(pathText, TextBlock.ForegroundProperty, "TextMuted");
+            BindThemeResource(pathText, TextBlock.FontFamilyProperty, "FontMono");
 
             clickPanel.Children.Add(nameText);
             clickPanel.Children.Add(pathText);
@@ -328,11 +339,11 @@ public partial class MainWindow
                 var metaText = new TextBlock
                 {
                     Text = string.Join(" • ", metaParts),
-                    Foreground = (IBrush)Application.Current!.FindResource("TextAccent")!,
                     FontSize = 10.5,
                     FontWeight = FontWeight.Normal,
                     Margin = new Thickness(0, 2, 0, 0)
                 };
+                BindThemeResource(metaText, TextBlock.ForegroundProperty, "TextAccent");
                 clickPanel.Children.Add(metaText);
             }
 

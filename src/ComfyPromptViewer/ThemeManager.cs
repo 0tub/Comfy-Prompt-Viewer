@@ -1,12 +1,26 @@
 using System;
+using System.Collections.Generic;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
+using Avalonia.Styling;
 
 namespace ComfyPromptViewer;
 
 internal static class ThemeManager
 {
+    // Each palette is its own ThemeVariant rather than a set of brushes to overwrite. Every variant
+    // inherits from Dark, so the Fluent resources this app does not override (scrollbars, checkboxes,
+    // text selection, focus adorners) resolve dark instead of following the OS light/dark setting.
+    private static readonly Dictionary<ThemeMode, ThemeVariant> ThemeVariants = new()
+    {
+        [ThemeMode.Brown] = new ThemeVariant(nameof(ThemeMode.Brown), ThemeVariant.Dark),
+        [ThemeMode.DarkGray] = new ThemeVariant(nameof(ThemeMode.DarkGray), ThemeVariant.Dark),
+        [ThemeMode.DarkBlue] = new ThemeVariant(nameof(ThemeMode.DarkBlue), ThemeVariant.Dark),
+        [ThemeMode.DarkGreen] = new ThemeVariant(nameof(ThemeMode.DarkGreen), ThemeVariant.Dark),
+        [ThemeMode.Plum] = new ThemeVariant(nameof(ThemeMode.Plum), ThemeVariant.Dark)
+    };
+
     private sealed record ThemePalette(
         string BackgroundBase,
         string SurfaceCard,
@@ -22,6 +36,11 @@ internal static class ThemeManager
         string TextMuted,
         string TextAccent,
         string EmptyStateSubtext);
+
+    // The large-preview backdrop is the base background at partial opacity so the gallery stays faintly
+    // visible behind it. Every other themed brush is fully opaque.
+    private const string LargePreviewOverlayBackgroundKey = "LargePreviewOverlayBackground";
+    private const double LargePreviewOverlayOpacity = 0.85;
 
     private static readonly (string Key, Func<ThemePalette, string> Color)[] BrushResources =
     [
@@ -96,7 +115,9 @@ internal static class ThemeManager
         ("MenuFlyoutItemForegroundDisabled", p => p.TextMuted)
     ];
 
-    internal static void Apply(ThemeMode themeMode)
+    // Builds one resource dictionary per palette and registers it as a theme dictionary. Must run before
+    // the first Apply, and only once: rebuilding would hand out new brush instances to a live visual tree.
+    internal static void Initialize()
     {
         var resources = Application.Current?.Resources;
         if (resources is null)
@@ -104,12 +125,38 @@ internal static class ThemeManager
             return;
         }
 
-        var palette = GetPalette(themeMode);
-        resources["SystemAccentColor"] = Color.Parse(palette.BorderAccent);
-
-        foreach (var (key, color) in BrushResources)
+        foreach (var (themeMode, variant) in ThemeVariants)
         {
-            SetBrush(resources, key, color(palette));
+            if (resources.ThemeDictionaries.ContainsKey(variant))
+            {
+                continue;
+            }
+
+            var palette = GetPalette(themeMode);
+            var dictionary = new ResourceDictionary
+            {
+                ["SystemAccentColor"] = Color.Parse(palette.BorderAccent)
+            };
+
+            foreach (var (key, color) in BrushResources)
+            {
+                dictionary[key] = new SolidColorBrush(Color.Parse(color(palette)))
+                {
+                    Opacity = key == LargePreviewOverlayBackgroundKey ? LargePreviewOverlayOpacity : 1.0
+                };
+            }
+
+            resources.ThemeDictionaries[variant] = dictionary;
+        }
+    }
+
+    // Switching the palette is one property assignment; the resource system re-resolves every
+    // DynamicResource against the new variant.
+    internal static void Apply(ThemeMode themeMode)
+    {
+        if (Application.Current is { } application && ThemeVariants.TryGetValue(themeMode, out var variant))
+        {
+            application.RequestedThemeVariant = variant;
         }
     }
 
@@ -135,16 +182,4 @@ internal static class ThemeManager
         };
     }
 
-    private static void SetBrush(IResourceDictionary resources, string key, string color)
-    {
-        var parsed = Color.Parse(color);
-        if (resources[key] is SolidColorBrush brush)
-        {
-            brush.Color = parsed;
-        }
-        else
-        {
-            resources[key] = new SolidColorBrush(parsed);
-        }
-    }
 }
