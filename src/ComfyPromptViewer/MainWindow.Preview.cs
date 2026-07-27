@@ -23,8 +23,36 @@ public partial class MainWindow
     private double _largePreviewPanStartY;
     private IPointer? _largePreviewPanPointer;
     private Key _heldPreviewNavigationKey = Key.None;
+    private double? _pinchStartZoom;
+
+    // Zoom and pan are a render transform rather than Width/Height plus Canvas.Left/Top. Resizing the Image
+    // per wheel notch forced a layout pass and a fresh Skia resample of a multi-megapixel bitmap; a
+    // transform is composited. Both transforms are created once and mutated, so a pointer-move drag does
+    // not allocate.
+    private readonly ScaleTransform _largePreviewScaleTransform = new(1, 1);
+    private readonly TranslateTransform _largePreviewTranslateTransform = new();
+    private bool _isLargePreviewTransformAttached;
 
     private readonly record struct PreviewZoomAnchor(double XRatio, double YRatio, double ViewportX, double ViewportY);
+
+    private void EnsureLargePreviewTransform()
+    {
+        if (_isLargePreviewTransformAttached)
+        {
+            return;
+        }
+
+        // Scale before translate, so the pan stays in viewport pixels instead of image pixels, and the
+        // top-left origin keeps the existing pan clamping math valid.
+        LargePreviewImage.RenderTransformOrigin = RelativePoint.TopLeft;
+        LargePreviewImage.RenderTransform = new TransformGroup
+        {
+            Children = { _largePreviewScaleTransform, _largePreviewTranslateTransform }
+        };
+        Canvas.SetLeft(LargePreviewImage, 0);
+        Canvas.SetTop(LargePreviewImage, 0);
+        _isLargePreviewTransformAttached = true;
+    }
 
     private void SidebarImage_PointerPressed(object? sender, PointerPressedEventArgs e)
     {
@@ -172,6 +200,33 @@ public partial class MainWindow
         e.Handled = true;
     }
 
+    // Trackpad and touchscreen pinch. Scale is cumulative from the start of the gesture, so the zoom is
+    // rebased against the zoom in force when the gesture began rather than compounded per event.
+    private void LargePreviewCanvas_Pinch(object? sender, PinchEventArgs e)
+    {
+        if (!LargePreviewOverlay.IsVisible ||
+            LargePreviewImage.Source is not Bitmap bitmap ||
+            !TryGetLargePreviewFitSize(out var viewportSize))
+        {
+            return;
+        }
+
+        _pinchStartZoom ??= GetLargePreviewScale(bitmap);
+
+        var anchor = new Point(
+            e.ScaleOrigin.X * viewportSize.Width,
+            e.ScaleOrigin.Y * viewportSize.Height);
+
+        SetLargePreviewZoom(_pinchStartZoom.Value * e.Scale, anchor);
+        e.Handled = true;
+    }
+
+    private void LargePreviewCanvas_PinchEnded(object? sender, PinchEndedEventArgs e)
+    {
+        _pinchStartZoom = null;
+        e.Handled = true;
+    }
+
     private void LargePreviewCanvas_PointerPressed(object? sender, PointerPressedEventArgs e)
     {
         if (!e.GetCurrentPoint(LargePreviewCanvas).Properties.IsLeftButtonPressed)
@@ -279,14 +334,20 @@ public partial class MainWindow
             return;
         }
 
+        EnsureLargePreviewTransform();
+
+        // The Image keeps its natural pixel size and never re-layouts; the scale transform does the zoom.
         LargePreviewImage.Stretch = Stretch.Fill;
-        var contentSize = GetLargePreviewContentSize(bitmap);
-        LargePreviewImage.Width = Math.Max(1, contentSize.Width);
-        LargePreviewImage.Height = Math.Max(1, contentSize.Height);
+        LargePreviewImage.Width = Math.Max(1, bitmap.PixelSize.Width);
+        LargePreviewImage.Height = Math.Max(1, bitmap.PixelSize.Height);
+
+        var scale = GetLargePreviewScale(bitmap);
+        _largePreviewScaleTransform.ScaleX = scale;
+        _largePreviewScaleTransform.ScaleY = scale;
 
         if (TryGetLargePreviewFitSize(out var viewportSize))
         {
-            ApplyLargePreviewPlacement(contentSize, viewportSize);
+            ApplyLargePreviewPlacement(GetLargePreviewContentSize(bitmap), viewportSize);
         }
 
         UpdateLargePreviewMeta();
@@ -404,9 +465,14 @@ public partial class MainWindow
         return true;
     }
 
+    private double GetLargePreviewScale(Bitmap bitmap)
+    {
+        return _largePreviewZoom ?? (TryGetLargePreviewFitScale(bitmap, out var fitScale) ? fitScale : 1.0);
+    }
+
     private Size GetLargePreviewContentSize(Bitmap bitmap)
     {
-        var scale = _largePreviewZoom ?? (TryGetLargePreviewFitScale(bitmap, out var fitScale) ? fitScale : 1.0);
+        var scale = GetLargePreviewScale(bitmap);
         return new Size(bitmap.PixelSize.Width * scale, bitmap.PixelSize.Height * scale);
     }
 
@@ -422,8 +488,8 @@ public partial class MainWindow
     private void ApplyLargePreviewPlacement(Size contentSize, Size viewportSize)
     {
         ClampLargePreviewPan(contentSize, viewportSize);
-        Canvas.SetLeft(LargePreviewImage, Math.Round(_largePreviewPanX));
-        Canvas.SetTop(LargePreviewImage, Math.Round(_largePreviewPanY));
+        _largePreviewTranslateTransform.X = Math.Round(_largePreviewPanX);
+        _largePreviewTranslateTransform.Y = Math.Round(_largePreviewPanY);
     }
 
     private void ClampLargePreviewPan(Size contentSize, Size viewportSize)

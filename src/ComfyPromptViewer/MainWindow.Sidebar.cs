@@ -186,6 +186,9 @@ public partial class MainWindow
 
         bool isCollapsed = isLong && !_isPositivePromptExpanded;
         SidebarPrompt.MaxHeight = isCollapsed ? CollapsedPositivePromptMaxHeight : double.PositiveInfinity;
+        // Stands in for the TextBox watermark SelectableTextBlock does not have. Text stays empty so the
+        // copy commands still see "no prompt".
+        SidebarPromptPlaceholder.IsVisible = prompt.Length == 0;
         SidebarPromptFade.IsVisible = isCollapsed;
         SidebarPromptExpandButton.IsVisible = isLong;
         SidebarPromptExpandButton.IsChecked = _isPositivePromptExpanded;
@@ -208,6 +211,7 @@ public partial class MainWindow
         bool isCollapsed = isLong && !_isNegativePromptExpanded;
         bool isVisible = SidebarNegativePromptTextContainer.IsVisible;
         SidebarNegativePrompt.MaxHeight = isCollapsed ? CollapsedPositivePromptMaxHeight : double.PositiveInfinity;
+        SidebarNegativePromptPlaceholder.IsVisible = isVisible && prompt.Length == 0;
         SidebarNegativePromptFade.IsVisible = isVisible && isCollapsed;
         SidebarNegativePromptExpandButton.IsVisible = isVisible && isLong;
         SidebarNegativePromptExpandButton.IsChecked = _isNegativePromptExpanded;
@@ -363,14 +367,14 @@ public partial class MainWindow
         return false;
     }
 
-    private void ShowCopiedToast(TextBox textBox)
+    private void ShowCopiedToast(SelectableTextBlock promptText)
     {
         Border? badge = null;
-        if (textBox == SidebarPrompt)
+        if (promptText == SidebarPrompt)
         {
             badge = PositiveCopiedBadge;
         }
-        else if (textBox == SidebarNegativePrompt)
+        else if (promptText == SidebarNegativePrompt)
         {
             badge = NegativeCopiedBadge;
         }
@@ -399,53 +403,62 @@ public partial class MainWindow
         }
     }
 
-    private void ClearTextBoxFocusAfterCopy(TextBox textBox)
+    // SelectableTextBlock has no caret and no focus adorner, so the old post-copy focus reset is gone; all
+    // that is still wanted is dropping the highlight and confirming the copy.
+    private void AfterPromptCopy(SelectableTextBlock promptText)
     {
-        textBox.ClearSelection();
-        ShowCopiedToast(textBox);
-        
-        Dispatcher.UIThread.Post(() =>
-        {
-            var focusManager = TopLevel.GetTopLevel(this)?.FocusManager;
-            if (focusManager != null && textBox.IsKeyboardFocusWithin)
-            {
-                focusManager.Focus(null, NavigationMethod.Unspecified, KeyModifiers.None);
-            }
-        }, DispatcherPriority.Background);
+        promptText.ClearSelection();
+        ShowCopiedToast(promptText);
     }
 
-    private void TextBox_CopyingToClipboard(object? sender, RoutedEventArgs e)
+    // SelectableTextBlock copies on Ctrl+C itself but raises no event for it, so the confirmation toast is
+    // driven from the key press. TextBox.CopyingToClipboardEvent used to cover this.
+    private async void SidebarPromptText_KeyDown(object? sender, KeyEventArgs e)
     {
-        if (sender is TextBox textBox)
+        if (sender is not SelectableTextBlock promptText ||
+            e.Key != Key.C ||
+            (e.KeyModifiers & KeyModifiers.Control) == 0)
         {
-            Dispatcher.UIThread.Post(() => ClearTextBoxFocusAfterCopy(textBox));
+            return;
+        }
+
+        var selection = promptText.SelectedText;
+        if (string.IsNullOrEmpty(selection))
+        {
+            return;
+        }
+
+        e.Handled = true;
+        if (await CopyTextAsync(selection))
+        {
+            AfterPromptCopy(promptText);
         }
     }
 
-    private TextBox? GetTargetTextBox(object? sender)
+    private SelectableTextBlock? GetTargetPromptText(object? sender)
     {
         if (sender is MenuItem item)
         {
-            if (item.Name == "MenuCopyNegativeSelection" || 
-                item.Name == "MenuCopyNegativeFullPrompt" || 
+            if (item.Name == "MenuCopyNegativeSelection" ||
+                item.Name == "MenuCopyNegativeFullPrompt" ||
                 item.Name == "MenuSelectNegativeAll")
             {
                 return SidebarNegativePrompt;
             }
-            if (item.Name == "MenuCopySelection" || 
-                item.Name == "MenuCopyFullPrompt" || 
+            if (item.Name == "MenuCopySelection" ||
+                item.Name == "MenuCopyFullPrompt" ||
                 item.Name == "MenuSelectAll")
             {
                 return SidebarPrompt;
             }
         }
-        if (_activeContextMenuTextBox is not null)
+        if (_activeContextMenuPromptText is not null)
         {
-            return _activeContextMenuTextBox;
+            return _activeContextMenuPromptText;
         }
         if (sender is MenuItem item2 && item2.Parent is ContextMenu menu)
         {
-            return menu.PlacementTarget as TextBox;
+            return menu.PlacementTarget as SelectableTextBlock;
         }
         return null;
     }
@@ -454,14 +467,14 @@ public partial class MainWindow
     {
         if (sender is ContextMenu menu)
         {
-            var textBox = menu.PlacementTarget as TextBox;
-            if (textBox is not null)
+            var promptText = menu.PlacementTarget as SelectableTextBlock;
+            if (promptText is not null)
             {
-                _activeContextMenuTextBox = textBox;
+                _activeContextMenuPromptText = promptText;
                 var copyItem = menu.Items.OfType<MenuItem>().FirstOrDefault(i => i.Name == "MenuCopySelection" || i.Name == "MenuCopyNegativeSelection");
                 if (copyItem is not null)
                 {
-                    copyItem.IsEnabled = !string.IsNullOrEmpty(textBox.SelectedText);
+                    copyItem.IsEnabled = !string.IsNullOrEmpty(promptText.SelectedText);
                 }
             }
         }
@@ -469,33 +482,33 @@ public partial class MainWindow
 
     private async void MenuCopySelection_Click(object? sender, RoutedEventArgs e)
     {
-        var textBox = GetTargetTextBox(sender) ?? SidebarPrompt;
-        var selection = textBox.SelectedText;
+        var promptText = GetTargetPromptText(sender) ?? SidebarPrompt;
+        var selection = promptText.SelectedText;
         if (!string.IsNullOrEmpty(selection))
         {
             if (await CopyTextAsync(selection))
             {
-                ClearTextBoxFocusAfterCopy(textBox);
+                AfterPromptCopy(promptText);
             }
         }
     }
 
     private async void MenuCopyFullPrompt_Click(object? sender, RoutedEventArgs e)
     {
-        var textBox = GetTargetTextBox(sender) ?? SidebarPrompt;
-        if (!string.IsNullOrEmpty(textBox.Text))
+        var promptText = GetTargetPromptText(sender) ?? SidebarPrompt;
+        if (!string.IsNullOrEmpty(promptText.Text))
         {
-            if (await CopyTextAsync(textBox.Text))
+            if (await CopyTextAsync(promptText.Text))
             {
-                ClearTextBoxFocusAfterCopy(textBox);
+                AfterPromptCopy(promptText);
             }
         }
     }
 
     private void MenuSelectAll_Click(object? sender, RoutedEventArgs e)
     {
-        var textBox = GetTargetTextBox(sender) ?? SidebarPrompt;
-        textBox.SelectAll();
+        var promptText = GetTargetPromptText(sender) ?? SidebarPrompt;
+        promptText.SelectAll();
     }
 
     private async void ImageContextMenuItem_Click(object? sender, RoutedEventArgs e)

@@ -89,7 +89,7 @@ public partial class MainWindow : Window
     private int _lastPrefetchFirstVisibleRow = -1;
     private int _prefetchDirection = 1;
     private volatile bool _hasSearchQueryActive;
-    private TextBox? _activeContextMenuTextBox;
+    private SelectableTextBlock? _activeContextMenuPromptText;
     private bool _isPositivePromptExpanded;
     private bool _isNegativePromptExpanded;
     private bool _isSidebarSplitterDragging;
@@ -122,9 +122,8 @@ public partial class MainWindow : Window
         GalleryScrollViewer.AddHandler(InputElement.PointerCaptureLostEvent, GalleryScrollViewer_PointerCaptureLost, RoutingStrategies.Bubble, true);
         GalleryScrollViewer.AddHandler(InputElement.PointerWheelChangedEvent, GalleryScrollViewer_PointerWheelChanged, RoutingStrategies.Tunnel, true);
         GalleryItems.AddHandler(Control.RequestBringIntoViewEvent, (_, e) => e.Handled = true, RoutingStrategies.Bubble, true);
-        
-        SidebarPrompt.AddHandler(TextBox.CopyingToClipboardEvent, TextBox_CopyingToClipboard, RoutingStrategies.Bubble, true);
-        SidebarNegativePrompt.AddHandler(TextBox.CopyingToClipboardEvent, TextBox_CopyingToClipboard, RoutingStrategies.Bubble, true);
+        GalleryItems.ElementPrepared += GalleryItems_ElementPrepared;
+        GalleryItems.ElementClearing += GalleryItems_ElementClearing;
 
         _tileSize = _targetTileSize;
         _tileItemExtent = _tileSize + TileGap;

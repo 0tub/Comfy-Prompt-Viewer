@@ -563,59 +563,34 @@ public partial class MainWindow
         }
     }
 
-    private void GalleryItem_AttachedToVisualTree(object? sender, VisualTreeAttachmentEventArgs e)
+    // ItemsRepeater raises exactly one ElementPrepared and one matching ElementClearing per realized
+    // element, which is what keeps ImageItem's realized count balanced. The previous version inferred the
+    // same thing from AttachedToVisualTree / DetachedFromVisualTree / DataContextChanged and had to stash
+    // the previous item in control.Tag to tell recycling apart from a first realization.
+    private void GalleryItems_ElementPrepared(object? sender, ItemsRepeaterElementPreparedEventArgs e)
     {
-        EnsureItemLoadedFromControl(sender);
-    }
-
-    private void GalleryItem_DataContextChanged(object? sender, EventArgs e)
-    {
-        EnsureItemLoadedFromControl(sender);
-    }
-
-    private void EnsureItemLoadedFromControl(object? sender)
-    {
-        if (sender is Control control)
+        if (e.Element.DataContext is not ImageItem item)
         {
-            var newItem = control.DataContext as ImageItem;
-            var oldItem = control.Tag as ImageItem;
+            return;
+        }
 
-            if (oldItem == newItem)
-            {
-                if (newItem is not null)
-                {
-                    QueueViewportThumbnailSchedule();
-                }
-                return;
-            }
+        // Realize unconditionally so every prepare has a matching clear. Only the thumbnail scheduling is
+        // gated on the folder session, because a torn-down folder has no viewport worth scheduling.
+        item.MarkRealized();
 
-            if (oldItem is not null)
-            {
-                oldItem.MarkUnrealized();
-            }
-
-            if (newItem is not null && _folderLoader.CurrentToken is { IsCancellationRequested: false })
-            {
-                control.Tag = newItem;
-                newItem.MarkRealized();
-                QueueViewportThumbnailSchedule();
-            }
-            else
-            {
-                control.Tag = null;
-            }
+        if (_folderLoader.CurrentToken is { IsCancellationRequested: false })
+        {
+            QueueViewportThumbnailSchedule();
         }
     }
 
-    private void GalleryItem_DetachedFromVisualTree(object? sender, VisualTreeAttachmentEventArgs e)
+    // The element still carries the outgoing item's DataContext here, which is why the unrealize can be
+    // attributed without tracking it separately.
+    private void GalleryItems_ElementClearing(object? sender, ItemsRepeaterElementClearingEventArgs e)
     {
-        if (sender is Control control)
+        if (e.Element.DataContext is ImageItem item)
         {
-            if (control.Tag is ImageItem item)
-            {
-                item.MarkUnrealized();
-            }
-            control.Tag = null;
+            item.MarkUnrealized();
         }
     }
 

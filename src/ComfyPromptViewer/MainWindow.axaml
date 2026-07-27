@@ -668,7 +668,7 @@
 
                                                 <!-- Row 4: Mouse Scroll (zooming) -->
                                                 <TextBlock Grid.Row="4" Grid.Column="0" Text="Zoom / Pan preview" Foreground="{DynamicResource TextSecondary}" FontSize="12" VerticalAlignment="Center" />
-                                                <TextBlock Grid.Row="4" Grid.Column="1" Text="Wheel / Drag" Foreground="{DynamicResource TextPrimary}" FontWeight="Medium" FontFamily="{DynamicResource FontMono}" FontSize="11" VerticalAlignment="Center" />
+                                                <TextBlock Grid.Row="4" Grid.Column="1" Text="Wheel / Pinch / Drag" Foreground="{DynamicResource TextPrimary}" FontWeight="Medium" FontFamily="{DynamicResource FontMono}" FontSize="11" VerticalAlignment="Center" />
 
                                                 <TextBlock Grid.Row="5" Grid.Column="0" Text="Toggle selection" Foreground="{DynamicResource TextSecondary}" FontSize="12" VerticalAlignment="Center" />
                                                 <TextBlock Grid.Row="5" Grid.Column="1" Text="Ctrl + Click" Foreground="{DynamicResource TextPrimary}" FontWeight="Medium" FontFamily="{DynamicResource FontMono}" FontSize="11" VerticalAlignment="Center" />
@@ -873,10 +873,7 @@
                                         Height="{DynamicResource GalleryTileSize}"
                                         Padding="6"
                                         Margin="8"
-                                        AttachedToVisualTree="GalleryItem_AttachedToVisualTree"
-                                         DetachedFromVisualTree="GalleryItem_DetachedFromVisualTree"
-                                         DataContextChanged="GalleryItem_DataContextChanged"
-                                         PointerPressed="GalleryItem_PointerPressed"
+                                        PointerPressed="GalleryItem_PointerPressed"
                                          KeyDown="GalleryItem_KeyDown"
                                          AutomationProperties.Name="{Binding FileName, Mode=OneTime}"
                                          Focusable="True">
@@ -895,15 +892,15 @@
                                                 CornerRadius="2"
                                                 IsVisible="{Binding IsLoading}" />
 
+                                         <!-- Composition implicit animation rather than a DoubleTransition:
+                                              a screen of tiles fading in is interpolated on the render
+                                              thread instead of competing with thumbnail dispatch on the
+                                              UI thread. -->
                                          <Border Background="Transparent"
                                                  CornerRadius="2"
                                                  ClipToBounds="True"
+                                                 local:CompositionFade.Duration="0:0:0.10"
                                                  Opacity="{Binding ThumbnailOpacity}">
-                                             <Border.Transitions>
-                                                 <Transitions>
-                                                     <DoubleTransition Property="Opacity" Duration="0:0:0.10" Easing="CubicEaseOut" />
-                                                 </Transitions>
-                                             </Border.Transitions>
                                              <Image Source="{Binding Preview}"
                                                     RenderOptions.BitmapInterpolationMode="LowQuality"
                                                     Stretch="Uniform"
@@ -1055,35 +1052,51 @@
                                  </Border>
                                                 
                                      <Grid Name="SidebarPromptContainer" ClipToBounds="True">
-                                         <TextBox Name="SidebarPrompt"
-                                                  IsReadOnly="True"
-                                                  AcceptsReturn="True"
-                                                  TextWrapping="Wrap"
-                                                  Background="{DynamicResource SurfaceInput}"
-                                                  Foreground="{DynamicResource PromptText}"
-                                                  BorderBrush="{DynamicResource BorderAccent}"
-                                                  BorderThickness="3,0,0,0"
-                                                  CornerRadius="2"
-                                                  Padding="10,8"
-                                                  FontFamily="{DynamicResource FontUI}"
-                                                  FontSize="12"
-                                                  FontWeight="Normal"
-                                                  LineHeight="20.4"
-                                                  FocusAdorner="{x:Null}"
-                                                  AutomationProperties.Name="Positive prompt"
-                                                  MinHeight="80"
-                                                  MaxHeight="168"
-                                                  ScrollViewer.VerticalScrollBarVisibility="Hidden"
-                                                  PlaceholderText="No prompt found">
-                                             <TextBox.ContextMenu>
-                                                 <ContextMenu Opened="ContextMenu_Opened">
-                                                     <MenuItem Header="Copy Selected Text" Name="MenuCopySelection" Click="MenuCopySelection_Click" InputGesture="Ctrl+C" />
-                                                     <MenuItem Header="Copy Full Prompt" Name="MenuCopyFullPrompt" Click="MenuCopyFullPrompt_Click" />
-                                                     <Separator />
-                                                     <MenuItem Header="Select All" Name="MenuSelectAll" Click="MenuSelectAll_Click" InputGesture="Ctrl+A" />
-                                                 </ContextMenu>
-                                             </TextBox.ContextMenu>
-                                         </TextBox>
+                                         <!-- SelectableTextBlock instead of a read-only TextBox: selection and
+                                              copy without a caret, a focus adorner, or the TextBox chrome that
+                                              had to be overridden away. It has no border, so the accent bar is
+                                              the wrapping Border, and no watermark, so the placeholder is a
+                                              sibling TextBlock. That keeps Text empty when there is no prompt,
+                                              which is what the copy commands check. -->
+                                         <Border Background="{DynamicResource SurfaceInput}"
+                                                 BorderBrush="{DynamicResource BorderAccent}"
+                                                 BorderThickness="3,0,0,0"
+                                                 CornerRadius="2"
+                                                 VerticalAlignment="Top">
+                                             <SelectableTextBlock Name="SidebarPrompt"
+                                                                  TextWrapping="Wrap"
+                                                                  Foreground="{DynamicResource PromptText}"
+                                                                  SelectionBrush="{DynamicResource BorderAccent}"
+                                                                  SelectionForegroundBrush="{DynamicResource TextPrimary}"
+                                                                  Padding="10,8"
+                                                                  FontFamily="{DynamicResource FontUI}"
+                                                                  FontSize="12"
+                                                                  FontWeight="Normal"
+                                                                  LineHeight="20.4"
+                                                                  AutomationProperties.Name="Positive prompt"
+                                                                  MinHeight="80"
+                                                                  MaxHeight="168"
+                                                                  ClipToBounds="True"
+                                                                  KeyDown="SidebarPromptText_KeyDown">
+                                                 <SelectableTextBlock.ContextMenu>
+                                                     <ContextMenu Opened="ContextMenu_Opened">
+                                                         <MenuItem Header="Copy Selected Text" Name="MenuCopySelection" Click="MenuCopySelection_Click" InputGesture="Ctrl+C" />
+                                                         <MenuItem Header="Copy Full Prompt" Name="MenuCopyFullPrompt" Click="MenuCopyFullPrompt_Click" />
+                                                         <Separator />
+                                                         <MenuItem Header="Select All" Name="MenuSelectAll" Click="MenuSelectAll_Click" InputGesture="Ctrl+A" />
+                                                     </ContextMenu>
+                                                 </SelectableTextBlock.ContextMenu>
+                                             </SelectableTextBlock>
+                                         </Border>
+                                         <TextBlock Name="SidebarPromptPlaceholder"
+                                                    Text="No prompt found"
+                                                    Foreground="{DynamicResource TextMuted}"
+                                                    FontFamily="{DynamicResource FontUI}"
+                                                    FontSize="12"
+                                                    Margin="13,8,10,0"
+                                                    VerticalAlignment="Top"
+                                                    IsHitTestVisible="False"
+                                                    IsVisible="False" />
                                          <Border Name="SidebarPromptFade"
                                                  Height="48"
                                                  Margin="3,0,0,0"
@@ -1198,35 +1211,45 @@
                                           <Grid Name="SidebarNegativePromptTextContainer"
                                                 ClipToBounds="True"
                                                 IsVisible="False">
-                                              <TextBox Name="SidebarNegativePrompt"
-                                                       IsReadOnly="True"
-                                                       AcceptsReturn="True"
-                                                       TextWrapping="Wrap"
-                                                       Background="{DynamicResource SurfaceInput}"
-                                                       Foreground="{DynamicResource PromptText}"
-                                                       BorderBrush="{DynamicResource BorderAccent}"
-                                                       BorderThickness="3,0,0,0"
-                                                       CornerRadius="2"
-                                                       Padding="10,8"
-                                                       FontFamily="{DynamicResource FontUI}"
-                                                       FontSize="12"
-                                                       FontWeight="Normal"
-                                                       LineHeight="20.4"
-                                                       FocusAdorner="{x:Null}"
-                                                       AutomationProperties.Name="Negative prompt"
-                                                       MinHeight="80"
-                                                       MaxHeight="168"
-                                                       ScrollViewer.VerticalScrollBarVisibility="Hidden"
-                                                       PlaceholderText="No negative prompt found">
-                                                  <TextBox.ContextMenu>
-                                                      <ContextMenu Opened="ContextMenu_Opened">
-                                                          <MenuItem Header="Copy Selected Text" Name="MenuCopyNegativeSelection" Click="MenuCopySelection_Click" InputGesture="Ctrl+C" />
-                                                          <MenuItem Header="Copy Full Prompt" Name="MenuCopyNegativeFullPrompt" Click="MenuCopyFullPrompt_Click" />
-                                                          <Separator />
-                                                          <MenuItem Header="Select All" Name="MenuSelectNegativeAll" Click="MenuSelectAll_Click" InputGesture="Ctrl+A" />
-                                                      </ContextMenu>
-                                                  </TextBox.ContextMenu>
-                                              </TextBox>
+                                              <Border Background="{DynamicResource SurfaceInput}"
+                                                      BorderBrush="{DynamicResource BorderAccent}"
+                                                      BorderThickness="3,0,0,0"
+                                                      CornerRadius="2"
+                                                      VerticalAlignment="Top">
+                                                  <SelectableTextBlock Name="SidebarNegativePrompt"
+                                                                       TextWrapping="Wrap"
+                                                                       Foreground="{DynamicResource PromptText}"
+                                                                       SelectionBrush="{DynamicResource BorderAccent}"
+                                                                       SelectionForegroundBrush="{DynamicResource TextPrimary}"
+                                                                       Padding="10,8"
+                                                                       FontFamily="{DynamicResource FontUI}"
+                                                                       FontSize="12"
+                                                                       FontWeight="Normal"
+                                                                       LineHeight="20.4"
+                                                                       AutomationProperties.Name="Negative prompt"
+                                                                       MinHeight="80"
+                                                                       MaxHeight="168"
+                                                                       ClipToBounds="True"
+                                                                       KeyDown="SidebarPromptText_KeyDown">
+                                                      <SelectableTextBlock.ContextMenu>
+                                                          <ContextMenu Opened="ContextMenu_Opened">
+                                                              <MenuItem Header="Copy Selected Text" Name="MenuCopyNegativeSelection" Click="MenuCopySelection_Click" InputGesture="Ctrl+C" />
+                                                              <MenuItem Header="Copy Full Prompt" Name="MenuCopyNegativeFullPrompt" Click="MenuCopyFullPrompt_Click" />
+                                                              <Separator />
+                                                              <MenuItem Header="Select All" Name="MenuSelectNegativeAll" Click="MenuSelectAll_Click" InputGesture="Ctrl+A" />
+                                                          </ContextMenu>
+                                                      </SelectableTextBlock.ContextMenu>
+                                                  </SelectableTextBlock>
+                                              </Border>
+                                              <TextBlock Name="SidebarNegativePromptPlaceholder"
+                                                         Text="No negative prompt found"
+                                                         Foreground="{DynamicResource TextMuted}"
+                                                         FontFamily="{DynamicResource FontUI}"
+                                                         FontSize="12"
+                                                         Margin="13,8,10,0"
+                                                         VerticalAlignment="Top"
+                                                         IsHitTestVisible="False"
+                                                         IsVisible="False" />
                                               <Border Name="SidebarNegativePromptFade"
                                                       Height="48"
                                                       Margin="3,0,0,0"
@@ -1652,7 +1675,13 @@
                                     PointerPressed="LargePreviewCanvas_PointerPressed"
                                     PointerMoved="LargePreviewCanvas_PointerMoved"
                                     PointerReleased="LargePreviewCanvas_PointerReleased"
-                                    PointerCaptureLost="LargePreviewCanvas_PointerCaptureLost">
+                                    PointerCaptureLost="LargePreviewCanvas_PointerCaptureLost"
+                                    Pinch="LargePreviewCanvas_Pinch"
+                                    PinchEnded="LargePreviewCanvas_PinchEnded">
+                                <!-- Pinch is only raised for elements that opt in with a recognizer. -->
+                                <Canvas.GestureRecognizers>
+                                    <PinchGestureRecognizer />
+                                </Canvas.GestureRecognizers>
                                 <Canvas.ContextMenu>
                                     <ContextMenu Opened="ImageContextMenu_Opened">
                                         <MenuItem Header="Open in File Explorer" Tag="open" Click="ImageContextMenuItem_Click" />
