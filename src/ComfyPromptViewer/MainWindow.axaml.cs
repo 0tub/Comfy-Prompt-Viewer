@@ -53,7 +53,7 @@ public partial class MainWindow : Window
     private readonly MetadataRepository _metadataRepository;
     private readonly ImageMetadataService _metadataService;
     private readonly MetadataScanCoordinator _metadataScanner;
-    private readonly FolderLoadCoordinator _folderLoader = new();
+    private readonly SessionGate _folderLoader = new();
     private readonly GalleryCatalog _catalog = new();
     private readonly HashSet<ImageItem> _selectedItems = [];
     private readonly List<ImageItem> _visibleThumbnailScheduleItems = [];
@@ -118,7 +118,7 @@ public partial class MainWindow : Window
         _thumbnailLoads = new ThumbnailLoadCoordinator(_decodedImageCache);
         _metadataRepository = new MetadataRepository(AppPaths.LocalDataDirectory);
         _metadataService = new ImageMetadataService(_metadataRepository);
-        _metadataScanner = new MetadataScanCoordinator(_metadataRepository, new AvaloniaUiScheduler());
+        _metadataScanner = new MetadataScanCoordinator(_metadataRepository);
         InitializeComponent();
         DataContext = _viewModel;
         _thumbnailLoads.VisibleWorkDrained = _thumbnailService.ResumeDeferredWrites;

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Avalonia.Threading;
 
 namespace ComfyPromptViewer;
 
@@ -16,14 +17,10 @@ internal sealed class MetadataScanCoordinator
     // Scanner staleness is one SessionGate; see Staleness.cs. Do not add a second counter here.
     private readonly SessionGate _gate = new();
     private readonly MetadataRepository _metadataRepository;
-    private readonly IUiScheduler _uiScheduler;
 
-    public MetadataScanCoordinator(
-        MetadataRepository metadataRepository,
-        IUiScheduler uiScheduler)
+    public MetadataScanCoordinator(MetadataRepository metadataRepository)
     {
         _metadataRepository = metadataRepository;
-        _uiScheduler = uiScheduler;
     }
 
     public bool HasActiveSession => _gate.IsActive;
@@ -77,7 +74,7 @@ internal sealed class MetadataScanCoordinator
 
             if (session.IsCurrent)
             {
-                await _uiScheduler.InvokeAsync(() =>
+                await Dispatcher.UIThread.InvokeAsync(() =>
                 {
                     if (session.IsCurrent)
                     {
@@ -110,7 +107,7 @@ internal sealed class MetadataScanCoordinator
             for (var uiStart = loadStart; cachedEntries.Count > 0 && uiStart < loadEnd; uiStart += WarmUiBatchSize)
             {
                 var batchStart = uiStart;
-                await _uiScheduler.InvokeBackgroundAsync(() =>
+                await Dispatcher.UIThread.InvokeAsync(() =>
                 {
                     if (!session.IsCurrent)
                     {
@@ -126,7 +123,7 @@ internal sealed class MetadataScanCoordinator
                             item.ApplyMetadataEntry(entry);
                         }
                     }
-                });
+                }, DispatcherPriority.Background);
 
                 if (!session.IsCurrent)
                 {
@@ -135,13 +132,13 @@ internal sealed class MetadataScanCoordinator
             }
         }
 
-        await _uiScheduler.InvokeBackgroundAsync(() =>
+        await Dispatcher.UIThread.InvokeAsync(() =>
         {
             if (session.IsCurrent && hasSearchQuery())
             {
                 applyFilter();
             }
-        });
+        }, DispatcherPriority.Background);
         return session.IsCurrent;
     }
 
@@ -162,7 +159,7 @@ internal sealed class MetadataScanCoordinator
 
             if (hasSearchQuery())
             {
-                _uiScheduler.Post(() =>
+                Dispatcher.UIThread.Post(() =>
                 {
                     if (session.IsCurrent)
                     {
@@ -220,7 +217,7 @@ internal sealed class MetadataScanCoordinator
                     await ApplyColdBatchAsync(claimedBatch, session);
                     if (hasSearchQuery() && TryClaimRefresh(ref lastRefreshTime, items))
                     {
-                        _uiScheduler.Post(() =>
+                        Dispatcher.UIThread.Post(() =>
                         {
                             if (session.IsCurrent)
                             {
@@ -264,7 +261,7 @@ internal sealed class MetadataScanCoordinator
         }
         _metadataRepository.SaveMany(entriesToSave);
 
-        await _uiScheduler.InvokeBackgroundAsync(() =>
+        await Dispatcher.UIThread.InvokeAsync(() =>
         {
             if (!session.IsCurrent)
             {
@@ -275,7 +272,7 @@ internal sealed class MetadataScanCoordinator
             {
                 pending.Item.ApplyMetadataResult(pending.Result);
             }
-        });
+        }, DispatcherPriority.Background);
     }
 
     private static bool TryClaimRefresh(ref DateTime lastRefreshTime, object refreshLock)

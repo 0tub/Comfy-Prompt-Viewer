@@ -6,10 +6,12 @@ using System.IO;
 using System.IO.Compression;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
+using Xunit;
 
 namespace ComfyPromptViewer;
 
-internal static class SelfCheck
+public class SelfCheck
 {
     private static readonly MetadataRepository ItemMetadataRepository =
         new(Path.Combine(Path.GetTempPath(), "comfypromptviewer-selfcheck-items"));
@@ -23,7 +25,10 @@ internal static class SelfCheck
             .GetAwaiter()
             .GetResult();
 
-    public static void Run()
+    // One ordered pass, not 38 independent facts: the checks share the static fixtures above, and several
+    // hand the next one the state it expects (a held cache-write slot, a populated pack).
+    [Fact]
+    public async Task SelfCheckSuitePasses()
     {
         CheckStalenessGates();
         CheckSearchParsing();
@@ -36,7 +41,6 @@ internal static class SelfCheck
         CheckGalleryInsertionDiff();
         CheckGalleryCatalog();
         CheckSortedInsertion();
-        CheckFolderLoadSessions();
         CheckThemeModes();
         CheckPromptExtraction();
         CheckPromptExtractionHeuristics();
@@ -46,7 +50,7 @@ internal static class SelfCheck
         CheckMetadataBatchSave();
         CheckMetadataBatchLoad();
         CheckMetadataIndexCleanup();
-        CheckMetadataFailureClassification();
+        await CheckMetadataFailureClassification();
         CheckThumbnailCacheWriteBackpressure();
         CheckDeferredThumbnailCacheWriteQueue();
         CheckDeferredThumbnailCacheWriteGivesUpAfterFailure();
@@ -59,14 +63,14 @@ internal static class SelfCheck
         CheckLongPathJpegThumbnailEncoding();
         CheckThumbnailPackRoundTrip();
         CheckThumbnailFolderScopeIdentity();
-        CheckFolderThumbnailCacheIsolation();
+        await CheckFolderThumbnailCacheIsolation();
         CheckThumbnailCacheBudget();
         CheckThumbnailDecodeWidths();
         CheckSidebarWidthClamping();
         CheckWindowPlacementRoundTrip();
     }
 
-    private static void CheckSidebarWidthClamping()
+    private void CheckSidebarWidthClamping()
     {
         // A comfortable window leaves a dragged width exactly where the user put it.
         Check(MainWindow.ComputeClampedSidebarWidth(420, 1600) == 420,
@@ -86,7 +90,7 @@ internal static class SelfCheck
             "Expected the sidebar maximum width to bound an absurd stored value.");
     }
 
-    private static void CheckWindowPlacementRoundTrip()
+    private void CheckWindowPlacementRoundTrip()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"cpv-placement-{Guid.NewGuid():N}");
         try
@@ -122,7 +126,7 @@ internal static class SelfCheck
 
     // The two staleness primitives replaced six hand-rolled counters. Everything that used to be an
     // "did this path remember to bump/check" bug now lives or dies here.
-    private static void CheckStalenessGates()
+    private void CheckStalenessGates()
     {
         var gate = new GenerationGate();
         var first = gate.Begin();
@@ -139,6 +143,8 @@ internal static class SelfCheck
         var sessions = new SessionGate();
         var firstSession = sessions.Restart();
         Check(firstSession.IsCurrent && sessions.IsActive, "Expected a restarted session to be current.");
+        Check(sessions.IsCurrent(firstSession.Generation),
+            "Expected a generation carried on its own to resolve to the active session.");
 
         var joined = sessions.Snapshot();
         Check(joined.IsCurrent, "Expected a snapshot of the active session to be current.");
@@ -147,17 +153,21 @@ internal static class SelfCheck
         Check(firstSession.IsStale && firstSession.Token.IsCancellationRequested,
             "Expected restarting a session gate to cancel and supersede the previous session.");
         Check(secondSession.IsCurrent, "Expected the replacement session to be current.");
+        Check(!sessions.IsCurrent(firstSession.Generation),
+            "Expected a superseded generation carried on its own to be rejected.");
 
         sessions.Cancel();
         Check(secondSession.IsStale && secondSession.Token.IsCancellationRequested,
             "Expected canceling a session gate to cancel and supersede the active session.");
         Check(!sessions.IsActive, "Expected a canceled session gate to report no active session.");
+        Check(!sessions.IsCurrent(secondSession.Generation),
+            "Expected canceling a session gate to reject its generation.");
         Check(default(Session).IsStale, "Expected an unassigned session to read as stale.");
     }
 
     // The index is only correct because GalleryCatalog is its single owner: every membership change and
     // every metadata load goes through one call that updates both.
-    private static void CheckSearchIndexMaintenance()
+    private void CheckSearchIndexMaintenance()
     {
         var catalog = new GalleryCatalog();
         var kept = CreateImageItem(Path.Combine(Path.GetTempPath(), "index-kept.png"));
@@ -206,7 +216,7 @@ internal static class SelfCheck
             "Expected clearing the catalog to release every search row.");
     }
 
-    private static void CheckParallelSearchFiltering()
+    private void CheckParallelSearchFiltering()
     {
         // Exceeds the parallel threshold so the partitioned path runs.
         const int candidateCount = 20000;
@@ -263,7 +273,7 @@ internal static class SelfCheck
         return matched;
     }
 
-    private static void CheckSortedInsertion()
+    private void CheckSortedInsertion()
     {
         int[] values = [1, 3, 3, 5];
         Check(MainWindow.FindSortedInsertIndex(values, 0, static (left, right) => left.CompareTo(right)) == 0,
@@ -274,29 +284,7 @@ internal static class SelfCheck
             "Expected sorted insertion after the last item.");
     }
 
-    private static void CheckFolderLoadSessions()
-    {
-        var coordinator = new FolderLoadCoordinator();
-        var first = coordinator.Restart();
-        Check(first.IsCurrent, "Expected the new folder load session to be current.");
-        Check(coordinator.IsCurrent(first.Generation),
-            "Expected a folder load generation carried on its own to resolve to the active session.");
-
-        var second = coordinator.Restart();
-        Check(first.IsStale, "Expected restarting folder loading to invalidate the previous session.");
-        Check(first.Token.IsCancellationRequested, "Expected restarting folder loading to cancel the previous token.");
-        Check(second.IsCurrent, "Expected the replacement folder load session to be current.");
-        Check(!coordinator.IsCurrent(first.Generation),
-            "Expected a superseded folder load generation to be rejected.");
-
-        coordinator.Cancel();
-        Check(second.IsStale, "Expected canceling folder loading to invalidate the active session.");
-        Check(!coordinator.IsCurrent(second.Generation),
-            "Expected canceling folder loading to reject its generation.");
-        Check(second.Token.IsCancellationRequested, "Expected canceling folder loading to cancel the active token.");
-    }
-
-    private static void CheckGalleryScrollAnchoring()
+    private void CheckGalleryScrollAnchoring()
     {
         var offset = MainWindow.CalculateAnchoredGalleryOffset(
             oldIndex: 20,
@@ -319,7 +307,7 @@ internal static class SelfCheck
         Check(offset == 700, "Expected deleting the first visible gallery item to preserve the current scroll offset.");
     }
 
-    private static void CheckGalleryItemReconciliation()
+    private void CheckGalleryItemReconciliation()
     {
         var a = CreateImageItem(Path.Combine(Path.GetTempPath(), "gallery-a.png"));
         var b = CreateImageItem(Path.Combine(Path.GetTempPath(), "gallery-b.png"));
@@ -336,7 +324,7 @@ internal static class SelfCheck
 
     // The allocation-free watcher path. A wrong diff here silently corrupts the gallery order rather than
     // failing loudly, so every rejection case is covered as well as the applied result.
-    private static void CheckGalleryInsertionDiff()
+    private void CheckGalleryInsertionDiff()
     {
         var a = CreateImageItem(Path.Combine(Path.GetTempPath(), "insert-a.png"));
         var b = CreateImageItem(Path.Combine(Path.GetTempPath(), "insert-b.png"));
@@ -380,7 +368,7 @@ internal static class SelfCheck
             "Expected an insertion paired with a removal to fall back to the general gallery sync path.");
     }
 
-    private static void CheckGalleryCatalog()
+    private void CheckGalleryCatalog()
     {
         int NewestFirst(GalleryEntry left, GalleryEntry right) =>
             right.Fingerprint.LastWriteTimeUtcTicks.CompareTo(left.Fingerprint.LastWriteTimeUtcTicks);
@@ -432,7 +420,7 @@ internal static class SelfCheck
         Check(catalog.LoadedMetadataCount == 0, "Expected clearing the catalog to reset the loaded count.");
     }
 
-    private static void CheckSearchParsing()
+    private void CheckSearchParsing()
     {
         SearchEngine.ParseQuery("cat \"red dress\" -bad -\"low quality\"", out var positive, out var negative);
 
@@ -470,7 +458,7 @@ internal static class SelfCheck
             "Expected all search exclusions to check resource metadata.");
     }
 
-    private static void CheckSearchResultGenerations()
+    private void CheckSearchResultGenerations()
     {
         var gate = new SessionGate();
         var session = gate.Restart();
@@ -486,7 +474,7 @@ internal static class SelfCheck
 
     // Applying a background result computed from an older snapshot depends on metadata loading only ever
     // removing matches. If this stops holding, searches silently lose items.
-    private static void CheckMetadataLoadOnlyRemovesMatches()
+    private void CheckMetadataLoadOnlyRemovesMatches()
     {
         foreach (var scope in new[] { SearchScope.All, SearchScope.PositivePrompt, SearchScope.NegativePrompt })
         {
@@ -529,7 +517,7 @@ internal static class SelfCheck
         excludeCatalog.Clear();
     }
 
-    private static void CheckThemeModes()
+    private void CheckThemeModes()
     {
         Check(Enum.GetValues<ThemeMode>().Length == 5, "Expected five theme modes.");
         Check((int)ThemeMode.Brown == 0 &&
@@ -540,7 +528,7 @@ internal static class SelfCheck
             "Expected theme mode order to match ThemeComboBox.");
     }
 
-    private static void CheckPromptExtraction()
+    private void CheckPromptExtraction()
     {
         var extracted = PromptExtractor.ExtractAll(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -652,7 +640,7 @@ internal static class SelfCheck
     }
 
     // Three ways the graph heuristics used to produce confidently wrong prompts.
-    private static void CheckPromptExtractionHeuristics()
+    private void CheckPromptExtractionHeuristics()
     {
         // No sampler, so both prompts come from the fallbacks. "negative space" is ordinary positive
         // vocabulary; matching it against the node's raw JSON dropped the positive and promoted it.
@@ -726,7 +714,7 @@ internal static class SelfCheck
             $"Expected a settings-free conditioning node not to lock out the sampler, got '{conditioningFirst.GenerationSettings.Sampler}'.");
     }
 
-    private static void CheckPngMetadataRead()
+    private void CheckPngMetadataRead()
     {
         var path = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}.png");
         try
@@ -745,7 +733,7 @@ internal static class SelfCheck
         }
     }
 
-    private static void CheckPngMetadataLimit()
+    private void CheckPngMetadataLimit()
     {
         var path = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}.png");
         try
@@ -763,7 +751,7 @@ internal static class SelfCheck
         }
     }
 
-    private static void CheckMetadataIndexRoundTrip()
+    private void CheckMetadataIndexRoundTrip()
     {
         var path = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}.png");
         var databaseDirectory = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-metadata-{Guid.NewGuid():N}");
@@ -772,7 +760,7 @@ internal static class SelfCheck
             WriteTinyPng(path, "parameters", "cached prompt\nSteps: 1, Seed: 2");
             Check(File.Exists(path), "Expected temporary metadata index source file.");
             using var repository = new MetadataRepository(databaseDirectory);
-            Check(repository.RoundTripsForSelfCheck(path), "Expected metadata index round trip.");
+            Check(RoundTripsThroughIndex(repository, path), "Expected metadata index round trip.");
             var fingerprint = GetFingerprint(path);
             Check(repository.TryLoad(path, fingerprint, out _), "Expected matching source fingerprint to hit metadata cache.");
             Check(
@@ -790,7 +778,7 @@ internal static class SelfCheck
     }
 
     // A batched lookup must return only rows whose fingerprint still matches, paired to the right path.
-    private static void CheckMetadataBatchLoad()
+    private void CheckMetadataBatchLoad()
     {
         var folder = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-load-{Guid.NewGuid():N}");
         var databaseDirectory = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-load-db-{Guid.NewGuid():N}");
@@ -854,7 +842,7 @@ internal static class SelfCheck
         }
     }
 
-    private static void CheckMetadataBatchSave()
+    private void CheckMetadataBatchSave()
     {
         var folder = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-batch-{Guid.NewGuid():N}");
         var databaseDirectory = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-batch-db-{Guid.NewGuid():N}");
@@ -912,7 +900,7 @@ internal static class SelfCheck
         }
     }
 
-    private static void CheckMetadataIndexCleanup()
+    private void CheckMetadataIndexCleanup()
     {
         var folder = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-metadata-{Guid.NewGuid():N}");
         var databaseDirectory = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-index-{Guid.NewGuid():N}");
@@ -946,7 +934,7 @@ internal static class SelfCheck
         }
     }
 
-    private static void CheckMetadataFailureClassification()
+    private async Task CheckMetadataFailureClassification()
     {
         var directory = Path.Combine(
             Path.GetTempPath(),
@@ -956,12 +944,12 @@ internal static class SelfCheck
             using var repository = new MetadataRepository(directory);
             var service = new ImageMetadataService(repository);
             var missingPath = Path.Combine(directory, "missing.png");
-            var result = service.LoadAsync(
+            var result = await service.LoadAsync(
                 missingPath,
                 default,
                 skipCacheLookup: false,
                 persistResult: true,
-                default).GetAwaiter().GetResult();
+                default);
             Check(
                 result.Status == MetadataLoadStatus.TransientIoFailure,
                 "Expected a missing image to be classified as a transient I/O failure.");
@@ -1031,7 +1019,7 @@ internal static class SelfCheck
         return ThumbnailPack.CreateKey($"{Path.GetTempPath()}{label}-{Guid.NewGuid():N}.png", 1, 180);
     }
 
-    private static void CheckThumbnailCacheWriteBackpressure()
+    private void CheckThumbnailCacheWriteBackpressure()
     {
         var firstKey = NewThumbnailKey("backpressure-1");
         var secondKey = NewThumbnailKey("backpressure-2");
@@ -1047,7 +1035,7 @@ internal static class SelfCheck
         }
     }
 
-    private static void CheckDeferredThumbnailCacheWriteQueue()
+    private void CheckDeferredThumbnailCacheWriteQueue()
     {
         var activeKey = NewThumbnailKey("queue-active");
         var deferredKey = NewThumbnailKey("queue-deferred");
@@ -1073,7 +1061,7 @@ internal static class SelfCheck
 
     // The deferred queue refills from the viewport on every scroll pass, so a source that cannot be encoded
     // has to be given up on. Retrying it was writing an identical log line per pass, dozens per minute.
-    private static void CheckDeferredThumbnailCacheWriteGivesUpAfterFailure()
+    private void CheckDeferredThumbnailCacheWriteGivesUpAfterFailure()
     {
         var item = CreateImageItem(
             Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}-missing.png"));
@@ -1098,7 +1086,7 @@ internal static class SelfCheck
         ItemThumbnailService.ResumeWrites();
     }
 
-    private static void CheckDeferredThumbnailCacheWritePause()
+    private void CheckDeferredThumbnailCacheWritePause()
     {
         var activeKey = NewThumbnailKey("pause-active");
         var deferredKey = NewThumbnailKey("pause-deferred");
@@ -1120,7 +1108,7 @@ internal static class SelfCheck
 
     // 0 means "decode natively". Ordinary generation resolutions must land there, because for PNG the
     // resample is pure extra work on top of a decode that happens regardless.
-    private static void CheckSelectedPreviewDecodeWidth()
+    private void CheckSelectedPreviewDecodeWidth()
     {
         Check(ThumbnailService.GetPreviewDecodeWidth(832, 1216) == 0,
             "Expected a source narrower than the cap to decode natively rather than upscale.");
@@ -1150,7 +1138,7 @@ internal static class SelfCheck
     // The sidebar keeps the previous image on screen until a replacement is displayed, so a decode that
     // produces nothing has to be distinguishable from one still in flight. Otherwise a partially written
     // or corrupt file leaves the previous picture next to the new file's metadata indefinitely.
-    private static void CheckSelectedPreviewFailureIsObservable()
+    private void CheckSelectedPreviewFailureIsObservable()
     {
         var missing = CreateImageItem(
             Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}-absent.png"));
@@ -1172,7 +1160,7 @@ internal static class SelfCheck
 
     // Prefetch is allowed to overlap the viewport only when the decode is cheap. If a cold ahead load
     // ever starts while visible work is pending, first-paint on a new folder regresses.
-    private static void CheckThumbnailPrefetchPolicy()
+    private void CheckThumbnailPrefetchPolicy()
     {
         Check(!ThumbnailLoadCoordinator.CanStartAheadLoad(
                 isWarm: false, hasVisibleWork: true, activeLoadCount: 0, activeAheadLoads: 0),
@@ -1202,7 +1190,7 @@ internal static class SelfCheck
     }
 
     // Abandons scrolled-away tiles without abandoning a selection outside the last scheduled window.
-    private static void CheckRetainedViewportWindow()
+    private void CheckRetainedViewportWindow()
     {
         var coordinator = new ThumbnailLoadCoordinator(ItemDecodedImageCache);
         var visible = CreateImageItem(Path.Combine(Path.GetTempPath(), "retained-visible.png"));
@@ -1240,7 +1228,7 @@ internal static class SelfCheck
 
     // One pack file replaced thousands of small JPEGs, so the round trip, the key's dependence on source
     // version and width, and instant clearing are all load-bearing.
-    private static void CheckThumbnailPackRoundTrip()
+    private void CheckThumbnailPackRoundTrip()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-pack-{Guid.NewGuid():N}");
         var sourcePath = Path.Combine(directory, "image.png");
@@ -1291,7 +1279,7 @@ internal static class SelfCheck
 
     // The scope directory is derived from the folder path, so any two spellings a user can reach the same
     // folder by have to collapse to one cache. A miss here silently builds a second cache for the folder.
-    private static void CheckThumbnailFolderScopeIdentity()
+    private void CheckThumbnailFolderScopeIdentity()
     {
         var root = Path.Combine(Path.GetTempPath(), "comfypromptviewer-selfcheck-scope-identity");
         var plain = ThumbnailFolderScope.NormalizeFolderPath(root);
@@ -1346,7 +1334,7 @@ internal static class SelfCheck
 
     // The point of the per-folder layout: identical keys in two scopes do not collide, and clearing one
     // folder leaves the other's thumbnails readable.
-    private static void CheckFolderThumbnailCacheIsolation()
+    private async Task CheckFolderThumbnailCacheIsolation()
     {
         var appData = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-folders-{Guid.NewGuid():N}");
         var folderA = Path.Combine(appData, "source-a");
@@ -1359,18 +1347,15 @@ internal static class SelfCheck
             byte[] payloadA = [1, 2, 3, 4];
             byte[] payloadB = [5, 6, 7, 8, 9];
 
-            var scopeA = service.OpenFolderScopeAsync(folderA).GetAwaiter().GetResult();
+            var scopeA = await service.OpenFolderScopeAsync(folderA);
             Check(scopeA.Pack.Write(key, payloadA), "Expected a write into the first folder cache to succeed.");
 
             // Reopening the same folder with a trailing separator must reuse the live scope, not build a
             // second one beside it.
-            var sameScope = service
-                .OpenFolderScopeAsync(folderA + Path.DirectorySeparatorChar)
-                .GetAwaiter()
-                .GetResult();
+            var sameScope = await service.OpenFolderScopeAsync(folderA + Path.DirectorySeparatorChar);
             Check(ReferenceEquals(sameScope, scopeA), "Expected reopening the same folder to reuse its cache scope.");
 
-            var scopeB = service.OpenFolderScopeAsync(folderB).GetAwaiter().GetResult();
+            var scopeB = await service.OpenFolderScopeAsync(folderB);
             Check(scopeA.IsRetired, "Expected a folder swap to retire the previous cache scope.");
             Check(!service.HasCachedThumbnail(scopeA, key),
                 "Expected a retired scope to report a miss so stale work stops instead of racing a closing pack.");
@@ -1381,10 +1366,10 @@ internal static class SelfCheck
                 "Expected the second folder cache to round trip its own payload.");
 
             // Clearing folder B must not touch folder A's pack.
-            service.ClearFolderCacheAsync(scopeB).GetAwaiter().GetResult();
+            await service.ClearFolderCacheAsync(scopeB);
             Check(!scopeB.Pack.Contains(key), "Expected clearing a folder cache to drop its entries.");
 
-            var reopenedA = service.OpenFolderScopeAsync(folderA).GetAwaiter().GetResult();
+            var reopenedA = await service.OpenFolderScopeAsync(folderA);
             Check(reopenedA.Pack.TryRead(key, out var readA) && readA.AsSpan().SequenceEqual(payloadA),
                 "Expected clearing one folder cache to leave another folder's thumbnails readable on reopen.");
 
@@ -1394,7 +1379,7 @@ internal static class SelfCheck
             File.WriteAllBytes(legacyPack, [0, 1, 2, 3]);
             File.WriteAllBytes(legacyIndex, [0, 1, 2, 3]);
 
-            service.ClearAllCachesAsync().GetAwaiter().GetResult();
+            await service.ClearAllCachesAsync();
             Check(!reopenedA.Pack.Contains(key), "Expected the global clear to empty the active folder cache.");
             Check(!Directory.Exists(scopeB.Directory), "Expected the global clear to remove other folder caches.");
             Check(!File.Exists(legacyPack) && !File.Exists(legacyIndex),
@@ -1407,7 +1392,7 @@ internal static class SelfCheck
         }
     }
 
-    private static void CheckThumbnailCacheBudget()
+    private void CheckThumbnailCacheBudget()
     {
         Check(!DecodedImageCache.ExceedsBudget(DecodedImageCache.MaxCapacity, DecodedImageCache.MaxEstimatedBytes), "Expected exact thumbnail cache budget to fit.");
         Check(DecodedImageCache.ExceedsBudget(DecodedImageCache.MaxCapacity + 1, 0), "Expected thumbnail count budget overflow.");
@@ -1416,7 +1401,7 @@ internal static class SelfCheck
             "Expected a bounded eviction scan so an all-protected cache cannot walk the whole list per touch.");
     }
 
-    private static void CheckThumbnailDecodeWidths()
+    private void CheckThumbnailDecodeWidths()
     {
         var item = CreateImageItem(Path.Combine(Path.GetTempPath(), "decode-width-selfcheck.png"));
 
@@ -1459,7 +1444,7 @@ internal static class SelfCheck
             "Expected extreme render scaling to clamp to the largest decode bucket.");
     }
 
-    private static void CheckJpegThumbnailEncoding()
+    private void CheckJpegThumbnailEncoding()
     {
         var sourcePath = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}.png");
         try
@@ -1478,7 +1463,7 @@ internal static class SelfCheck
     // per scroll pass, forever. The encode has to work from a path this long.
     // Run this one from ComfyPromptViewer.exe, not `dotnet ComfyPromptViewer.dll`: the dotnet host's manifest
     // is longPathAware, so under it even the broken by-name open succeeds and this check cannot fail.
-    private static void CheckLongPathJpegThumbnailEncoding()
+    private void CheckLongPathJpegThumbnailEncoding()
     {
         var root = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}");
         var sourcePath = Path.Combine(root, new string('d', 120), new string('e', 120), "thumbnail-source.png");
@@ -1577,11 +1562,44 @@ internal static class SelfCheck
         stream.Write([0, 0, 0, 0]);
     }
 
+    private static bool RoundTripsThroughIndex(MetadataRepository repository, string path)
+    {
+        var result = new ImageReadResult(1, 2, new(StringComparer.OrdinalIgnoreCase));
+        var extracted = new ExtractedPromptMetadata
+        {
+            Prompt = "cached prompt",
+            NegativePrompt = "cached negative",
+            GenerationSettings = new GenerationSettings
+            {
+                Model = "model",
+                Sampler = "sampler",
+                Seed = "123",
+                Settings = "Steps 1",
+                Lora = "lora",
+                Tool = "Forge",
+                Resources = "Embedding: easynegative"
+            }
+        };
+
+        var fileInfo = new FileInfo(path);
+        var fingerprint = new SourceFingerprint(fileInfo.LastWriteTimeUtc.Ticks, fileInfo.Length);
+        repository.Save(path, fingerprint, result, extracted);
+        return repository.TryLoad(path, fingerprint, out var loaded) &&
+               loaded.Width == 1 &&
+               loaded.Height == 2 &&
+               loaded.Prompt == "cached prompt" &&
+               loaded.NegativePrompt == "cached negative" &&
+               loaded.Model == "model" &&
+               loaded.Sampler == "sampler" &&
+               loaded.Seed == "123" &&
+               loaded.Settings == "Steps 1" &&
+               loaded.Lora == "lora" &&
+               loaded.Tool == "Forge" &&
+               loaded.Resources == "Embedding: easynegative";
+    }
+
     private static void Check(bool condition, string message)
     {
-        if (!condition)
-        {
-            throw new InvalidOperationException(message);
-        }
+        Assert.True(condition, message);
     }
 }

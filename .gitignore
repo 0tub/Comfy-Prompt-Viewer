@@ -34,8 +34,12 @@ Thumbs.db
 *.log
 src/ComfyPromptViewer/bin/
 src/ComfyPromptViewer/obj/
+tests/ComfyPromptViewer.Tests/bin/
+tests/ComfyPromptViewer.Tests/obj/
+TestResults/
 
 # Agent/Local Sandbox Directories
 scratch/
 .gemini/
 AGENTS.md
+/.claude

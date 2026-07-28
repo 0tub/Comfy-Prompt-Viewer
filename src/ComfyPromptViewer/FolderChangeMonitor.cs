@@ -191,7 +191,7 @@ internal sealed class FolderChangeMonitor : IDisposable
 
             var readablePaths = new HashSet<string>(added, StringComparer.OrdinalIgnoreCase);
             readablePaths.UnionWith(changed);
-            var entries = await FolderLoadCoordinator.ReadEntriesAsync(readablePaths, CancellationToken.None);
+            var entries = await FolderScanner.ReadEntriesAsync(readablePaths, CancellationToken.None);
             var addedSet = new HashSet<string>(added, StringComparer.OrdinalIgnoreCase);
             var addedFiles = new List<ImageFileEntry>();
             var changedFiles = new List<ImageFileEntry>();

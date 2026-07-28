@@ -8,12 +8,13 @@
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <ServerGarbageCollection>false</ServerGarbageCollection>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
-    <!-- LiteDB emits an assembly-level trim warning; MetadataIndex uses explicit BsonDocument mapping and is covered by the self-check command. -->
+    <!-- LiteDB emits an assembly-level trim warning; MetadataIndex uses explicit BsonDocument mapping and is covered by ComfyPromptViewer.Tests. -->
     <NoWarn>$(NoWarn);IL2104</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
     <AvaloniaResource Include="Assets\**" />
+    <InternalsVisibleTo Include="ComfyPromptViewer.Tests" />
   </ItemGroup>
 
   <ItemGroup>

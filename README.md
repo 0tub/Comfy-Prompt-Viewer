@@ -67,10 +67,9 @@ dotnet run --project src\ComfyPromptViewer\ComfyPromptViewer.csproj
 - **Linux**: Run `./publish.sh` (outputs `src/ComfyPromptViewer/bin/Release/net10.0/linux-x64/publish/ComfyPromptViewer`)
 
 ### Checks
-After a Debug build, run the built-in self-check:
 
 ```powershell
-dotnet src\ComfyPromptViewer\bin\Debug\net10.0\ComfyPromptViewer.dll --self-check
+dotnet test
 ```
 
 ## License

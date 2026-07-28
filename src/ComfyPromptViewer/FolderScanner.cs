@@ -7,30 +7,8 @@ using System.Threading.Tasks;
 
 namespace ComfyPromptViewer;
 
-internal sealed class FolderLoadCoordinator
+internal static class FolderScanner
 {
-    // Folder-load staleness is one SessionGate; see Staleness.cs. Do not add a second counter here.
-    private readonly SessionGate _gate = new();
-
-    public int Generation => _gate.Generation;
-
-    public CancellationToken? CurrentToken => _gate.CurrentToken;
-
-    public Session Restart()
-    {
-        return _gate.Restart();
-    }
-
-    public void Cancel()
-    {
-        _gate.Cancel();
-    }
-
-    public bool IsCurrent(int generation)
-    {
-        return _gate.IsCurrent(generation);
-    }
-
     public static Task<List<ImageFileEntry>> ReadFolderAsync(
         string folderPath,
         bool includeSubfolders,

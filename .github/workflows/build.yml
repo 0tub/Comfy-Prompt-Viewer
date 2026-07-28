@@ -34,6 +34,9 @@ jobs:
       with:
         dotnet-version: '10.0.x'
 
+    - name: Test
+      run: dotnet test ComfyPromptViewer.sln -c Release
+
     - name: Publish Standalone Binary
       shell: bash
       run: |

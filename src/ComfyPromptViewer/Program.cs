@@ -10,13 +10,6 @@ class Program
     public static void Main(string[] args)
     {
         DecodedImageCache.ConfigureLinuxNativeAllocator();
-
-        if (args.Length == 1 && string.Equals(args[0], "--self-check", StringComparison.OrdinalIgnoreCase))
-        {
-            SelfCheck.Run();
-            return;
-        }
-
         DebugLog.InstallGlobalHandlers();
         DebugLog.Write("App starting");
         try

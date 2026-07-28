@@ -304,42 +304,6 @@ internal sealed class MetadataRepository : IDisposable
         }
     }
 
-    internal bool RoundTripsForSelfCheck(string path)
-    {
-        var result = new ImageReadResult(1, 2, new(StringComparer.OrdinalIgnoreCase));
-        var extracted = new ExtractedPromptMetadata
-        {
-            Prompt = "cached prompt",
-            NegativePrompt = "cached negative",
-            GenerationSettings = new GenerationSettings
-            {
-                Model = "model",
-                Sampler = "sampler",
-                Seed = "123",
-                Settings = "Steps 1",
-                Lora = "lora",
-                Tool = "Forge",
-                Resources = "Embedding: easynegative"
-            }
-        };
-
-        var fileInfo = new FileInfo(path);
-        var fingerprint = new SourceFingerprint(fileInfo.LastWriteTimeUtc.Ticks, fileInfo.Length);
-        Save(path, fingerprint, result, extracted);
-        return TryLoad(path, fingerprint, out var loaded) &&
-               loaded.Width == 1 &&
-               loaded.Height == 2 &&
-               loaded.Prompt == "cached prompt" &&
-               loaded.NegativePrompt == "cached negative" &&
-               loaded.Model == "model" &&
-               loaded.Sampler == "sampler" &&
-               loaded.Seed == "123" &&
-               loaded.Settings == "Steps 1" &&
-               loaded.Lora == "lora" &&
-               loaded.Tool == "Forge" &&
-               loaded.Resources == "Embedding: easynegative";
-    }
-
     private ILiteCollection<BsonDocument> GetCollection()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);

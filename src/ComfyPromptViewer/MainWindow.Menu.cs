@@ -34,31 +34,23 @@ public partial class MainWindow
         }
     }
 
-    private string TruncatePath(string path, int maxSegments = 3)
+    private static string TruncatePath(string path, int maxSegments = 3)
     {
         if (string.IsNullOrEmpty(path))
         {
             return "Open an image folder to start scrolling.";
         }
 
-        try
+        var separator = Path.DirectorySeparatorChar;
+        var parts = path.Split(
+            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+            StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length <= maxSegments)
         {
-            var separator = Path.DirectorySeparatorChar;
-            var parts = path.Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
-            
-            if (parts.Length <= maxSegments)
-            {
-                return path;
-            }
-
-            var lastSegments = parts.Skip(parts.Length - maxSegments).ToArray();
-            return "..." + separator + string.Join(separator, lastSegments);
-        }
-        catch (Exception ex)
-        {
-            DebugLog.Write($"Failed to shorten path {path}: {ex.Message}");
             return path;
         }
+
+        return "..." + separator + string.Join(separator, parts.Skip(parts.Length - maxSegments));
     }
 
     private async void CloseMenuError_Click(object? sender, RoutedEventArgs e)

@@ -10,8 +10,6 @@ public sealed record ImageReadResult(int Width, int Height, Dictionary<string, s
 
 public static class ImageFileReader
 {
-    private static readonly IImageContainerReader[] ContainerReaders =
-        [new PngContainerReader(), new JpegContainerReader(), new WebPContainerReader()];
     private const int MaxTextChunkBytes = 2 * 1024 * 1024;
     private const int MaxInflatedTextBytes = 2 * 1024 * 1024;
     private const int MaxTotalTextMetadataBytes = 4 * 1024 * 1024;
@@ -63,12 +61,20 @@ public static class ImageFileReader
         var ext = span.Slice(dotIndex);
         using var stream = File.OpenRead(path);
 
-        foreach (var reader in ContainerReaders)
+        if (ext.Equals(".png", StringComparison.OrdinalIgnoreCase))
         {
-            if (reader.Supports(ext))
-            {
-                return reader.Read(stream);
-            }
+            return ReadPng(stream);
+        }
+
+        if (ext.Equals(".jpg", StringComparison.OrdinalIgnoreCase) ||
+            ext.Equals(".jpeg", StringComparison.OrdinalIgnoreCase))
+        {
+            return ReadJpeg(stream);
+        }
+
+        if (ext.Equals(".webp", StringComparison.OrdinalIgnoreCase))
+        {
+            return ReadWebP(stream);
         }
 
         throw new InvalidDataException("Unsupported image type.");

@@ -75,7 +75,7 @@ public partial class MainWindow
         try
         {
             var sortMode = _sortMode;
-            var imageFiles = await FolderLoadCoordinator.ReadFolderAsync(
+            var imageFiles = await FolderScanner.ReadFolderAsync(
                 folderPath,
                 includeSubfolders,
                 (left, right) => CompareImageFileEntries(left, right, sortMode),
@@ -109,7 +109,7 @@ public partial class MainWindow
             if (imageFiles.Count == 0)
             {
                 var hasNestedImages = !includeSubfolders &&
-                                      await FolderLoadCoordinator.HasImagesAsync(folderPath, includeSubfolders: true);
+                                      await FolderScanner.HasImagesAsync(folderPath, includeSubfolders: true);
                 if (!loadSession.IsCurrent)
                 {
                     return;
@@ -184,7 +184,7 @@ public partial class MainWindow
         var currentFolderPath = _currentFolderPath;
         if (!includeSubfolders &&
             !string.IsNullOrEmpty(currentFolderPath) &&
-            !await FolderLoadCoordinator.HasImagesAsync(currentFolderPath, includeSubfolders))
+            !await FolderScanner.HasImagesAsync(currentFolderPath, includeSubfolders))
         {
             SyncIncludeSubfoldersToggles();
             CountText.Text = "No top-level images; kept subfolders on";
