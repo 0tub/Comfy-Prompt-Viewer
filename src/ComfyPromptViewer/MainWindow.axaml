@@ -539,6 +539,19 @@
             <Setter Property="BorderBrush" Value="{DynamicResource CardHoverBorder}" />
         </Style>
 
+        <Style Selector="Button.menu-corner-btn">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Foreground" Value="{DynamicResource TextMuted}" />
+            <Setter Property="Padding" Value="8,4" />
+            <Setter Property="FontSize" Value="11.5" />
+            <Setter Property="CornerRadius" Value="3" />
+        </Style>
+        <Style Selector="Button.menu-corner-btn:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
+        </Style>
+
         <Style Selector="Button.menu-maintenance-btn">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtle}" />
@@ -1392,6 +1405,7 @@
                     Grid.ColumnSpan="3"
                     Background="{DynamicResource SurfaceBase}"
                     IsVisible="True">
+              <Panel>
                 <Grid RowDefinitions="Auto,Auto,*"
                       ColumnDefinitions="320,*"
                       RowSpacing="28"
@@ -1608,6 +1622,16 @@
                                    IsVisible="False" />
                     </Grid>
                 </Grid>
+
+                <Button Classes="menu-corner-btn"
+                        Click="AboutButton_Click"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Bottom"
+                        Margin="0,0,14,10"
+                        Content="About &amp; Licenses"
+                        AutomationProperties.Name="About and licenses"
+                        ToolTip.Tip="Version and open-source license notices" />
+              </Panel>
             </Border>
 
         <Border Name="LargePreviewOverlay"

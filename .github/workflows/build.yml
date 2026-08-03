@@ -40,7 +40,12 @@ jobs:
     - name: Publish Standalone Binary
       shell: bash
       run: |
+        VERSION_ARG=""
+        if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+          VERSION_ARG="-p:Version=${GITHUB_REF#refs/tags/v}"
+        fi
         dotnet publish src/ComfyPromptViewer/ComfyPromptViewer.csproj \
+          $VERSION_ARG \
           -c Release \
           -r ${{ matrix.target }} \
           --self-contained true \
@@ -86,6 +91,7 @@ jobs:
         files: |
           ComfyPromptViewer-win-x64.exe
           ComfyPromptViewer-linux-x64
+        generate_release_notes: true
         draft: false
         prerelease: false
       env:

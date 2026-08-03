@@ -177,6 +177,11 @@ public partial class MainWindow
         }
     }
 
+    private async void AboutButton_Click(object? sender, RoutedEventArgs e)
+    {
+        await new AboutWindow().ShowDialog(this);
+    }
+
     private void ShowAdvancedMaintenanceStatus(string message) =>
         ShowTransientStatus(AdvancedMaintenanceStatus, _advancedMaintenanceStatusGate, message);
 

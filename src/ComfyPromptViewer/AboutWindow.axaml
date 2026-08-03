@@ -1,0 +1,63 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="ComfyPromptViewer.AboutWindow"
+        Title="About Comfy Prompt Viewer"
+        Width="780"
+        Height="640"
+        MinWidth="480"
+        MinHeight="360"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource SurfaceBase}"
+        FontFamily="{DynamicResource FontUI}">
+    <Grid RowDefinitions="Auto,Auto,*,Auto" Margin="20" RowSpacing="14">
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="14">
+            <Image Source="avares://ComfyPromptViewer/Assets/app.png" Width="40" Height="40" VerticalAlignment="Center" />
+            <StackPanel Spacing="3" VerticalAlignment="Center">
+                <TextBlock Text="Comfy Prompt Viewer"
+                           Foreground="{DynamicResource TextPrimary}"
+                           FontFamily="{DynamicResource FontHeading}"
+                           FontSize="19"
+                           FontWeight="SemiBold" />
+                <TextBlock Name="VersionText"
+                           Foreground="{DynamicResource TextMuted}"
+                           FontFamily="{DynamicResource FontMono}"
+                           FontSize="11" />
+            </StackPanel>
+        </StackPanel>
+
+        <ComboBox Grid.Row="1"
+                  Name="DocumentSelector"
+                  HorizontalAlignment="Stretch"
+                  FontSize="12"
+                  AutomationProperties.Name="License document"
+                  ToolTip.Tip="Choose which license document to display"
+                  SelectionChanged="DocumentSelector_SelectionChanged" />
+
+        <Border Grid.Row="2"
+                Background="{DynamicResource SurfaceCard}"
+                BorderBrush="{DynamicResource BorderSubtle}"
+                BorderThickness="1"
+                CornerRadius="3">
+            <ScrollViewer Name="DocumentScroller" Padding="14" VerticalScrollBarVisibility="Auto">
+                <SelectableTextBlock Name="DocumentText"
+                                     Foreground="{DynamicResource TextSecondary}"
+                                     FontFamily="{DynamicResource FontMono}"
+                                     FontSize="11"
+                                     TextWrapping="Wrap" />
+            </ScrollViewer>
+        </Border>
+
+        <Button Grid.Row="3"
+                Content="Close"
+                Click="CloseButton_Click"
+                IsCancel="True"
+                HorizontalAlignment="Right"
+                Padding="20,8"
+                FontSize="13"
+                Background="{DynamicResource SurfaceCard}"
+                BorderBrush="{DynamicResource BorderSubtle}"
+                BorderThickness="1"
+                Foreground="{DynamicResource TextPrimary}"
+                CornerRadius="3" />
+    </Grid>
+</Window>

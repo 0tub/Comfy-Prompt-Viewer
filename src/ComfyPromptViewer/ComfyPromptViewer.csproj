@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
+    <Version>1.8.3</Version>
     <!-- Avalonia 12 ships net10.0 and net8.0 assets; net9.0 silently resolved the net8.0 ones. -->
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
@@ -14,6 +15,10 @@
 
   <ItemGroup>
     <AvaloniaResource Include="Assets\**" />
+    <!-- Linked from the repo root so the About dialog and the published files never diverge. -->
+    <AvaloniaResource Include="..\..\LICENSE" Link="Assets\Legal\LICENSE" />
+    <AvaloniaResource Include="..\..\THIRD-PARTY-NOTICES.md" Link="Assets\Legal\THIRD-PARTY-NOTICES.md" />
+    <AvaloniaResource Include="..\..\third-party\SkiaSharp-HarfBuzzSharp-THIRD-PARTY-NOTICES.txt" Link="Assets\Legal\SkiaSharp-HarfBuzzSharp-THIRD-PARTY-NOTICES.txt" />
     <InternalsVisibleTo Include="ComfyPromptViewer.Tests" />
   </ItemGroup>
 
