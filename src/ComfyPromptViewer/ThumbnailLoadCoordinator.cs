@@ -126,7 +126,7 @@ public sealed class ThumbnailLoadCoordinator
 
     private void EnqueueLocked(ImageItem item, ThumbnailQueueKind kind)
     {
-        if (item.Preview is not null)
+        if (item.Preview is not null && !item.IsPreviewStale)
         {
             _decodedImageCache.Touch(item);
             return;
@@ -171,16 +171,31 @@ public sealed class ThumbnailLoadCoordinator
             StartNextLocked(_visibleQueue, ThumbnailQueueKind.Visible);
         }
 
-        // Per item at start time: prewarm fills the pack underneath, so a queued cold item may now be warm.
-        while (_aheadQueue.First is { Value: var nextAhead } &&
-               CanStartAheadLoad(
-                   nextAhead.HasCachedThumbnail(),
-                   HasVisibleWorkLocked,
-                   ActiveLoadCount,
-                   _activeAheadLoads))
+        while (FindStartableAheadLocked() is { } next)
         {
-            StartNextLocked(_aheadQueue, ThumbnailQueueKind.Ahead);
+            StartNextLocked(_aheadQueue, ThumbnailQueueKind.Ahead, next);
         }
+    }
+
+    // Per item at start time: prewarm fills the pack underneath, so a queued cold item may now be warm. A cold
+    // item that has to wait must not hold back the warm ones behind it.
+    private LinkedListNode<ImageItem>? FindStartableAheadLocked()
+    {
+        // Every ahead start needs a free warm slot, so skip the scan (and its pack lookups) when there is none.
+        if (ActiveLoadCount >= MaxActiveLoads || _activeAheadLoads >= MaxWarmAheadLoads)
+        {
+            return null;
+        }
+
+        for (var node = _aheadQueue.First; node is not null; node = node.Next)
+        {
+            if (CanStartAheadLoad(node.Value.HasCachedThumbnail(), HasVisibleWorkLocked, ActiveLoadCount, _activeAheadLoads))
+            {
+                return node;
+            }
+        }
+
+        return null;
     }
 
     // Cold pays a full-resolution source decode and must never compete with the viewport; warm is cheap
@@ -201,19 +216,19 @@ public sealed class ThumbnailLoadCoordinator
             : !hasVisibleWork && activeAheadLoads < MaxColdAheadLoads;
     }
 
-    private void StartNextLocked(LinkedList<ImageItem> queue, ThumbnailQueueKind kind)
+    private void StartNextLocked(LinkedList<ImageItem> queue, ThumbnailQueueKind kind, LinkedListNode<ImageItem>? node = null)
     {
-        var node = queue.First;
+        node ??= queue.First;
         if (node is null)
         {
             return;
         }
 
         var item = node.Value;
-        queue.RemoveFirst();
+        queue.Remove(node);
         _queuedItems.Remove(item);
 
-        if (item.Preview is not null)
+        if (item.Preview is not null && !item.IsPreviewStale)
         {
             _decodedImageCache.Touch(item);
             return;
@@ -232,7 +247,7 @@ public sealed class ThumbnailLoadCoordinator
         var token = _currentToken;
         DebugLog.Observe(
             RunLoadAsync(item, kind, token, _loadGate.Current),
-            $"Thumbnail load for {item.Path}");
+            "Thumbnail load for", item.Path);
     }
 
     private async Task RunLoadAsync(

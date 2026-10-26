@@ -1,0 +1,399 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:ComfyPromptViewer"
+             x:Class="ComfyPromptViewer.SidebarView"
+             x:DataType="local:SidebarViewModel">
+    <Border Background="{DynamicResource SurfaceSidebar}" BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="1,0,0,0">
+        <Grid RowDefinitions="Auto,*" Margin="16">
+            <StackPanel>
+                <TextBlock Text="{Binding Title}" ToolTip.Tip="{Binding TitleTip}" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontUI}" FontSize="15" FontWeight="Medium" TextTrimming="CharacterEllipsis" />
+                <TextBlock IsVisible="{Binding IsHeaderDescVisible}" Text="Select an image to inspect its size and prompt." Foreground="{DynamicResource TextSecondary}" FontSize="12" TextWrapping="Wrap" />
+            </StackPanel>
+
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,12,0,0">
+                <Panel>
+                    <StackPanel IsVisible="{Binding IsEmpty}" VerticalAlignment="Top" Spacing="0" Margin="0,16,0,0">
+                        <TextBlock
+                                   Text="No image selected"
+                                   Foreground="{DynamicResource TextMuted}"
+                                   FontFamily="{DynamicResource FontHeading}"
+                                   FontSize="16"
+                                   FontWeight="Normal" />
+                        <TextBlock
+                                   Text="Pick a tile from the grid."
+                                   Foreground="{DynamicResource EmptyStateSubtext}"
+                                   FontFamily="{DynamicResource FontUI}"
+                                   FontSize="11"
+                                   Margin="0,4,0,0" />
+                    </StackPanel>
+
+                     <Grid Name="ContentGrid" RowDefinitions="350,*" IsVisible="{Binding HasItem}">
+                         <Border Grid.Row="0"
+                                 Background="Transparent"
+                                 CornerRadius="2"
+                                 ClipToBounds="True"
+                                 Margin="0,16,0,0"
+                                 AutomationProperties.Name="Open selected image preview"
+                                 PointerPressed="Image_PointerPressed">
+                             <Image Source="{Binding PreviewImage}"
+                                    Stretch="Uniform"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Center" />
+                         </Border>
+
+                         <StackPanel Grid.Row="1" Name="MetadataPanel">
+                             <Border BorderBrush="{DynamicResource BorderSubtle}"
+                                     BorderThickness="0,1,0,0"
+                                     Margin="0,10,0,6"
+                                     Padding="0,8,0,0">
+                                 <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6">
+                                 <TextBlock Grid.Column="0"
+                                                                                                Text="PROMPT"
+                                            Foreground="{DynamicResource TextMuted}"
+                                            FontFamily="{DynamicResource FontUI}"
+                                            FontSize="9"
+                                            FontWeight="Medium"
+                                            LetterSpacing="1.5"
+                                            VerticalAlignment="Center" />
+                                 <!-- "Copied!" Toast Badge for Positive Prompt -->
+                                 <Border Grid.Column="1"
+                                         Opacity="{Binding PromptCopiedOpacity}"
+                                         Background="{DynamicResource BorderAccent}"
+                                         CornerRadius="3"
+                                         Padding="6,2"
+                                         IsHitTestVisible="False"
+                                         VerticalAlignment="Center">
+                                     <Border.Transitions>
+                                         <Transitions>
+                                             <DoubleTransition Property="Opacity" Duration="0:0:0.18" Easing="CubicEaseOut" />
+                                         </Transitions>
+                                     </Border.Transitions>
+                                     <TextBlock Text="Copied!"
+                                                Foreground="#FFFFFF"
+                                                FontSize="10"
+                                                FontWeight="SemiBold"
+                                                FontFamily="{DynamicResource FontUI}" />
+                                 </Border>
+                                 <Button Grid.Column="2"
+                                         Content="{Binding PromptCopyLabel}"
+                                         Command="{Binding CopyPromptCommand}"
+                                         Padding="6,3"
+                                         FontSize="10"
+                                         Background="{DynamicResource SurfaceElevated}"
+                                         BorderBrush="{DynamicResource BorderSubtle}"
+                                         BorderThickness="1"
+                                         Margin="0,0,8,0"
+                                         VerticalAlignment="Center"
+                                         AutomationProperties.Name="Copy positive prompt"
+                                         IsVisible="{Binding HasPrompt}"
+                                         IsEnabled="{Binding CanCopyPrompt}">
+                                     <Button.Styles>
+                                         <Style Selector="Button">
+                                             <Setter Property="CornerRadius" Value="4" />
+                                         </Style>
+                                     </Button.Styles>
+                                 </Button>
+                             </Grid>
+                         </Border>
+                                        
+                             <Grid ClipToBounds="True">
+                                 <!-- SelectableTextBlock instead of a read-only TextBox: selection and
+                                      copy without a caret, a focus adorner, or the TextBox chrome that
+                                      had to be overridden away. It has no border, so the accent bar is
+                                      the wrapping Border, and no watermark, so the placeholder is a
+                                      sibling TextBlock. That keeps Text empty when there is no prompt,
+                                      which is what the copy commands check. -->
+                                 <Border Background="{DynamicResource SurfaceInput}"
+                                         BorderBrush="{DynamicResource BorderAccent}"
+                                         BorderThickness="3,0,0,0"
+                                         CornerRadius="2"
+                                         VerticalAlignment="Top">
+                                     <!-- Collapsed, the box keeps its height and scrolls; expanded, it shows everything. -->
+                                     <ScrollViewer Name="PromptScroller" MaxHeight="{Binding PromptMaxHeight}" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                                         <SelectableTextBlock Name="PromptBlock"
+                                                              TextWrapping="Wrap"
+                                                              Foreground="{DynamicResource PromptText}"
+                                                              SelectionBrush="{DynamicResource BorderAccent}"
+                                                              SelectionForegroundBrush="{DynamicResource TextPrimary}"
+                                                              Padding="10,8"
+                                                              FontFamily="{DynamicResource FontUI}"
+                                                              FontSize="12"
+                                                              FontWeight="Normal"
+                                                              LineHeight="20.4"
+                                                              AutomationProperties.Name="Positive prompt"
+                                                              MinHeight="80"
+                                                              ClipToBounds="True"
+                                                              KeyDown="PromptText_KeyDown">
+                                             <SelectableTextBlock.ContextMenu>
+                                                 <ContextMenu Opened="PromptContextMenu_Opened">
+                                                     <MenuItem Header="Copy Selected Text" Name="MenuCopySelection" Click="MenuCopySelection_Click" InputGesture="Ctrl+C" />
+                                                     <MenuItem Header="Copy Full Prompt" Name="MenuCopyFullPrompt" Click="MenuCopyFullPrompt_Click" />
+                                                     <Separator />
+                                                     <MenuItem Header="Select All" Name="MenuSelectAll" Click="MenuSelectAll_Click" InputGesture="Ctrl+A" />
+                                                 </ContextMenu>
+                                             </SelectableTextBlock.ContextMenu>
+                                         </SelectableTextBlock>
+                                     </ScrollViewer>
+                                 </Border>
+                                 <TextBlock
+                                            Text="No prompt found"
+                                            Foreground="{DynamicResource TextMuted}"
+                                            FontFamily="{DynamicResource FontUI}"
+                                            FontSize="12"
+                                            Margin="13,8,10,0"
+                                            VerticalAlignment="Top"
+                                            IsHitTestVisible="False"
+                                            IsVisible="{Binding IsPromptPlaceholderVisible}" />
+                                 <Border Name="PromptFade"
+                                         Height="48"
+                                         Margin="3,0,0,0"
+                                         VerticalAlignment="Bottom"
+                                         Background="{DynamicResource SurfaceInput}"
+                                         IsHitTestVisible="False"
+                                         IsVisible="{Binding IsPromptCollapsed}">
+                                     <Border.OpacityMask>
+                                         <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
+                                             <GradientStop Offset="0" Color="#00FFFFFF" />
+                                             <GradientStop Offset="1" Color="#FFFFFFFF" />
+                                         </LinearGradientBrush>
+                                     </Border.OpacityMask>
+                                 </Border>
+                             </Grid>
+                             <ToggleButton Name="PromptExpandButton"
+                                           Classes="flat-toggle"
+                                           IsVisible="{Binding IsPromptLong}"
+                                           HorizontalAlignment="Left"
+                                           Margin="0,6,0,0"
+                                           Command="{Binding TogglePromptExpandedCommand}"
+                                           AutomationProperties.Name="Expand positive prompt">
+                                 <TextBlock Text="{Binding PromptExpandLabel}"
+                                            Foreground="{DynamicResource TextAccent}"
+                                            FontFamily="{DynamicResource FontUI}"
+                                            FontSize="11"
+                                            FontWeight="SemiBold" />
+                             </ToggleButton>
+
+                             <!-- Collapsible Negative Prompt -->
+                              <StackPanel Margin="0,14,0,0"
+                                          IsVisible="{Binding IsNegativeSectionVisible}">
+                                  <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6" Margin="0,0,0,8">
+                                      <ToggleButton Grid.Column="0"
+                                                    Name="NegativeHeaderButton"
+                                                    Classes="flat-toggle"
+                                                    Cursor="Hand"
+                                                    Margin="0"
+                                                    AutomationProperties.Name="Toggle negative prompt"
+                                                    Command="{Binding ToggleNegativeOpenCommand}"
+                                                    HorizontalAlignment="Left">
+                                          <StackPanel Orientation="Horizontal" Spacing="8">
+                                              <TextBlock
+                                                         Text="NEGATIVE PROMPT"
+                                                         Foreground="{DynamicResource TextMuted}"
+                                                         FontFamily="{DynamicResource FontUI}"
+                                                         FontSize="9"
+                                                         FontWeight="Medium"
+                                                         LetterSpacing="1.5"
+                                                         VerticalAlignment="Center" />
+                                              <Grid Width="14" Height="14" VerticalAlignment="Center">
+                                                  <TextBlock Text="{Binding NegativeArrow}"
+                                                             Foreground="{DynamicResource TextAccent}"
+                                                             FontSize="12"
+                                                             FontWeight="SemiBold"
+                                                             HorizontalAlignment="Center"
+                                                             VerticalAlignment="Center"
+                                                             Margin="0,-1,0,0" />
+                                              </Grid>
+                                          </StackPanel>
+                                      </ToggleButton>
+                                      <!-- "Copied!" Toast Badge for Negative Prompt -->
+                                      <Border Grid.Column="1"
+                                              Opacity="{Binding NegativeCopiedOpacity}"
+                                              Background="{DynamicResource BorderAccent}"
+                                              CornerRadius="3"
+                                              Padding="6,2"
+                                              IsHitTestVisible="False"
+                                              VerticalAlignment="Center">
+                                          <Border.Transitions>
+                                              <Transitions>
+                                                  <DoubleTransition Property="Opacity" Duration="0:0:0.18" Easing="CubicEaseOut" />
+                                              </Transitions>
+                                          </Border.Transitions>
+                                          <TextBlock Text="Copied!"
+                                                     Foreground="#FFFFFF"
+                                                     FontSize="10"
+                                                     FontWeight="SemiBold"
+                                                     FontFamily="{DynamicResource FontUI}" />
+                                      </Border>
+                                      <Button Grid.Column="2"
+                                              Content="{Binding NegativeCopyLabel}"
+                                              Command="{Binding CopyNegativeCommand}"
+                                              Padding="6,3"
+                                              FontSize="10"
+                                              Background="{DynamicResource SurfaceElevated}"
+                                              BorderBrush="{DynamicResource BorderSubtle}"
+                                              BorderThickness="1"
+                                              Margin="0,0,8,0"
+                                              VerticalAlignment="Center"
+                                              AutomationProperties.Name="Copy negative prompt"
+                                              IsVisible="{Binding IsNegativeOpen}"
+                                              IsEnabled="{Binding CanCopyNegative}">
+                                          <Button.Styles>
+                                              <Style Selector="Button">
+                                                  <Setter Property="CornerRadius" Value="4" />
+                                              </Style>
+                                          </Button.Styles>
+                                      </Button>
+                                  </Grid>
+
+                                  <Grid ClipToBounds="True"
+                                        IsVisible="{Binding IsNegativeOpen}">
+                                      <Border Background="{DynamicResource SurfaceInput}"
+                                              BorderBrush="{DynamicResource BorderAccent}"
+                                              BorderThickness="3,0,0,0"
+                                              CornerRadius="2"
+                                              VerticalAlignment="Top">
+                                          <!-- Collapsed, the box keeps its height and scrolls; expanded, it shows everything. -->
+                                          <ScrollViewer Name="NegativeScroller" MaxHeight="{Binding NegativeMaxHeight}" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                                              <SelectableTextBlock Name="NegativeBlock"
+                                                                   TextWrapping="Wrap"
+                                                                   Foreground="{DynamicResource PromptText}"
+                                                                   SelectionBrush="{DynamicResource BorderAccent}"
+                                                                   SelectionForegroundBrush="{DynamicResource TextPrimary}"
+                                                                   Padding="10,8"
+                                                                   FontFamily="{DynamicResource FontUI}"
+                                                                   FontSize="12"
+                                                                   FontWeight="Normal"
+                                                                   LineHeight="20.4"
+                                                                   AutomationProperties.Name="Negative prompt"
+                                                                   MinHeight="80"
+                                                                   ClipToBounds="True"
+                                                                   KeyDown="PromptText_KeyDown">
+                                                  <SelectableTextBlock.ContextMenu>
+                                                      <ContextMenu Opened="PromptContextMenu_Opened">
+                                                          <MenuItem Header="Copy Selected Text" Name="MenuCopyNegativeSelection" Click="MenuCopySelection_Click" InputGesture="Ctrl+C" />
+                                                          <MenuItem Header="Copy Full Prompt" Name="MenuCopyNegativeFullPrompt" Click="MenuCopyFullPrompt_Click" />
+                                                          <Separator />
+                                                          <MenuItem Header="Select All" Name="MenuSelectNegativeAll" Click="MenuSelectAll_Click" InputGesture="Ctrl+A" />
+                                                      </ContextMenu>
+                                                  </SelectableTextBlock.ContextMenu>
+                                              </SelectableTextBlock>
+                                          </ScrollViewer>
+                                      </Border>
+                                      <TextBlock
+                                                 Text="No negative prompt found"
+                                                 Foreground="{DynamicResource TextMuted}"
+                                                 FontFamily="{DynamicResource FontUI}"
+                                                 FontSize="12"
+                                                 Margin="13,8,10,0"
+                                                 VerticalAlignment="Top"
+                                                 IsHitTestVisible="False"
+                                                 IsVisible="{Binding IsNegativePlaceholderVisible}" />
+                                      <Border Name="NegativeFade"
+                                              Height="48"
+                                              Margin="3,0,0,0"
+                                              VerticalAlignment="Bottom"
+                                              Background="{DynamicResource SurfaceInput}"
+                                              IsHitTestVisible="False"
+                                              IsVisible="{Binding IsNegativeFadeVisible}">
+                                          <Border.OpacityMask>
+                                              <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
+                                                  <GradientStop Offset="0" Color="#00FFFFFF" />
+                                                  <GradientStop Offset="1" Color="#FFFFFFFF" />
+                                              </LinearGradientBrush>
+                                          </Border.OpacityMask>
+                                      </Border>
+                                  </Grid>
+                                  <ToggleButton Name="NegativeExpandButton"
+                                                Classes="flat-toggle"
+                                                IsVisible="{Binding IsNegativeExpandVisible}"
+                                                HorizontalAlignment="Left"
+                                                Margin="0,6,0,0"
+                                                Command="{Binding ToggleNegativeExpandedCommand}"
+                                                AutomationProperties.Name="Expand negative prompt">
+                                      <TextBlock Text="{Binding NegativeExpandLabel}"
+                                                 Foreground="{DynamicResource TextAccent}"
+                                                 FontFamily="{DynamicResource FontUI}"
+                                                 FontSize="11"
+                                                 FontWeight="SemiBold" />
+                                  </ToggleButton>
+                              </StackPanel>
+
+                              <!-- Compact Settings Card -->
+                              <Border Margin="{Binding SettingsMargin}"
+                                      Background="{DynamicResource SurfaceCard}"
+                                      BorderBrush="{DynamicResource BorderSubtle}"
+                                      BorderThickness="1"
+                                      CornerRadius="2"
+                                      Padding="12">
+                                  <StackPanel Spacing="10">
+                                      <!-- Resolution Row -->
+                                      <Grid ColumnDefinitions="75,*">
+                                          <TextBlock Grid.Column="0" Text="RESOLUTION" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontUI}" VerticalAlignment="Center" FontSize="9" FontWeight="Medium" LetterSpacing="1.5" />
+                                          <TextBlock Grid.Column="1" Text="{Binding Dimensions}" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontMono}" FontWeight="Normal" FontSize="11" VerticalAlignment="Center" />
+                                      </Grid>
+
+                                     <!-- Tool Row -->
+                                     <Grid ColumnDefinitions="75,*" IsVisible="{Binding HasTool}">
+                                         <TextBlock Grid.Column="0" Text="TOOL" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontUI}" VerticalAlignment="Center" FontSize="9" FontWeight="Medium" LetterSpacing="1.5" />
+                                         <TextBlock Grid.Column="1" Text="{Binding Tool}" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontMono}" TextWrapping="Wrap" FontSize="11" FontWeight="Normal" VerticalAlignment="Center" />
+                                     </Grid>
+
+                                     <!-- Model Row -->
+                                     <Grid ColumnDefinitions="75,*" IsVisible="{Binding HasModel}">
+                                         <TextBlock Grid.Column="0" Text="MODEL" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontUI}" VerticalAlignment="Center" FontSize="9" FontWeight="Medium" LetterSpacing="1.5" />
+                                         <TextBlock Grid.Column="1" Text="{Binding Model}" Classes="sidebar-value search-link" TextWrapping="Wrap" HorizontalAlignment="Left" PointerPressed="SearchValue_PointerPressed" ToolTip.Tip="Find images with this model" />
+                                     </Grid>
+
+                                     <!-- Lora Row -->
+                                     <Grid ColumnDefinitions="75,*" IsVisible="{Binding HasLora}">
+                                         <TextBlock Grid.Column="0" Text="LORA" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontUI}" VerticalAlignment="Center" FontSize="9" FontWeight="Medium" LetterSpacing="1.5" />
+                                         <WrapPanel Grid.Column="1" Name="LoraList" VerticalAlignment="Center" />
+                                     </Grid>
+
+                                     <!-- Sampler Row -->
+                                     <Grid ColumnDefinitions="75,*" IsVisible="{Binding HasSampler}">
+                                         <TextBlock Grid.Column="0" Text="SAMPLER" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontUI}" VerticalAlignment="Center" FontSize="9" FontWeight="Medium" LetterSpacing="1.5" />
+                                         <TextBlock Grid.Column="1" Text="{Binding Sampler}" Classes="sidebar-value search-link" TextWrapping="Wrap" HorizontalAlignment="Left" PointerPressed="SearchValue_PointerPressed" ToolTip.Tip="Find images with this sampler" />
+                                     </Grid>
+
+                                     <!-- Seed Row -->
+                                     <Grid ColumnDefinitions="75,*" IsVisible="{Binding HasSeed}">
+                                         <TextBlock Grid.Column="0" Text="SEED" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontUI}" VerticalAlignment="Center" FontSize="9" FontWeight="Medium" LetterSpacing="1.5" />
+                                         <Grid Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="6" VerticalAlignment="Center">
+                                             <TextBlock Grid.Column="0" Text="{Binding Seed}" Classes="sidebar-value search-link" TextTrimming="CharacterEllipsis" HorizontalAlignment="Left" PointerPressed="SearchValue_PointerPressed" ToolTip.Tip="Find images with this seed" />
+                                             <Button Grid.Column="1" Content="{Binding SeedCopyLabel}" Command="{Binding CopySeedCommand}" IsEnabled="{Binding CanCopySeed}" Padding="6,3" FontSize="10" Background="{DynamicResource SurfaceElevated}" BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="1" VerticalAlignment="Center" AutomationProperties.Name="Copy seed">
+                                                 <Button.Styles>
+                                                     <Style Selector="Button">
+                                                         <Setter Property="CornerRadius" Value="4" />
+                                                     </Style>
+                                                 </Button.Styles>
+                                             </Button>
+                                         </Grid>
+                                     </Grid>
+
+                                     <!-- Settings Row -->
+                                     <Grid ColumnDefinitions="75,*" IsVisible="{Binding HasSettings}">
+                                         <TextBlock Grid.Column="0" Text="SETTINGS" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontUI}" VerticalAlignment="Center" FontSize="9" FontWeight="Medium" LetterSpacing="1.5" />
+                                         <TextBlock Grid.Column="1" Text="{Binding Settings}" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontMono}" TextWrapping="Wrap" FontSize="11" FontWeight="Normal" VerticalAlignment="Center" />
+                                     </Grid>
+
+                                     <!-- Resources Row -->
+                                     <Grid ColumnDefinitions="75,*" IsVisible="{Binding HasResources}">
+                                         <TextBlock Grid.Column="0" Text="RESOURCES" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontUI}" VerticalAlignment="Center" FontSize="9" FontWeight="Medium" LetterSpacing="1.5" />
+                                         <TextBlock Grid.Column="1" Text="{Binding Resources}" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontMono}" TextWrapping="Wrap" FontSize="11" FontWeight="Normal" VerticalAlignment="Center" />
+                                     </Grid>
+
+                                     <!-- Date Row -->
+                                     <Grid ColumnDefinitions="75,*">
+                                         <TextBlock Grid.Column="0" Text="DATE" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontUI}" VerticalAlignment="Center" FontSize="9" FontWeight="Medium" LetterSpacing="1.5" />
+                                         <TextBlock Grid.Column="1" Text="{Binding Date}" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontMono}" FontSize="11" FontWeight="Normal" VerticalAlignment="Center" />
+                                     </Grid>
+                                 </StackPanel>
+                             </Border>
+                         </StackPanel>
+                     </Grid>
+                </Panel>
+            </ScrollViewer>
+        </Grid>
+    </Border>
+</UserControl>

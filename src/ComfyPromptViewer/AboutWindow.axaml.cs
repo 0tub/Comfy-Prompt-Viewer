@@ -15,7 +15,8 @@ public partial class AboutWindow : Window
     [
         new("Comfy Prompt Viewer — MIT License", "Assets/Legal/LICENSE"),
         new("Third-Party Notices", "Assets/Legal/THIRD-PARTY-NOTICES.md"),
-        new("SkiaSharp & HarfBuzzSharp — Bundled Native Components", "Assets/Legal/SkiaSharp-HarfBuzzSharp-THIRD-PARTY-NOTICES.txt")
+        new("SkiaSharp & HarfBuzzSharp — Bundled Native Components", "Assets/Legal/SkiaSharp-HarfBuzzSharp-THIRD-PARTY-NOTICES.txt"),
+        new(".NET Runtime — Third-Party Notices", "Assets/Legal/DotNet-Runtime-THIRD-PARTY-NOTICES.txt")
     ];
 
     private readonly Dictionary<string, string> _loaded = [];

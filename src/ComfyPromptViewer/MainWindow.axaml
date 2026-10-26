@@ -136,12 +136,33 @@
             <Setter Property="RenderTransform" Value="scale(1.03)" />
             <Setter Property="BoxShadow" Value="0 4 10 0 #40000000" />
         </Style>
-        <Style Selector="Border.card.selected">
-            <Setter Property="BorderBrush" Value="{DynamicResource BorderAccent}" />
-            <Setter Property="BorderThickness" Value="2" />
+        <!-- Selected tiles take the bright accent so they read against busy thumbnails; the active tile (the
+             sidebar target) is lighter still, so it stays findable inside a multi-selection. -->
+        <Style Selector="Border.card.selected, Border.card.selected:pointerover">
+            <Setter Property="BorderBrush" Value="{DynamicResource TextAccent}" />
         </Style>
-        <Style Selector="Border.card.selected:pointerover">
-            <Setter Property="BorderBrush" Value="{DynamicResource BorderAccent}" />
+        <Style Selector="Border.card.active, Border.card.active:pointerover">
+            <Setter Property="BorderBrush" Value="{DynamicResource TextPrimary}" />
+        </Style>
+
+        <!-- Sidebar values that search for other images sharing them. -->
+        <Style Selector="TextBlock.sidebar-value">
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+            <Setter Property="FontFamily" Value="{DynamicResource FontMono}" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="TextBlock.search-link">
+            <Setter Property="Cursor" Value="Hand" />
+        </Style>
+        <Style Selector="TextBlock.search-link:pointerover">
+            <Setter Property="Foreground" Value="{DynamicResource TextAccent}" />
+            <Setter Property="TextDecorations" Value="Underline" />
+        </Style>
+        <!-- Search terms found in the sidebar prompts. -->
+        <Style Selector="Run.search-hit">
+            <Setter Property="Background" Value="{DynamicResource BorderAccent}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
         </Style>
 
         <Style Selector="TextBlock.muted">
@@ -151,8 +172,17 @@
             <Setter Property="FontWeight" Value="Normal" />
         </Style>
 
-        <Style Selector="TextBlock.emoji-icon">
-            <Setter Property="FontFamily" Value="Segoe UI Emoji, Apple Color Emoji, Noto Color Emoji, sans-serif" />
+        <Style Selector="Path.line-icon">
+            <Setter Property="Width" Value="24" />
+            <Setter Property="Height" Value="24" />
+            <Setter Property="Stretch" Value="None" />
+            <Setter Property="Stroke" Value="{DynamicResource TextSecondary}" />
+            <Setter Property="StrokeThickness" Value="2" />
+            <Setter Property="StrokeLineCap" Value="Round" />
+            <Setter Property="StrokeJoin" Value="Round" />
+            <Setter Property="HorizontalAlignment" Value="Center" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="IsHitTestVisible" Value="False" />
         </Style>
         
         <Style Selector="Button.close-btn">
@@ -174,6 +204,15 @@
         <Style Selector="Button.close-btn:pointerover /template/ ContentPresenter">
             <Setter Property="Background" Value="{DynamicResource SurfaceInput}" />
             <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+        </Style>
+        <!-- A drawn cross for close buttons: the text multiplication-x falls back to another font and stretches. -->
+        <Style Selector="Path.close-icon">
+            <Setter Property="Stroke" Value="{DynamicResource TextMuted}" />
+            <Setter Property="StrokeThickness" Value="2.5" />
+            <Setter Property="StrokeLineCap" Value="Round" />
+        </Style>
+        <Style Selector="Button.close-btn:pointerover Path.close-icon">
+            <Setter Property="Stroke" Value="{DynamicResource TextPrimary}" />
         </Style>
         <Style Selector="Button.close-btn:pressed /template/ ContentPresenter">
             <Setter Property="Background" Value="{DynamicResource SurfaceInput}" />
@@ -350,16 +389,16 @@
             <Setter Property="Padding" Value="6,4" />
         </Style>
         
+        <!-- Status, not a control, so no button-like frame. -->
         <Style Selector="Border.count-pill">
-            <Setter Property="Background" Value="{DynamicResource SurfaceElevated}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtle}" />
-            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
             <Setter Property="Padding" Value="12,4" />
             <Setter Property="CornerRadius" Value="2" />
         </Style>
         <Style Selector="Border.count-pill TextBlock">
             <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
-            <Setter Property="FontFamily" Value="{DynamicResource FontMono}" />
+            <Setter Property="FontFamily" Value="{DynamicResource FontUI}" />
             <Setter Property="FontSize" Value="11" />
             <Setter Property="FontWeight" Value="Medium" />
         </Style>
@@ -538,6 +577,22 @@
             <Setter Property="Background" Value="{DynamicResource SurfaceInput}" />
             <Setter Property="BorderBrush" Value="{DynamicResource CardHoverBorder}" />
         </Style>
+        <Style Selector="Border.recent-item.missing">
+            <Setter Property="Opacity" Value="0.55" />
+        </Style>
+        <!-- Pin and remove stay out of the way until the row is hovered or focused; a pinned row keeps its pin. -->
+        <Style Selector="Border.recent-item Button.recent-action">
+            <Setter Property="Opacity" Value="0" />
+        </Style>
+        <Style Selector="Border.recent-item:pointerover Button.recent-action, Border.recent-item:focus-within Button.recent-action">
+            <Setter Property="Opacity" Value="1" />
+        </Style>
+        <Style Selector="Border.recent-item Button.recent-action.pinned">
+            <Setter Property="Opacity" Value="1" />
+        </Style>
+        <Style Selector="Button.recent-action.pinned Path.line-icon">
+            <Setter Property="Stroke" Value="{DynamicResource TextAccent}" />
+        </Style>
 
         <Style Selector="Button.menu-corner-btn">
             <Setter Property="Background" Value="Transparent" />
@@ -594,296 +649,7 @@
     </Window.Styles>
 
     <Grid RowDefinitions="Auto,*">
-        <Border Name="HeaderBorder" Background="{DynamicResource SurfaceElevated}" BorderBrush="{DynamicResource ToolbarBorderSubtle}" BorderThickness="0,0,0,1" IsVisible="False">
-            <Grid RowDefinitions="Auto,Auto" Margin="16,8" RowSpacing="8">
-                <!-- Row 0: App Title & Info -->
-                <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
-                    <Button Name="BackButton"
-                            Content="← Back"
-                            Click="BackButton_Click"
-                            AutomationProperties.Name="Back to Menu"
-                            ToolTip.Tip="Back to Menu"
-                            Height="30"
-                            CornerRadius="4"
-                            Padding="12,5"
-                            Background="{DynamicResource SurfaceCard}"
-                            BorderBrush="{DynamicResource BorderSubtle}"
-                            BorderThickness="1"
-                            Foreground="{DynamicResource TextPrimary}"
-                            FontSize="12"
-                            FontWeight="Normal"
-                            VerticalAlignment="Center" />
-
-                    <StackPanel Grid.Column="1" Spacing="0" VerticalAlignment="Center" Margin="6,0,0,0">
-                        <TextBlock Text="Comfy Prompt Viewer" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontHeading}" FontSize="20" FontWeight="SemiBold" FontStyle="Normal" />
-                        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                            <TextBlock Name="FolderText" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontMono}" FontSize="11" FontWeight="Normal" Text="Open an image folder to start scrolling." TextTrimming="PrefixCharacterEllipsis" VerticalAlignment="Center" />
-                            <Button Name="CopyPathButton"
-                                    Content="copy"
-                                    Click="CopyPathButton_Click"
-                                    ToolTip.Tip="Copy full path"
-                                    AutomationProperties.Name="Copy full path"
-                                    Height="16"
-                                    Padding="5,0"
-                                    FontSize="9"
-                                    Background="{DynamicResource SurfaceElevated}"
-                                    BorderBrush="{DynamicResource BorderSubtle}"
-                                    BorderThickness="1"
-                                    CornerRadius="3"
-                                    Foreground="{DynamicResource TextMuted}"
-                                    VerticalAlignment="Center"
-                                    IsVisible="False"
-                                    Margin="4,0,0,0" />
-                        </StackPanel>
-                    </StackPanel>
-
-                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                        <TextBlock Name="FolderCacheStatus"
-                                   Text=""
-                                   Foreground="{DynamicResource TextAccent}"
-                                   FontSize="11"
-                                   MaxWidth="260"
-                                   TextTrimming="CharacterEllipsis"
-                                   VerticalAlignment="Center"
-                                   IsVisible="False"
-                                   Opacity="0">
-                            <TextBlock.Transitions>
-                                <Transitions>
-                                    <DoubleTransition Property="Opacity" Duration="0:0:0.12" Easing="CubicEaseOut" />
-                                </Transitions>
-                            </TextBlock.Transitions>
-                        </TextBlock>
-                        <Border Classes="count-pill" Height="30" Padding="10,0" VerticalAlignment="Center">
-                            <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                                <TextBlock Text="🖼" FontSize="11" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center" />
-                                <TextBlock Name="CountText" Text="0 images" VerticalAlignment="Center" />
-                            </StackPanel>
-                        </Border>
-                        <Button Name="ClearFolderCacheButton"
-                                Classes="zoom-btn"
-                                Width="30"
-                                Height="30"
-                                VerticalAlignment="Center"
-                                Click="ClearFolderCacheButton_Click"
-                                ToolTip.Tip="Clear this folder's thumbnail cache"
-                                AutomationProperties.Name="Clear Folder Thumbnail Cache">
-                            <TextBlock Text="🧹" Classes="emoji-icon" FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                        </Button>
-                        <Button Name="ShortcutsButton"
-                                Classes="zoom-btn"
-                                Width="30"
-                                Height="30"
-                                VerticalAlignment="Center"
-                                ToolTip.Tip="Keyboard Shortcuts"
-                                AutomationProperties.Name="Keyboard Shortcuts">
-                            <TextBlock Text="⌨" Classes="emoji-icon" FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                            <Button.Flyout>
-                                <Flyout Placement="BottomEdgeAlignedRight" FlyoutPresenterClasses="shortcuts-flyout">
-                                    <Border Padding="16" Background="{DynamicResource SurfaceCard}" BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="1" CornerRadius="3">
-                                        <StackPanel Spacing="10" MinWidth="260">
-                                            <TextBlock Text="Keyboard Shortcuts" FontWeight="SemiBold" FontSize="14" Foreground="{DynamicResource TextPrimary}" />
-                                            <Separator Background="{DynamicResource BorderSubtle}" Height="1" Margin="0,2" />
-                                            
-                                            <Grid ColumnDefinitions="Auto,*"
-                                                  RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto"
-                                                  ColumnSpacing="20"
-                                                  RowSpacing="6">
-                                                <!-- Row 0: Navigation -->
-                                                <TextBlock Grid.Row="0" Grid.Column="0" Text="Navigate gallery" Foreground="{DynamicResource TextSecondary}" FontSize="12" VerticalAlignment="Center" />
-                                                <TextBlock Grid.Row="0" Grid.Column="1" Text="← ↑ ↓ → / Home / End" Foreground="{DynamicResource TextPrimary}" FontWeight="Medium" FontFamily="{DynamicResource FontMono}" FontSize="11" VerticalAlignment="Center" />
-                                                
-                                                <!-- Row 1: Space / Enter -->
-                                                <TextBlock Grid.Row="1" Grid.Column="0" Text="Open preview" Foreground="{DynamicResource TextSecondary}" FontSize="12" VerticalAlignment="Center" />
-                                                <TextBlock Grid.Row="1" Grid.Column="1" Text="Space / Enter / Double-click" Foreground="{DynamicResource TextPrimary}" FontWeight="Medium" FontFamily="{DynamicResource FontMono}" FontSize="11" VerticalAlignment="Center" />
-                                                
-                                                <!-- Row 2: Escape / Space / Enter -->
-                                                <TextBlock Grid.Row="2" Grid.Column="0" Text="Close preview" Foreground="{DynamicResource TextSecondary}" FontSize="12" VerticalAlignment="Center" />
-                                                <TextBlock Grid.Row="2" Grid.Column="1" Text="Esc / Space / Enter" Foreground="{DynamicResource TextPrimary}" FontWeight="Medium" FontFamily="{DynamicResource FontMono}" FontSize="11" VerticalAlignment="Center" />
-                                                
-                                                <!-- Row 3: F5 / Ctrl+R -->
-                                                <TextBlock Grid.Row="3" Grid.Column="0" Text="Reload folder" Foreground="{DynamicResource TextSecondary}" FontSize="12" VerticalAlignment="Center" />
-                                                <TextBlock Grid.Row="3" Grid.Column="1" Text="F5 / Ctrl+R" Foreground="{DynamicResource TextPrimary}" FontWeight="Medium" FontFamily="{DynamicResource FontMono}" FontSize="11" VerticalAlignment="Center" />
-
-                                                <!-- Row 4: Mouse Scroll (zooming) -->
-                                                <TextBlock Grid.Row="4" Grid.Column="0" Text="Zoom / Pan preview" Foreground="{DynamicResource TextSecondary}" FontSize="12" VerticalAlignment="Center" />
-                                                <TextBlock Grid.Row="4" Grid.Column="1" Text="Wheel / Pinch / Drag" Foreground="{DynamicResource TextPrimary}" FontWeight="Medium" FontFamily="{DynamicResource FontMono}" FontSize="11" VerticalAlignment="Center" />
-
-                                                <TextBlock Grid.Row="5" Grid.Column="0" Text="Toggle selection" Foreground="{DynamicResource TextSecondary}" FontSize="12" VerticalAlignment="Center" />
-                                                <TextBlock Grid.Row="5" Grid.Column="1" Text="Ctrl + Click" Foreground="{DynamicResource TextPrimary}" FontWeight="Medium" FontFamily="{DynamicResource FontMono}" FontSize="11" VerticalAlignment="Center" />
-
-                                                <TextBlock Grid.Row="6" Grid.Column="0" Text="Select range" Foreground="{DynamicResource TextSecondary}" FontSize="12" VerticalAlignment="Center" />
-                                                <TextBlock Grid.Row="6" Grid.Column="1" Text="Shift + Click" Foreground="{DynamicResource TextPrimary}" FontWeight="Medium" FontFamily="{DynamicResource FontMono}" FontSize="11" VerticalAlignment="Center" />
-                                            </Grid>
-                                        </StackPanel>
-                                    </Border>
-                                </Flyout>
-                            </Button.Flyout>
-                        </Button>
-                    </StackPanel>
-                </Grid>
-
-                <!-- Row 1: Sort, search, and tile density -->
-                <Grid Grid.Row="1" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="16">
-                    <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                        <TextBlock Text="Sort by"
-                                   Classes="muted"
-                                   FontSize="12"
-                                   FontWeight="Normal"
-                                   VerticalAlignment="Center" />
-                        <ComboBox Name="SortComboBox"
-                                  Width="130"
-                                  Height="30"
-                                  FontSize="12"
-                                  VerticalAlignment="Center"
-                                  SelectionChanged="SortComboBox_SelectionChanged">
-                            <ComboBoxItem Content="Newest First" />
-                            <ComboBoxItem Content="Oldest First" />
-                            <ComboBoxItem Content="Name" />
-                        </ComboBox>
-                        
-                        <Rectangle Width="1" Fill="{DynamicResource BorderSubtle}" Margin="4,4" Height="16" VerticalAlignment="Center" />
-                        
-                        <ToggleButton Name="IncludeSubfoldersToggle"
-                                      Classes="subfolder-toggle"
-                                      Height="30"
-                                      Padding="10,0"
-                                      VerticalContentAlignment="Center"
-                                      HorizontalContentAlignment="Center"
-                                      AutomationProperties.Name="Include subfolders"
-                                      ToolTip.Tip="Include images from nested folders"
-                                      Click="IncludeSubfoldersToggle_Click">
-                            <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                                <TextBlock Text="📁" Classes="emoji-icon" FontSize="11" VerticalAlignment="Center" />
-                                <TextBlock Text="Subfolders" VerticalAlignment="Center" />
-                            </StackPanel>
-                        </ToggleButton>
-                    </StackPanel>
-
-                    <Grid Grid.Column="1" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="16" VerticalAlignment="Center">
-                        <Rectangle Grid.Column="0" Width="1" Fill="{DynamicResource BorderSubtle}" Height="16" VerticalAlignment="Center" />
-                        <Border Grid.Column="1" Classes="search-shell">
-                            <Grid ColumnDefinitions="Auto,*" VerticalAlignment="Stretch">
-                        <TextBox Grid.Column="1"
-                                 Name="SearchTextBox"
-                                 PlaceholderText="Search (use - to exclude, &quot;&quot; for exact)..."
-                                 VerticalAlignment="Center"
-                                 HorizontalAlignment="Stretch"
-                                 Classes="search-box"
-                                 Height="28"
-                                 AutomationProperties.Name="Search"
-                                 ToolTip.Tip="Search. Use -term to exclude, &quot;term&quot; for exact. Hover '?' for info."
-                                 TextChanged="SearchTextBox_TextChanged">
-                            <TextBox.Resources>
-                                <SolidColorBrush x:Key="TextBoxBackground">Transparent</SolidColorBrush>
-                                <SolidColorBrush x:Key="TextBoxBackgroundPointerOver">Transparent</SolidColorBrush>
-                                <SolidColorBrush x:Key="TextBoxBackgroundFocused">Transparent</SolidColorBrush>
-                                <SolidColorBrush x:Key="TextBoxBorderBrush">Transparent</SolidColorBrush>
-                                <SolidColorBrush x:Key="TextBoxBorderBrushPointerOver">Transparent</SolidColorBrush>
-                                <SolidColorBrush x:Key="TextBoxBorderBrushFocused">Transparent</SolidColorBrush>
-                                <SolidColorBrush x:Key="TextControlBackground">Transparent</SolidColorBrush>
-                                <SolidColorBrush x:Key="TextControlBackgroundPointerOver">Transparent</SolidColorBrush>
-                                <SolidColorBrush x:Key="TextControlBackgroundFocused">Transparent</SolidColorBrush>
-                                <SolidColorBrush x:Key="TextControlBorderBrush">Transparent</SolidColorBrush>
-                                <SolidColorBrush x:Key="TextControlBorderBrushPointerOver">Transparent</SolidColorBrush>
-                                <SolidColorBrush x:Key="TextControlBorderBrushFocused">Transparent</SolidColorBrush>
-                            </TextBox.Resources>
-                            <TextBox.InnerRightContent>
-                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,4,0">
-                                    <Button Name="ClearSearchButton"
-                                            Classes="clear-search-btn"
-                                            Content="×"
-                                            IsVisible="False"
-                                            Click="ClearSearchButton_Click"
-                                            Focusable="False"
-                                            ToolTip.Tip="Clear search" />
-                                    <Button Name="SearchHelpButton"
-                                            Classes="search-help-btn"
-                                            Content="?"
-                                            Focusable="False"
-                                            Click="SearchHelpButton_Click"
-                                            ToolTip.Tip="Show search options" />
-                                </StackPanel>
-                            </TextBox.InnerRightContent>
-                        </TextBox>
-                        <StackPanel Grid.Column="0" Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="4,0,0,0">
-                            <ComboBox Name="SearchScopeComboBox"
-                                      Classes="search-scope-combo"
-                                      VerticalAlignment="Center"
-                                      AutomationProperties.Name="Search scope"
-                                      ToolTip.Tip="Choose whether search checks positive prompts, negative prompts, filenames, or all fields."
-                                      SelectionChanged="SearchScopeComboBox_SelectionChanged">
-                                <ComboBox.Resources>
-                                    <SolidColorBrush x:Key="ComboBoxBackground">Transparent</SolidColorBrush>
-                                    <SolidColorBrush x:Key="ComboBoxBackgroundPointerOver">Transparent</SolidColorBrush>
-                                    <SolidColorBrush x:Key="ComboBoxBackgroundPressed">Transparent</SolidColorBrush>
-                                    <SolidColorBrush x:Key="ComboBoxBorderBrush">Transparent</SolidColorBrush>
-                                    <SolidColorBrush x:Key="ComboBoxBorderBrushPointerOver">Transparent</SolidColorBrush>
-                                    <SolidColorBrush x:Key="ComboBoxBorderBrushPressed">Transparent</SolidColorBrush>
-                                    <Thickness x:Key="ComboBoxBorderThemeThickness">0</Thickness>
-                                </ComboBox.Resources>
-                                <ComboBoxItem Content="All" />
-                                <ComboBoxItem Content="Positive" />
-                                <ComboBoxItem Content="Negative" />
-                                <ComboBoxItem Content="Filename" />
-                            </ComboBox>
-                            <Rectangle Width="1" Fill="{DynamicResource BorderSubtle}" Height="18" VerticalAlignment="Center" Margin="2,0,0,0" />
-                        </StackPanel>
-                        <primitives:Popup Name="SearchHelpPopup"
-                                          Placement="BottomEdgeAlignedRight"
-                                          PlacementConstraintAdjustment="SlideX,SlideY,FlipY"
-                                          IsLightDismissEnabled="True"
-                                          OverlayDismissEventPassThrough="True"
-                                          ShouldUseOverlayLayer="True"
-                                          VerticalOffset="6">
-                            <Border Padding="16"
-                                    Background="{DynamicResource SurfaceCard}"
-                                    BorderBrush="{DynamicResource BorderSubtle}"
-                                    BorderThickness="1"
-                                    CornerRadius="3">
-                                <StackPanel Spacing="10" MinWidth="360">
-                                    <TextBlock Text="Search Options" FontWeight="SemiBold" FontSize="14" Foreground="{DynamicResource TextPrimary}" />
-                                    <Separator Background="{DynamicResource BorderSubtle}" Height="1" Margin="0,2" />
-                                    <StackPanel Spacing="6">
-                                        <TextBlock Text="• Separate terms with spaces, commas, or semicolons" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}" FontSize="12" />
-                                        <TextBlock Text="• Use -term to exclude (e.g., -watermark)" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}" FontSize="12" />
-                                        <TextBlock Text="• Use &quot;term&quot; for exact word/phrase (e.g., &quot;ass&quot; won't match &quot;grass&quot;)" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}" FontSize="12" />
-                                    </StackPanel>
-                                </StackPanel>
-                            </Border>
-                        </primitives:Popup>
-                            </Grid>
-                        </Border>
-                        <Rectangle Grid.Column="2" Width="1" Fill="{DynamicResource BorderSubtle}" Height="16" VerticalAlignment="Center" />
-                    </Grid>
-
-                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                        <TextBlock Text="⛶"
-                                   Foreground="{DynamicResource TextMuted}"
-                                   FontSize="12"
-                                   VerticalAlignment="Center" />
-                        <Slider Name="TileSizeSlider"
-                                Width="120"
-                                Minimum="80"
-                                Maximum="320"
-                                Value="120"
-                                TickFrequency="10"
-                                IsSnapToTickEnabled="True"
-                                AutomationProperties.Name="Tile size"
-                                VerticalAlignment="Center"
-                                ValueChanged="TileSizeSlider_ValueChanged" />
-                        <TextBlock Name="TileSizeText"
-                                   Text="120"
-                                   Foreground="{DynamicResource TextSecondary}"
-                                   FontFamily="{DynamicResource FontMono}"
-                                   FontSize="11"
-                                   FontWeight="Normal"
-                                   VerticalAlignment="Center"
-                                   Width="24"
-                                   HorizontalAlignment="Right" />
-                    </StackPanel>
-                </Grid>
-            </Grid>
-        </Border>
+        <local:HeaderView Name="Header" IsVisible="False" />
 
         <Grid Name="MainGrid" Grid.Row="1">
             <Grid.ColumnDefinitions>
@@ -892,90 +658,7 @@
                 <!-- Index 2 in MainGrid.ColumnDefinitions; MainWindow.SidebarColumn resolves it. -->
                 <ColumnDefinition Width="380" MinWidth="260" MaxWidth="560" />
             </Grid.ColumnDefinitions>
-            <Panel Grid.Column="0">
-                <ScrollViewer Name="GalleryScrollViewer"
-                              VerticalScrollBarVisibility="Visible"
-                              ScrollChanged="GalleryScrollViewer_ScrollChanged">
-                    <ir:ItemsRepeater Name="GalleryItems" ItemsSource="{Binding Items}" Margin="10">
-                        <ir:ItemsRepeater.Layout>
-                            <layout:UniformGridLayout MinItemWidth="212"
-                                                       MinItemHeight="212"
-                                                       MinColumnSpacing="0"
-                                                       MinRowSpacing="0" />
-                        </ir:ItemsRepeater.Layout>
-                        <ir:ItemsRepeater.ItemTemplate>
-                            <DataTemplate x:DataType="local:ImageItem">
-                                <Border Classes="card"
-                                        Classes.selected="{Binding IsMarkedSelected}"
-                                        Width="{DynamicResource GalleryTileSize}"
-                                        Height="{DynamicResource GalleryTileSize}"
-                                        Padding="6"
-                                        Margin="8"
-                                        PointerPressed="GalleryItem_PointerPressed"
-                                         KeyDown="GalleryItem_KeyDown"
-                                         AutomationProperties.Name="{Binding FileName, Mode=OneTime}"
-                                         Focusable="True">
-                                    <Border.ContextMenu>
-                                        <ContextMenu Opened="ImageContextMenu_Opened">
-                                            <MenuItem Header="Open in File Explorer" Tag="open" Click="ImageContextMenuItem_Click" />
-                                            <MenuItem Header="Copy Prompt" Tag="prompt" Click="ImageContextMenuItem_Click" IsEnabled="{Binding HasPrompt}" />
-                                            <MenuItem Header="Copy Negative Prompt" Tag="negative" Click="ImageContextMenuItem_Click" IsEnabled="{Binding HasNegativePrompt}" />
-                                            <MenuItem Header="Copy Image Path" Tag="path" Click="ImageContextMenuItem_Click" />
-                                            <Separator />
-                                            <MenuItem Header="Delete Image" Tag="delete" Click="ImageContextMenuItem_Click" />
-                                        </ContextMenu>
-                                    </Border.ContextMenu>
-                                    <Panel>
-                                        <Border Classes="skeleton"
-                                                CornerRadius="2"
-                                                IsVisible="{Binding IsLoading}" />
-
-                                         <!-- Composition implicit animation rather than a DoubleTransition:
-                                              a screen of tiles fading in is interpolated on the render
-                                              thread instead of competing with thumbnail dispatch on the
-                                              UI thread. -->
-                                         <Border Background="Transparent"
-                                                 CornerRadius="2"
-                                                 ClipToBounds="True"
-                                                 local:CompositionFade.Duration="0:0:0.10"
-                                                 Opacity="{Binding ThumbnailOpacity}">
-                                             <Image Source="{Binding Preview}"
-                                                    RenderOptions.BitmapInterpolationMode="LowQuality"
-                                                    Stretch="Uniform"
-                                                    HorizontalAlignment="Center"
-                                                   VerticalAlignment="Center" />
-                                        </Border>
-                                    </Panel>
-                                </Border>
-                            </DataTemplate>
-                        </ir:ItemsRepeater.ItemTemplate>
-                    </ir:ItemsRepeater>
-                </ScrollViewer>
-
-                <!-- Gallery Empty State (Search Results) -->
-                <StackPanel Name="GalleryEmptyState"
-                            VerticalAlignment="Center"
-                            HorizontalAlignment="Center"
-                            Spacing="12"
-                            IsVisible="False"
-                            Opacity="0">
-                    <StackPanel.Transitions>
-                        <Transitions>
-                            <DoubleTransition Property="Opacity" Duration="0:0:0.12" Easing="CubicEaseOut" />
-                        </Transitions>
-                    </StackPanel.Transitions>
-                    <TextBlock Text="No matching images"
-                               Foreground="{DynamicResource TextPrimary}"
-                               FontFamily="{DynamicResource FontHeading}"
-                               FontSize="18"
-                               HorizontalAlignment="Center"
-                               FontWeight="Medium" />
-                    <TextBlock Text="Try adjusting your search terms or exclusions."
-                               Foreground="{DynamicResource TextMuted}"
-                               FontSize="13"
-                               HorizontalAlignment="Center" />
-                </StackPanel>
-            </Panel>
+            <local:GalleryView Name="Gallery" Grid.Column="0" />
 
             <GridSplitter Name="SidebarSplitter"
                           Grid.Column="1"
@@ -987,788 +670,13 @@
                           ResizeDirection="Columns"
                           ResizeBehavior="PreviousAndNext"
                           Cursor="SizeWestEast"
-                          AutomationProperties.Name="Resize metadata sidebar"
-                          ToolTip.Tip="Drag to resize the metadata sidebar" />
+                          AutomationProperties.Name="Resize metadata sidebar" />
 
-            <Border Grid.Column="2" Background="{DynamicResource SurfaceSidebar}" BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="1,0,0,0">
-                <Grid RowDefinitions="Auto,*" Margin="16">
-                    <StackPanel>
-                        <TextBlock Name="SidebarHeaderTitle" Text="Metadata" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontHeading}" FontSize="16" FontWeight="Normal" TextTrimming="CharacterEllipsis" />
-                        <TextBlock Name="SidebarHeaderDesc" Text="Select an image to inspect its size and prompt." Foreground="{DynamicResource TextSecondary}" FontSize="12" TextWrapping="Wrap" />
-                    </StackPanel>
+            <local:SidebarView Name="Sidebar" Grid.Column="2" />
 
-                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,12,0,0">
-                        <Panel>
-                            <StackPanel Name="SidebarEmpty" VerticalAlignment="Top" Spacing="0" Margin="0,16,0,0">
-                                <TextBlock Name="SidebarEmptyTitle"
-                                           Text="No image selected"
-                                           Foreground="{DynamicResource TextMuted}"
-                                           FontFamily="{DynamicResource FontHeading}"
-                                           FontSize="16"
-                                           FontWeight="Normal" />
-                                <TextBlock Name="SidebarEmptyDesc"
-                                           Text="Pick a tile from the grid."
-                                           Foreground="{DynamicResource EmptyStateSubtext}"
-                                           FontFamily="{DynamicResource FontUI}"
-                                           FontSize="11"
-                                           Margin="0,4,0,0" />
-                            </StackPanel>
+        <local:StartMenuView Name="StartMenu" Grid.ColumnSpan="3" />
 
-                             <Grid Name="SidebarContent" RowDefinitions="350,*" IsVisible="False">
-                                 <Border Grid.Row="0"
-                                         Background="Transparent"
-                                         CornerRadius="2"
-                                         ClipToBounds="True"
-                                         Margin="0,16,0,0"
-                                         AutomationProperties.Name="Open selected image preview"
-                                         ToolTip.Tip="Open larger preview"
-                                         PointerPressed="SidebarImage_PointerPressed">
-                                     <Image Name="SidebarImage"
-                                            Stretch="Uniform"
-                                            HorizontalAlignment="Center"
-                                            VerticalAlignment="Center" />
-                                 </Border>
-
-                                 <StackPanel Grid.Row="1" Name="SidebarMetadataPanel">
-                                     <Border BorderBrush="{DynamicResource BorderSubtle}"
-                                             BorderThickness="0,1,0,0"
-                                             Margin="0,10,0,6"
-                                             Padding="0,8,0,0">
-                                         <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6">
-                                         <TextBlock Grid.Column="0"
-                                                    Name="SidebarPromptLabel"
-                                                    Text="PROMPT"
-                                                    Foreground="{DynamicResource TextMuted}"
-                                                    FontFamily="{DynamicResource FontUI}"
-                                                    FontSize="9"
-                                                    FontWeight="Medium"
-                                                    LetterSpacing="1.5"
-                                                    VerticalAlignment="Center" />
-                                         <!-- "Copied!" Toast Badge for Positive Prompt -->
-                                         <Border Grid.Column="1"
-                                                 Name="PositiveCopiedBadge"
-                                                 Background="{DynamicResource BorderAccent}"
-                                                 CornerRadius="3"
-                                                 Padding="6,2"
-                                                 Opacity="0"
-                                                 IsHitTestVisible="False"
-                                                 VerticalAlignment="Center">
-                                             <Border.Transitions>
-                                                 <Transitions>
-                                                     <DoubleTransition Property="Opacity" Duration="0:0:0.18" Easing="CubicEaseOut" />
-                                                 </Transitions>
-                                             </Border.Transitions>
-                                             <TextBlock Text="Copied!"
-                                                        Foreground="#FFFFFF"
-                                                        FontSize="10"
-                                                        FontWeight="SemiBold"
-                                                        FontFamily="{DynamicResource FontUI}" />
-                                         </Border>
-                                         <Button Grid.Column="2"
-                                                 Name="SidebarCopyPromptButton"
-                                                 Content="Copy"
-                                                 Padding="6,3"
-                                                 FontSize="10"
-                                                 Background="{DynamicResource SurfaceElevated}"
-                                                 BorderBrush="{DynamicResource BorderSubtle}"
-                                                 BorderThickness="1"
-                                                 Tag="positive"
-                                                 Click="SidebarCopyButton_Click"
-                                                 Margin="0,0,8,0"
-                                                 VerticalAlignment="Center"
-                                                 AutomationProperties.Name="Copy positive prompt"
-                                                 ToolTip.Tip="Copy positive prompt"
-                                                 IsVisible="False"
-                                                 IsEnabled="False">
-                                             <Button.Styles>
-                                                 <Style Selector="Button">
-                                                     <Setter Property="CornerRadius" Value="4" />
-                                                 </Style>
-                                             </Button.Styles>
-                                         </Button>
-                                     </Grid>
-                                 </Border>
-                                                
-                                     <Grid Name="SidebarPromptContainer" ClipToBounds="True">
-                                         <!-- SelectableTextBlock instead of a read-only TextBox: selection and
-                                              copy without a caret, a focus adorner, or the TextBox chrome that
-                                              had to be overridden away. It has no border, so the accent bar is
-                                              the wrapping Border, and no watermark, so the placeholder is a
-                                              sibling TextBlock. That keeps Text empty when there is no prompt,
-                                              which is what the copy commands check. -->
-                                         <Border Background="{DynamicResource SurfaceInput}"
-                                                 BorderBrush="{DynamicResource BorderAccent}"
-                                                 BorderThickness="3,0,0,0"
-                                                 CornerRadius="2"
-                                                 VerticalAlignment="Top">
-                                             <SelectableTextBlock Name="SidebarPrompt"
-                                                                  TextWrapping="Wrap"
-                                                                  Foreground="{DynamicResource PromptText}"
-                                                                  SelectionBrush="{DynamicResource BorderAccent}"
-                                                                  SelectionForegroundBrush="{DynamicResource TextPrimary}"
-                                                                  Padding="10,8"
-                                                                  FontFamily="{DynamicResource FontUI}"
-                                                                  FontSize="12"
-                                                                  FontWeight="Normal"
-                                                                  LineHeight="20.4"
-                                                                  AutomationProperties.Name="Positive prompt"
-                                                                  MinHeight="80"
-                                                                  MaxHeight="168"
-                                                                  ClipToBounds="True"
-                                                                  KeyDown="SidebarPromptText_KeyDown">
-                                                 <SelectableTextBlock.ContextMenu>
-                                                     <ContextMenu Opened="ContextMenu_Opened">
-                                                         <MenuItem Header="Copy Selected Text" Name="MenuCopySelection" Click="MenuCopySelection_Click" InputGesture="Ctrl+C" />
-                                                         <MenuItem Header="Copy Full Prompt" Name="MenuCopyFullPrompt" Click="MenuCopyFullPrompt_Click" />
-                                                         <Separator />
-                                                         <MenuItem Header="Select All" Name="MenuSelectAll" Click="MenuSelectAll_Click" InputGesture="Ctrl+A" />
-                                                     </ContextMenu>
-                                                 </SelectableTextBlock.ContextMenu>
-                                             </SelectableTextBlock>
-                                         </Border>
-                                         <TextBlock Name="SidebarPromptPlaceholder"
-                                                    Text="No prompt found"
-                                                    Foreground="{DynamicResource TextMuted}"
-                                                    FontFamily="{DynamicResource FontUI}"
-                                                    FontSize="12"
-                                                    Margin="13,8,10,0"
-                                                    VerticalAlignment="Top"
-                                                    IsHitTestVisible="False"
-                                                    IsVisible="False" />
-                                         <Border Name="SidebarPromptFade"
-                                                 Height="48"
-                                                 Margin="3,0,0,0"
-                                                 VerticalAlignment="Bottom"
-                                                 Background="{DynamicResource SurfaceInput}"
-                                                 IsHitTestVisible="False"
-                                                 IsVisible="False">
-                                             <Border.OpacityMask>
-                                                 <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
-                                                     <GradientStop Offset="0" Color="#00FFFFFF" />
-                                                     <GradientStop Offset="1" Color="#FFFFFFFF" />
-                                                 </LinearGradientBrush>
-                                             </Border.OpacityMask>
-                                         </Border>
-                                     </Grid>
-                                     <ToggleButton Name="SidebarPromptExpandButton"
-                                                   Classes="flat-toggle"
-                                                   IsVisible="False"
-                                                   HorizontalAlignment="Left"
-                                                   Margin="0,6,0,0"
-                                                   Click="SidebarPromptExpandButton_Click"
-                                                   AutomationProperties.Name="Expand positive prompt">
-                                         <ToolTip.Tip>
-                                             <TextBlock Text="Show or hide the full positive prompt"
-                                                        Foreground="{DynamicResource TextSecondary}" />
-                                         </ToolTip.Tip>
-                                         <TextBlock Text="Show more"
-                                                    Foreground="{DynamicResource TextAccent}"
-                                                    FontFamily="{DynamicResource FontUI}"
-                                                    FontSize="11"
-                                                    FontWeight="SemiBold" />
-                                     </ToggleButton>
-
-                                     <!-- Collapsible Negative Prompt -->
-                                      <StackPanel Name="SidebarNegativePromptContainer"
-                                                  Margin="0,14,0,0"
-                                                  IsVisible="False">
-                                          <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6" Margin="0,0,0,8">
-                                              <ToggleButton Grid.Column="0"
-                                                            Name="SidebarNegativePromptHeader"
-                                                            Classes="flat-toggle"
-                                                            Cursor="Hand"
-                                                            Margin="0"
-                                                            AutomationProperties.Name="Toggle negative prompt"
-                                                            ToolTip.Tip="Show or hide negative prompt"
-                                                            Click="SidebarNegativePromptHeader_Click"
-                                                            HorizontalAlignment="Left">
-                                                  <StackPanel Orientation="Horizontal" Spacing="8">
-                                                      <TextBlock Name="SidebarNegativePromptLabel"
-                                                                 Text="NEGATIVE PROMPT"
-                                                                 Foreground="{DynamicResource TextMuted}"
-                                                                 FontFamily="{DynamicResource FontUI}"
-                                                                 FontSize="9"
-                                                                 FontWeight="Medium"
-                                                                 LetterSpacing="1.5"
-                                                                 VerticalAlignment="Center" />
-                                                      <Grid Width="14" Height="14" VerticalAlignment="Center">
-                                                          <TextBlock Name="SidebarNegativePromptArrow"
-                                                                     Text="▸"
-                                                                     Foreground="{DynamicResource TextAccent}"
-                                                                     FontSize="12"
-                                                                     FontWeight="SemiBold"
-                                                                     HorizontalAlignment="Center"
-                                                                     VerticalAlignment="Center"
-                                                                     Margin="0,-1,0,0" />
-                                                      </Grid>
-                                                  </StackPanel>
-                                              </ToggleButton>
-                                              <!-- "Copied!" Toast Badge for Negative Prompt -->
-                                              <Border Grid.Column="1"
-                                                      Name="NegativeCopiedBadge"
-                                                      Background="{DynamicResource BorderAccent}"
-                                                      CornerRadius="3"
-                                                      Padding="6,2"
-                                                      Opacity="0"
-                                                      IsHitTestVisible="False"
-                                                      VerticalAlignment="Center">
-                                                  <Border.Transitions>
-                                                      <Transitions>
-                                                          <DoubleTransition Property="Opacity" Duration="0:0:0.18" Easing="CubicEaseOut" />
-                                                      </Transitions>
-                                                  </Border.Transitions>
-                                                  <TextBlock Text="Copied!"
-                                                             Foreground="#FFFFFF"
-                                                             FontSize="10"
-                                                             FontWeight="SemiBold"
-                                                             FontFamily="{DynamicResource FontUI}" />
-                                              </Border>
-                                              <Button Grid.Column="2"
-                                                      Name="SidebarCopyNegativePromptButton"
-                                                      Content="Copy"
-                                                      Padding="6,3"
-                                                      FontSize="10"
-                                                      Background="{DynamicResource SurfaceElevated}"
-                                                      BorderBrush="{DynamicResource BorderSubtle}"
-                                                      BorderThickness="1"
-                                                      Tag="negative"
-                                                      Click="SidebarCopyButton_Click"
-                                                      Margin="0,0,8,0"
-                                                      VerticalAlignment="Center"
-                                                      AutomationProperties.Name="Copy negative prompt"
-                                                      ToolTip.Tip="Copy negative prompt"
-                                                      IsVisible="False">
-                                                  <Button.Styles>
-                                                      <Style Selector="Button">
-                                                          <Setter Property="CornerRadius" Value="4" />
-                                                      </Style>
-                                                  </Button.Styles>
-                                              </Button>
-                                          </Grid>
-
-                                          <Grid Name="SidebarNegativePromptTextContainer"
-                                                ClipToBounds="True"
-                                                IsVisible="False">
-                                              <Border Background="{DynamicResource SurfaceInput}"
-                                                      BorderBrush="{DynamicResource BorderAccent}"
-                                                      BorderThickness="3,0,0,0"
-                                                      CornerRadius="2"
-                                                      VerticalAlignment="Top">
-                                                  <SelectableTextBlock Name="SidebarNegativePrompt"
-                                                                       TextWrapping="Wrap"
-                                                                       Foreground="{DynamicResource PromptText}"
-                                                                       SelectionBrush="{DynamicResource BorderAccent}"
-                                                                       SelectionForegroundBrush="{DynamicResource TextPrimary}"
-                                                                       Padding="10,8"
-                                                                       FontFamily="{DynamicResource FontUI}"
-                                                                       FontSize="12"
-                                                                       FontWeight="Normal"
-                                                                       LineHeight="20.4"
-                                                                       AutomationProperties.Name="Negative prompt"
-                                                                       MinHeight="80"
-                                                                       MaxHeight="168"
-                                                                       ClipToBounds="True"
-                                                                       KeyDown="SidebarPromptText_KeyDown">
-                                                      <SelectableTextBlock.ContextMenu>
-                                                          <ContextMenu Opened="ContextMenu_Opened">
-                                                              <MenuItem Header="Copy Selected Text" Name="MenuCopyNegativeSelection" Click="MenuCopySelection_Click" InputGesture="Ctrl+C" />
-                                                              <MenuItem Header="Copy Full Prompt" Name="MenuCopyNegativeFullPrompt" Click="MenuCopyFullPrompt_Click" />
-                                                              <Separator />
-                                                              <MenuItem Header="Select All" Name="MenuSelectNegativeAll" Click="MenuSelectAll_Click" InputGesture="Ctrl+A" />
-                                                          </ContextMenu>
-                                                      </SelectableTextBlock.ContextMenu>
-                                                  </SelectableTextBlock>
-                                              </Border>
-                                              <TextBlock Name="SidebarNegativePromptPlaceholder"
-                                                         Text="No negative prompt found"
-                                                         Foreground="{DynamicResource TextMuted}"
-                                                         FontFamily="{DynamicResource FontUI}"
-                                                         FontSize="12"
-                                                         Margin="13,8,10,0"
-                                                         VerticalAlignment="Top"
-                                                         IsHitTestVisible="False"
-                                                         IsVisible="False" />
-                                              <Border Name="SidebarNegativePromptFade"
-                                                      Height="48"
-                                                      Margin="3,0,0,0"
-                                                      VerticalAlignment="Bottom"
-                                                      Background="{DynamicResource SurfaceInput}"
-                                                      IsHitTestVisible="False"
-                                                      IsVisible="False">
-                                                  <Border.OpacityMask>
-                                                      <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
-                                                          <GradientStop Offset="0" Color="#00FFFFFF" />
-                                                          <GradientStop Offset="1" Color="#FFFFFFFF" />
-                                                      </LinearGradientBrush>
-                                                  </Border.OpacityMask>
-                                              </Border>
-                                          </Grid>
-                                          <ToggleButton Name="SidebarNegativePromptExpandButton"
-                                                        Classes="flat-toggle"
-                                                        IsVisible="False"
-                                                        HorizontalAlignment="Left"
-                                                        Margin="0,6,0,0"
-                                                        Click="SidebarNegativePromptExpandButton_Click"
-                                                        AutomationProperties.Name="Expand negative prompt">
-                                              <ToolTip.Tip>
-                                                  <TextBlock Text="Show or hide the full negative prompt"
-                                                             Foreground="{DynamicResource TextSecondary}" />
-                                              </ToolTip.Tip>
-                                              <TextBlock Text="Show more"
-                                                         Foreground="{DynamicResource TextAccent}"
-                                                         FontFamily="{DynamicResource FontUI}"
-                                                         FontSize="11"
-                                                         FontWeight="SemiBold" />
-                                          </ToggleButton>
-                                      </StackPanel>
-
-                                      <!-- Compact Settings Card -->
-                                      <Border Margin="0,18,0,0"
-                                              Background="{DynamicResource SurfaceCard}"
-                                              BorderBrush="{DynamicResource BorderSubtle}"
-                                              BorderThickness="1"
-                                              CornerRadius="2"
-                                              Padding="12">
-                                          <StackPanel Spacing="10">
-                                              <!-- Resolution Row -->
-                                              <Grid ColumnDefinitions="75,*" Name="SidebarDimensionsRow">
-                                                  <TextBlock Grid.Column="0" Name="SidebarDimensionsLabel" Text="RESOLUTION" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontUI}" VerticalAlignment="Center" FontSize="9" FontWeight="Medium" LetterSpacing="1.5" />
-                                                  <TextBlock Grid.Column="1" Name="SidebarDimensions" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontMono}" FontWeight="Normal" FontSize="11" VerticalAlignment="Center" />
-                                              </Grid>
-
-                                             <!-- Tool Row -->
-                                             <Grid ColumnDefinitions="75,*" Name="SidebarToolRow">
-                                                 <TextBlock Grid.Column="0" Name="SidebarToolLabel" Text="TOOL" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontUI}" VerticalAlignment="Center" FontSize="9" FontWeight="Medium" LetterSpacing="1.5" />
-                                                 <TextBlock Grid.Column="1" Name="SidebarTool" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontMono}" TextWrapping="Wrap" FontSize="11" FontWeight="Normal" VerticalAlignment="Center" />
-                                             </Grid>
-
-                                             <!-- Model Row -->
-                                             <Grid ColumnDefinitions="75,*" Name="SidebarModelRow">
-                                                 <TextBlock Grid.Column="0" Name="SidebarModelLabel" Text="MODEL" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontUI}" VerticalAlignment="Center" FontSize="9" FontWeight="Medium" LetterSpacing="1.5" />
-                                                 <TextBlock Grid.Column="1" Name="SidebarModel" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontMono}" TextWrapping="Wrap" FontSize="11" FontWeight="Normal" VerticalAlignment="Center" />
-                                             </Grid>
-
-                                             <!-- Lora Row -->
-                                             <Grid ColumnDefinitions="75,*" Name="SidebarLoraRow">
-                                                 <TextBlock Grid.Column="0" Name="SidebarLoraLabel" Text="LORA" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontUI}" VerticalAlignment="Center" FontSize="9" FontWeight="Medium" LetterSpacing="1.5" />
-                                                 <TextBlock Grid.Column="1" Name="SidebarLora" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontMono}" TextWrapping="Wrap" FontSize="11" FontWeight="Normal" VerticalAlignment="Center" />
-                                             </Grid>
-
-                                             <!-- Sampler Row -->
-                                             <Grid ColumnDefinitions="75,*" Name="SidebarSamplerRow">
-                                                 <TextBlock Grid.Column="0" Name="SidebarSamplerLabel" Text="SAMPLER" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontUI}" VerticalAlignment="Center" FontSize="9" FontWeight="Medium" LetterSpacing="1.5" />
-                                                 <TextBlock Grid.Column="1" Name="SidebarSampler" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontMono}" TextWrapping="Wrap" FontSize="11" FontWeight="Normal" VerticalAlignment="Center" />
-                                             </Grid>
-
-                                             <!-- Seed Row -->
-                                             <Grid ColumnDefinitions="75,*" Name="SidebarSeedRow">
-                                                 <TextBlock Grid.Column="0" Name="SidebarSeedLabel" Text="SEED" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontUI}" VerticalAlignment="Center" FontSize="9" FontWeight="Medium" LetterSpacing="1.5" />
-                                                 <Grid Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="6" VerticalAlignment="Center">
-                                                     <TextBlock Grid.Column="0" Name="SidebarSeed" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontMono}" FontSize="11" FontWeight="Normal" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                                                     <Button Grid.Column="1" Name="SidebarCopySeedButton" Content="Copy" Padding="6,3" FontSize="10" Background="{DynamicResource SurfaceElevated}" BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="1" Tag="seed" Click="SidebarCopyButton_Click" VerticalAlignment="Center" AutomationProperties.Name="Copy seed" ToolTip.Tip="Copy seed">
-                                                         <Button.Styles>
-                                                             <Style Selector="Button">
-                                                                 <Setter Property="CornerRadius" Value="4" />
-                                                             </Style>
-                                                         </Button.Styles>
-                                                     </Button>
-                                                 </Grid>
-                                             </Grid>
-
-                                             <!-- Settings Row -->
-                                             <Grid ColumnDefinitions="75,*" Name="SidebarSettingsRow">
-                                                 <TextBlock Grid.Column="0" Name="SidebarSettingsLabel" Text="SETTINGS" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontUI}" VerticalAlignment="Center" FontSize="9" FontWeight="Medium" LetterSpacing="1.5" />
-                                                 <TextBlock Grid.Column="1" Name="SidebarSettings" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontMono}" TextWrapping="Wrap" FontSize="11" FontWeight="Normal" VerticalAlignment="Center" />
-                                             </Grid>
-
-                                             <!-- Resources Row -->
-                                             <Grid ColumnDefinitions="75,*" Name="SidebarResourcesRow">
-                                                 <TextBlock Grid.Column="0" Name="SidebarResourcesLabel" Text="RESOURCES" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontUI}" VerticalAlignment="Center" FontSize="9" FontWeight="Medium" LetterSpacing="1.5" />
-                                                 <TextBlock Grid.Column="1" Name="SidebarResources" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontMono}" TextWrapping="Wrap" FontSize="11" FontWeight="Normal" VerticalAlignment="Center" />
-                                             </Grid>
-
-                                             <!-- Date Row -->
-                                             <Grid ColumnDefinitions="75,*" Name="SidebarDateRow">
-                                                 <TextBlock Grid.Column="0" Name="SidebarDateLabel" Text="DATE" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontUI}" VerticalAlignment="Center" FontSize="9" FontWeight="Medium" LetterSpacing="1.5" />
-                                                 <TextBlock Grid.Column="1" Name="SidebarDate" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontMono}" FontSize="11" FontWeight="Normal" VerticalAlignment="Center" />
-                                             </Grid>
-                                         </StackPanel>
-                                     </Border>
-                                 </StackPanel>
-                             </Grid>
-                        </Panel>
-                    </ScrollViewer>
-                </Grid>
-            </Border>
-
-            <Border Name="MainMenu"
-                    Grid.ColumnSpan="3"
-                    Background="{DynamicResource SurfaceBase}"
-                    IsVisible="True">
-              <Panel>
-                <Grid RowDefinitions="Auto,Auto,*"
-                      ColumnDefinitions="320,*"
-                      RowSpacing="28"
-                      ColumnSpacing="40"
-                      MaxWidth="850"
-                      HorizontalAlignment="Center"
-                      VerticalAlignment="Center"
-                      Margin="20">
-                    <!-- Header -->
-                    <StackPanel Grid.Row="0" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="16" HorizontalAlignment="Center" VerticalAlignment="Top">
-                            <Image Source="avares://ComfyPromptViewer/Assets/app.png"
-                                   Width="56"
-                                   Height="56"
-                                   HorizontalAlignment="Left"
-                                   VerticalAlignment="Center" />
-                            <StackPanel Spacing="6" VerticalAlignment="Center">
-                            <TextBlock Text="Comfy Prompt Viewer"
-                                       Foreground="{DynamicResource TextPrimary}"
-                                       FontFamily="{DynamicResource FontHeading}"
-                                       FontSize="24"
-                                       FontWeight="SemiBold" />
-                            <TextBlock Text="A fast, local-first metadata browser and gallery for image folders."
-                                       Foreground="{DynamicResource TextMuted}"
-                                       FontSize="14"
-                                       TextWrapping="Wrap" />
-                            </StackPanel>
-                        </StackPanel>
-
-                        <!-- Error Banner on Main Menu -->
-                        <Border Name="MenuErrorBanner" Grid.Row="1" Grid.ColumnSpan="2" Background="{DynamicResource DangerSurface}" BorderBrush="{DynamicResource DangerBorder}" BorderThickness="1" CornerRadius="2" Padding="12,8" IsVisible="False">
-                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
-                                <TextBlock Name="MenuErrorText" Text="Error details here..." Foreground="{DynamicResource DangerText}" FontSize="13" TextWrapping="Wrap" VerticalAlignment="Center" />
-                                <Button Grid.Column="1" Classes="close-btn" Content="✕" Click="CloseMenuError_Click" Width="20" Height="20" CornerRadius="2" FontSize="9" Padding="0" VerticalAlignment="Center" AutomationProperties.Name="Dismiss error" ToolTip.Tip="Dismiss error" />
-                            </Grid>
-                        </Border>
-
-                        <StackPanel Grid.Row="2" Grid.Column="0" Spacing="16" VerticalAlignment="Top">
-                            <TextBlock Text="Start"
-                                       Foreground="{DynamicResource TextPrimary}"
-                                       FontFamily="{DynamicResource FontHeading}"
-                                       FontSize="18"
-                                       FontWeight="Medium" />
-                            
-                            <StackPanel Spacing="8">
-                                <!-- Premium Open Folder Button -->
-                                <Button Classes="menu-action-btn" Click="OpenFolderButton_Click">
-                                    <StackPanel Orientation="Horizontal" Spacing="12">
-                                        <TextBlock Text="📁" Classes="emoji-icon" FontSize="18" VerticalAlignment="Center" />
-                                        <TextBlock Text="Open Folder..." FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center" />
-                                    </StackPanel>
-                                </Button>
-                                
-                                <CheckBox Name="MenuIncludeSubfoldersToggle"
-                                          Content="Include subfolders"
-                                          Click="IncludeSubfoldersToggle_Click"
-                                          Margin="12,2,0,0"
-                                          FontSize="13"
-                                          Foreground="{DynamicResource TextSecondary}"
-                                          AutomationProperties.Name="Include subfolders"
-                                          ToolTip.Tip="Include images from nested folders" />
-                                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10" Margin="12,4,0,0">
-                                    <TextBlock Grid.Column="0"
-                                               Text="Theme"
-                                               Foreground="{DynamicResource TextSecondary}"
-                                               FontSize="13"
-                                               VerticalAlignment="Center" />
-                                    <ComboBox Grid.Column="1"
-                                              Name="ThemeComboBox"
-                                              Width="190"
-                                              Height="30"
-                                              FontSize="12"
-                                              VerticalAlignment="Center"
-                                              AutomationProperties.Name="Theme mode"
-                                              ToolTip.Tip="Choose the app color theme"
-                                              SelectionChanged="ThemeComboBox_SelectionChanged">
-                                        <ComboBoxItem>
-                                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                                <Grid Width="34" Height="12" ColumnDefinitions="*,*,*" VerticalAlignment="Center">
-                                                    <Border Grid.Column="0" Background="#17120D" CornerRadius="2,0,0,2" />
-                                                    <Border Grid.Column="1" Background="#272016" />
-                                                    <Border Grid.Column="2" Background="#8B3A2E" CornerRadius="0,2,2,0" />
-                                                </Grid>
-                                                <TextBlock Text="Brown" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center" />
-                                            </StackPanel>
-                                        </ComboBoxItem>
-                                        <ComboBoxItem>
-                                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                                <Grid Width="34" Height="12" ColumnDefinitions="*,*,*" VerticalAlignment="Center">
-                                                    <Border Grid.Column="0" Background="#111315" CornerRadius="2,0,0,2" />
-                                                    <Border Grid.Column="1" Background="#202326" />
-                                                    <Border Grid.Column="2" Background="#6E7681" CornerRadius="0,2,2,0" />
-                                                </Grid>
-                                                <TextBlock Text="Dark Gray" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center" />
-                                            </StackPanel>
-                                        </ComboBoxItem>
-                                        <ComboBoxItem>
-                                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                                <Grid Width="34" Height="12" ColumnDefinitions="*,*,*" VerticalAlignment="Center">
-                                                    <Border Grid.Column="0" Background="#0D1320" CornerRadius="2,0,0,2" />
-                                                    <Border Grid.Column="1" Background="#182236" />
-                                                    <Border Grid.Column="2" Background="#3D6EA8" CornerRadius="0,2,2,0" />
-                                                </Grid>
-                                                <TextBlock Text="Dark Blue" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center" />
-                                            </StackPanel>
-                                        </ComboBoxItem>
-                                        <ComboBoxItem>
-                                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                                <Grid Width="34" Height="12" ColumnDefinitions="*,*,*" VerticalAlignment="Center">
-                                                    <Border Grid.Column="0" Background="#0D1712" CornerRadius="2,0,0,2" />
-                                                    <Border Grid.Column="1" Background="#18251D" />
-                                                    <Border Grid.Column="2" Background="#4F7D5E" CornerRadius="0,2,2,0" />
-                                                </Grid>
-                                                <TextBlock Text="Dark Green" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center" />
-                                            </StackPanel>
-                                        </ComboBoxItem>
-                                        <ComboBoxItem>
-                                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                                <Grid Width="34" Height="12" ColumnDefinitions="*,*,*" VerticalAlignment="Center">
-                                                    <Border Grid.Column="0" Background="#17111B" CornerRadius="2,0,0,2" />
-                                                    <Border Grid.Column="1" Background="#251B2B" />
-                                                    <Border Grid.Column="2" Background="#7B4F8C" CornerRadius="0,2,2,0" />
-                                                </Grid>
-                                                <TextBlock Text="Plum" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center" />
-                                            </StackPanel>
-                                        </ComboBoxItem>
-                                    </ComboBox>
-                                </Grid>
-                            </StackPanel>
-
-                            <!-- Collapsible Advanced Section -->
-                            <StackPanel Spacing="6" Margin="0,12,0,0">
-                                <ToggleButton Name="AdvancedToggle"
-                                              Classes="advanced-toggle"
-                                              Click="AdvancedToggle_Click"
-                                              IsChecked="False">
-                                    <StackPanel Orientation="Horizontal" Spacing="8">
-                                        <TextBlock Text="⚙️" Classes="emoji-icon" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondary}" />
-                                        <TextBlock Text="Advanced Maintenance" FontSize="12.5" FontWeight="Medium" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center" />
-                                    </StackPanel>
-                                </ToggleButton>
-                                
-                                <StackPanel Name="AdvancedPanel" Spacing="8" Margin="16,4,0,0" IsVisible="False">
-                                    <CheckBox Name="PrewarmThumbnailsToggle"
-                                              Content="Cache thumbnails in the background"
-                                              Click="PrewarmThumbnailsToggle_Click"
-                                              FontSize="13"
-                                              Foreground="{DynamicResource TextSecondary}"
-                                              AutomationProperties.Name="Cache thumbnails in the background"
-                                              ToolTip.Tip="Cache every thumbnail once scanning finishes, so scrolling through the folder never waits for one to be built" />
-                                    <Button Name="ClearAllCachesButton"
-                                            Classes="menu-maintenance-btn"
-                                            Click="ClearAllCachesButton_Click"
-                                            ToolTip.Tip="Clear the thumbnail cache for every folder">
-                                        <StackPanel Orientation="Horizontal" Spacing="8">
-                                            <TextBlock Text="🗑" Classes="emoji-icon" FontSize="13" VerticalAlignment="Center" Foreground="{DynamicResource TextMuted}" />
-                                            <TextBlock Text="Clear All Thumbnail Caches" FontSize="13" VerticalAlignment="Center" />
-                                        </StackPanel>
-                                    </Button>
-                                    <Button Classes="menu-maintenance-btn" Click="ClearMetadataCacheButton_Click" ToolTip.Tip="Clear parsed metadata cache">
-                                        <StackPanel Orientation="Horizontal" Spacing="8">
-                                            <TextBlock Text="DB" Classes="emoji-icon" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="{DynamicResource TextMuted}" />
-                                            <TextBlock Text="Clear Metadata Cache" FontSize="13" VerticalAlignment="Center" />
-                                        </StackPanel>
-                                    </Button>
-                                    <Button Classes="menu-maintenance-btn" Click="OpenAppDataButton_Click" ToolTip.Tip="Open application preferences and logs folder">
-                                        <StackPanel Orientation="Horizontal" Spacing="8">
-                                            <TextBlock Text="📂" Classes="emoji-icon" FontSize="13" VerticalAlignment="Center" Foreground="{DynamicResource TextMuted}" />
-                                            <TextBlock Text="Open App Data Folder" FontSize="13" VerticalAlignment="Center" />
-                                        </StackPanel>
-                                    </Button>
-                                    <TextBlock Name="AdvancedMaintenanceStatus"
-                                               Text=""
-                                               Foreground="{DynamicResource TextAccent}"
-                                               FontSize="12"
-                                               TextWrapping="Wrap"
-                                               IsVisible="False"
-                                               Opacity="0">
-                                        <TextBlock.Transitions>
-                                            <Transitions>
-                                                <DoubleTransition Property="Opacity" Duration="0:0:0.12" Easing="CubicEaseOut" />
-                                            </Transitions>
-                                        </TextBlock.Transitions>
-                                    </TextBlock>
-                                </StackPanel>
-                            </StackPanel>
-                        </StackPanel>
-
-                    <!-- Right Column: Recent -->
-                    <Grid Grid.Row="2" Grid.Column="1" RowDefinitions="Auto,*" Height="400" VerticalAlignment="Top">
-                        <TextBlock Grid.Row="0"
-                                   Text="Recent"
-                                   Foreground="{DynamicResource TextPrimary}"
-                                   FontFamily="{DynamicResource FontHeading}"
-                                   FontSize="18"
-                                   FontWeight="Medium"
-                                   Margin="0,0,0,16" />
-                        
-                        <!-- List of recent folders -->
-                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-                            <StackPanel Name="RecentFoldersList" Spacing="8">
-                                <!-- Dynamic items will be added here -->
-                            </StackPanel>
-                        </ScrollViewer>
-                        
-                        <!-- Empty recent folders state -->
-                        <TextBlock Name="NoRecentFoldersText"
-                                   Grid.Row="1"
-                                   Text="No recent folders"
-                                   Foreground="{DynamicResource TextMuted}"
-                                   FontSize="14"
-                                   FontStyle="Italic"
-                                   VerticalAlignment="Top"
-                                   Margin="0,8,0,0"
-                                   IsVisible="False" />
-                    </Grid>
-                </Grid>
-
-                <Button Classes="menu-corner-btn"
-                        Click="AboutButton_Click"
-                        HorizontalAlignment="Right"
-                        VerticalAlignment="Bottom"
-                        Margin="0,0,14,10"
-                        Content="About &amp; Licenses"
-                        AutomationProperties.Name="About and licenses"
-                        ToolTip.Tip="Version and open-source license notices" />
-              </Panel>
-            </Border>
-
-        <Border Name="LargePreviewOverlay"
-                Grid.Column="0"
-                IsVisible="False"
-                Background="{DynamicResource LargePreviewOverlayBackground}"
-                PointerPressed="LargePreviewOverlay_PointerPressed">
-            <Border Background="{DynamicResource SurfaceCard}"
-                    BorderBrush="{DynamicResource BorderSubtle}"
-                    BorderThickness="1"
-                    CornerRadius="3"
-                    ClipToBounds="True"
-                    HorizontalAlignment="Stretch"
-                    VerticalAlignment="Stretch"
-                    Margin="32"
-                    MinWidth="420"
-                    MinHeight="360"
-                    MaxWidth="900"
-                    MaxHeight="650">
-                <Grid RowDefinitions="Auto,*">
-                    <Border Grid.Row="0"
-                            Background="{DynamicResource SurfaceElevated}"
-                            BorderBrush="{DynamicResource BorderSubtle}"
-                            BorderThickness="0,0,0,1"
-                            Padding="16,12">
-                        <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="10">
-                            <StackPanel Grid.Column="0" Spacing="2">
-                                <TextBlock Name="LargePreviewTitle"
-                                           Foreground="{DynamicResource TextPrimary}"
-                                           FontFamily="{DynamicResource FontMono}"
-                                           FontSize="16"
-                                           FontWeight="Medium"
-                                           TextTrimming="CharacterEllipsis" />
-                                <DockPanel LastChildFill="True" VerticalAlignment="Center">
-                                    <TextBlock Name="LargePreviewMeta"
-                                               DockPanel.Dock="Left"
-                                               Classes="muted"
-                                               FontSize="12"
-                                               Margin="0,0,10,0"
-                                               TextTrimming="CharacterEllipsis" />
-                                    <TextBlock Text="|"
-                                               DockPanel.Dock="Left"
-                                               Classes="muted"
-                                               Opacity="0.3"
-                                               FontSize="12"
-                                               Margin="0,0,10,0" />
-                                    <TextBlock Text="Arrows navigate  ·  Scroll to zoom  ·  Esc / Space / Enter close"
-                                               Classes="muted"
-                                               FontSize="12"
-                                               Opacity="0.6"
-                                               TextTrimming="CharacterEllipsis" />
-                                </DockPanel>
-                            </StackPanel>
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                                 <Button Name="PreviewFitButton"
-                                         Classes="zoom-btn"
-                                         Content="Fit"
-                                         FontSize="12"
-                                         AutomationProperties.Name="Fit image to preview"
-                                         ToolTip.Tip="Fit image"
-                                         Click="PreviewFitButton_Click" />
-                                 <Button Name="PreviewActualSizeButton"
-                                         Classes="zoom-btn"
-                                         Content="1:1"
-                                         FontSize="12"
-                                         AutomationProperties.Name="Show image at actual size"
-                                         ToolTip.Tip="Actual size"
-                                         Click="PreviewActualSizeButton_Click" />
-                            </StackPanel>
-                            <Button Grid.Column="2"
-                                    Name="ClosePreviewButton"
-                                    Classes="close-btn"
-                                    Content="✕"
-                                     AutomationProperties.Name="Close preview"
-                                     ToolTip.Tip="Close preview"
-                                     Click="ClosePreviewButton_Click" />
-                        </Grid>
-                    </Border>
-
-                    <Border Grid.Row="1"
-                            Name="LargePreviewImageHost"
-                            Background="{DynamicResource SurfaceBase}"
-                            Padding="16"
-                            MinHeight="300"
-                            SizeChanged="LargePreviewImageHost_SizeChanged">
-                        <Grid>
-                            <Canvas Name="LargePreviewCanvas"
-                                    ClipToBounds="True"
-                                    Background="Transparent"
-                                    HorizontalAlignment="Stretch"
-                                    VerticalAlignment="Stretch"
-                                    PointerWheelChanged="LargePreviewCanvas_PointerWheelChanged"
-                                    PointerPressed="LargePreviewCanvas_PointerPressed"
-                                    PointerMoved="LargePreviewCanvas_PointerMoved"
-                                    PointerReleased="LargePreviewCanvas_PointerReleased"
-                                    PointerCaptureLost="LargePreviewCanvas_PointerCaptureLost"
-                                    Pinch="LargePreviewCanvas_Pinch"
-                                    PinchEnded="LargePreviewCanvas_PinchEnded">
-                                <!-- Pinch is only raised for elements that opt in with a recognizer. -->
-                                <Canvas.GestureRecognizers>
-                                    <PinchGestureRecognizer />
-                                </Canvas.GestureRecognizers>
-                                <Canvas.ContextMenu>
-                                    <ContextMenu Opened="ImageContextMenu_Opened">
-                                        <MenuItem Header="Open in File Explorer" Tag="open" Click="ImageContextMenuItem_Click" />
-                                        <MenuItem Header="Copy Prompt" Tag="prompt" Click="ImageContextMenuItem_Click" />
-                                        <MenuItem Name="PreviewCopyNegativePromptMenuItem" Header="Copy Negative Prompt" Tag="negative" Click="ImageContextMenuItem_Click" />
-                                        <MenuItem Header="Copy Image Path" Tag="path" Click="ImageContextMenuItem_Click" />
-                                        <Separator />
-                                        <MenuItem Header="Delete Image" Tag="delete" Click="ImageContextMenuItem_Click" />
-                                    </ContextMenu>
-                                </Canvas.ContextMenu>
-                                <Image Name="LargePreviewImage"
-                                       RenderOptions.BitmapInterpolationMode="HighQuality"
-                                       Stretch="Fill" />
-                            </Canvas>
-                            <Button Name="PreviousPreviewButton"
-                                    Classes="preview-nav-btn"
-                                    Content="&#x2039;"
-                                    HorizontalAlignment="Left"
-                                    VerticalAlignment="Center"
-                                    Margin="12,0,0,0"
-                                    AutomationProperties.Name="Previous image"
-                                    Click="PreviewNavigationButton_Click" />
-                            <Button Name="NextPreviewButton"
-                                    Classes="preview-nav-btn"
-                                    Content="&#x203A;"
-                                    HorizontalAlignment="Right"
-                                    VerticalAlignment="Center"
-                                    Margin="0,0,12,0"
-                                    AutomationProperties.Name="Next image"
-                                    Click="PreviewNavigationButton_Click" />
-                        </Grid>
-                    </Border>
-                </Grid>
-            </Border>
-        </Border>
+        <local:LargePreviewView Name="LargePreview" Grid.Column="0" IsVisible="False" />
 
         <Border Name="DeleteConfirmationOverlay"
                 Grid.ColumnSpan="3"

@@ -66,7 +66,13 @@ public static class DebugLog
         Write($"{source}{Environment.NewLine}LastScroll: {scrollState}{Environment.NewLine}{exception}");
     }
 
-    public static async void Observe(Task task, string source)
+    public static void Observe(Task task, string source)
+    {
+        Observe(task, source, null);
+    }
+
+    // The source is composed only when logging, so a per-item hot path does not build a string per call.
+    public static async void Observe(Task task, string source, string? detail)
     {
         try
         {
@@ -77,7 +83,7 @@ public static class DebugLog
         }
         catch (Exception ex)
         {
-            WriteException(source, ex);
+            WriteException(detail is null ? source : $"{source} {detail}", ex);
         }
     }
 

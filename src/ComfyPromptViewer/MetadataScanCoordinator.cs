@@ -37,8 +37,10 @@ internal sealed class MetadataScanCoordinator
         Action? onCompleted = null)
     {
         var session = _gate.Restart();
+        // Copied here, on the caller's thread: `items` is the live catalog view, which the UI keeps mutating.
+        var snapshot = items.ToList();
         DebugLog.Observe(Task.Run(
-            () => ScanInitialAsync(items.ToList(), session, hasSearchQuery, applyFilter, onCompleted)),
+            () => ScanInitialAsync(snapshot, session, hasSearchQuery, applyFilter, onCompleted)),
             "Initial metadata scanner");
     }
 

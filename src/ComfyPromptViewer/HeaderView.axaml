@@ -1,0 +1,299 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:primitives="clr-namespace:Avalonia.Controls.Primitives;assembly=Avalonia.Controls"
+             xmlns:local="clr-namespace:ComfyPromptViewer"
+             x:Class="ComfyPromptViewer.HeaderView"
+             x:DataType="local:HeaderViewModel">
+    <Border Background="{DynamicResource SurfaceElevated}" BorderBrush="{DynamicResource ToolbarBorderSubtle}" BorderThickness="0,0,0,1">
+        <Grid RowDefinitions="Auto,Auto" Margin="16,6" RowSpacing="4">
+            <!-- Row 0: App Title & Info -->
+            <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+                <Button Content="← Back"
+                        Command="{Binding BackCommand}"
+                        AutomationProperties.Name="Back to Menu"
+                        ToolTip.Tip="Back to Menu"
+                        Height="30"
+                        CornerRadius="4"
+                        Padding="12,5"
+                        Background="{DynamicResource SurfaceCard}"
+                        BorderBrush="{DynamicResource BorderSubtle}"
+                        BorderThickness="1"
+                        Foreground="{DynamicResource TextPrimary}"
+                        FontSize="12"
+                        FontWeight="Normal"
+                        VerticalAlignment="Center" />
+
+                <StackPanel Grid.Column="1" Spacing="0" VerticalAlignment="Center" Margin="6,0,0,0">
+                    <TextBlock Text="{Binding FolderTitle}" Foreground="{DynamicResource TextPrimary}" FontFamily="{DynamicResource FontHeading}" FontSize="17" FontWeight="SemiBold" FontStyle="Normal" TextTrimming="CharacterEllipsis" />
+                    <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                        <TextBlock Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource FontMono}" FontSize="11" FontWeight="Normal" Text="{Binding FolderPath}" TextTrimming="PrefixCharacterEllipsis" VerticalAlignment="Center" />
+                        <Button Content="Copy path"
+                                Command="{Binding CopyPathCommand}"
+                                AutomationProperties.Name="Copy full path"
+                                Height="18"
+                                Padding="6,0"
+                                FontSize="10"
+                                Background="{DynamicResource SurfaceElevated}"
+                                BorderBrush="{DynamicResource BorderSubtle}"
+                                BorderThickness="1"
+                                CornerRadius="3"
+                                Foreground="{DynamicResource TextMuted}"
+                                VerticalAlignment="Center"
+                                IsVisible="{Binding IsCopyPathVisible}"
+                                Margin="4,0,0,0" />
+                    </StackPanel>
+                </StackPanel>
+
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding FolderCacheStatus.Text}"
+                               Foreground="{DynamicResource TextAccent}"
+                               FontSize="11"
+                               MaxWidth="260"
+                               TextTrimming="CharacterEllipsis"
+                               VerticalAlignment="Center"
+                               IsVisible="{Binding FolderCacheStatus.IsVisible}"
+                               Opacity="{Binding FolderCacheStatus.Opacity}">
+                        <TextBlock.Transitions>
+                            <Transitions>
+                                <DoubleTransition Property="Opacity" Duration="0:0:0.12" Easing="CubicEaseOut" />
+                            </Transitions>
+                        </TextBlock.Transitions>
+                    </TextBlock>
+                    <Border Classes="count-pill" Height="30" Padding="10,0" VerticalAlignment="Center">
+                        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                            <Viewbox Width="18" Height="18" HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False">
+                                <Canvas Width="24" Height="24">
+                                    <Path Classes="line-icon" Data="{x:Static local:LineIcons.Image}" />
+                                </Canvas>
+                            </Viewbox>
+                            <TextBlock Name="CountBlock" Text="{Binding CountText}" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Border>
+                    <Button Classes="zoom-btn"
+                            Command="{Binding ClearFolderCacheCommand}"
+                            IsEnabled="{Binding IsClearCacheEnabled}"
+                            Width="30"
+                            Height="30"
+                            VerticalAlignment="Center"
+                            ToolTip.Tip="Clear this folder's thumbnail cache"
+                            AutomationProperties.Name="Clear Folder Thumbnail Cache">
+                        <Viewbox Width="18" Height="18" HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False">
+                            <Canvas Width="24" Height="24">
+                                <Path Classes="line-icon" Data="{x:Static local:LineIcons.Brush}" />
+                            </Canvas>
+                        </Viewbox>
+                    </Button>
+                    <Button Name="ShortcutsButton"
+                            Classes="zoom-btn"
+                            Width="30"
+                            Height="30"
+                            VerticalAlignment="Center"
+                            ToolTip.Tip="Keyboard Shortcuts"
+                            AutomationProperties.Name="Keyboard Shortcuts">
+                        <Viewbox Width="18" Height="18" HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False">
+                            <Canvas Width="24" Height="24">
+                                <Path Classes="line-icon" Data="{x:Static local:LineIcons.Keyboard}" />
+                            </Canvas>
+                        </Viewbox>
+                        <Button.Flyout>
+                            <Flyout Placement="BottomEdgeAlignedRight" FlyoutPresenterClasses="shortcuts-flyout">
+                                <Border Padding="16" Background="{DynamicResource SurfaceCard}" BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="1" CornerRadius="3">
+                                    <StackPanel Spacing="10" MinWidth="260">
+                                        <TextBlock Text="Keyboard Shortcuts" FontWeight="SemiBold" FontSize="14" Foreground="{DynamicResource TextPrimary}" />
+                                        <Separator Background="{DynamicResource BorderSubtle}" Height="1" Margin="0,2" />
+                                        
+                                        <Grid ColumnDefinitions="Auto,*"
+                                              RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto"
+                                              ColumnSpacing="20"
+                                              RowSpacing="6">
+                                            <!-- Row 0: Navigation -->
+                                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Navigate gallery" Foreground="{DynamicResource TextSecondary}" FontSize="12" VerticalAlignment="Center" />
+                                            <TextBlock Grid.Row="0" Grid.Column="1" Text="← ↑ ↓ → / Home / End" Foreground="{DynamicResource TextPrimary}" FontWeight="Medium" FontFamily="{DynamicResource FontMono}" FontSize="11" VerticalAlignment="Center" />
+                                            
+                                            <!-- Row 1: Space / Enter -->
+                                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Open preview" Foreground="{DynamicResource TextSecondary}" FontSize="12" VerticalAlignment="Center" />
+                                            <TextBlock Grid.Row="1" Grid.Column="1" Text="Space / Enter / Double-click" Foreground="{DynamicResource TextPrimary}" FontWeight="Medium" FontFamily="{DynamicResource FontMono}" FontSize="11" VerticalAlignment="Center" />
+                                            
+                                            <!-- Row 2: Escape / Space / Enter -->
+                                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Close preview" Foreground="{DynamicResource TextSecondary}" FontSize="12" VerticalAlignment="Center" />
+                                            <TextBlock Grid.Row="2" Grid.Column="1" Text="Esc / Space / Enter" Foreground="{DynamicResource TextPrimary}" FontWeight="Medium" FontFamily="{DynamicResource FontMono}" FontSize="11" VerticalAlignment="Center" />
+                                            
+                                            <!-- Row 3: F5 / Ctrl+R -->
+                                            <TextBlock Grid.Row="3" Grid.Column="0" Text="Reload folder" Foreground="{DynamicResource TextSecondary}" FontSize="12" VerticalAlignment="Center" />
+                                            <TextBlock Grid.Row="3" Grid.Column="1" Text="F5 / Ctrl+R" Foreground="{DynamicResource TextPrimary}" FontWeight="Medium" FontFamily="{DynamicResource FontMono}" FontSize="11" VerticalAlignment="Center" />
+
+                                            <!-- Row 4: Mouse Scroll (zooming) -->
+                                            <TextBlock Grid.Row="4" Grid.Column="0" Text="Zoom / Pan preview" Foreground="{DynamicResource TextSecondary}" FontSize="12" VerticalAlignment="Center" />
+                                            <TextBlock Grid.Row="4" Grid.Column="1" Text="Wheel / Pinch / Drag" Foreground="{DynamicResource TextPrimary}" FontWeight="Medium" FontFamily="{DynamicResource FontMono}" FontSize="11" VerticalAlignment="Center" />
+
+                                            <TextBlock Grid.Row="5" Grid.Column="0" Text="Toggle selection" Foreground="{DynamicResource TextSecondary}" FontSize="12" VerticalAlignment="Center" />
+                                            <TextBlock Grid.Row="5" Grid.Column="1" Text="Ctrl + Click" Foreground="{DynamicResource TextPrimary}" FontWeight="Medium" FontFamily="{DynamicResource FontMono}" FontSize="11" VerticalAlignment="Center" />
+
+                                            <TextBlock Grid.Row="6" Grid.Column="0" Text="Select range" Foreground="{DynamicResource TextSecondary}" FontSize="12" VerticalAlignment="Center" />
+                                            <TextBlock Grid.Row="6" Grid.Column="1" Text="Shift + Click" Foreground="{DynamicResource TextPrimary}" FontWeight="Medium" FontFamily="{DynamicResource FontMono}" FontSize="11" VerticalAlignment="Center" />
+                                        </Grid>
+                                    </StackPanel>
+                                </Border>
+                            </Flyout>
+                        </Button.Flyout>
+                    </Button>
+                </StackPanel>
+            </Grid>
+
+            <!-- Row 1: Sort, search, and tile density -->
+            <Grid Grid.Row="1" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="16">
+                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                    <TextBlock Text="Sort by"
+                               Classes="muted"
+                               FontSize="12"
+                               FontWeight="Normal"
+                               VerticalAlignment="Center" />
+                    <ComboBox SelectedIndex="{Binding SortIndex, Mode=TwoWay}"
+                              Width="130"
+                              Height="30"
+                              FontSize="12"
+                              VerticalAlignment="Center">
+                        <ComboBoxItem Content="Newest First" />
+                        <ComboBoxItem Content="Oldest First" />
+                        <ComboBoxItem Content="Name" />
+                    </ComboBox>
+                    
+                    <Rectangle Width="1" Fill="{DynamicResource BorderSubtle}" Margin="4,4" Height="16" VerticalAlignment="Center" />
+                    
+                    <ToggleButton IsChecked="{Binding IncludeSubfolders, Mode=TwoWay}"
+                                  Classes="subfolder-toggle"
+                                  Height="30"
+                                  Padding="10,0"
+                                  VerticalContentAlignment="Center"
+                                  HorizontalContentAlignment="Center"
+                                  AutomationProperties.Name="Include subfolders">
+                        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                            <Viewbox Width="18" Height="18" HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False">
+                                <Canvas Width="24" Height="24">
+                                    <Path Classes="line-icon" Data="{x:Static local:LineIcons.Folder}" />
+                                </Canvas>
+                            </Viewbox>
+                            <TextBlock Text="Subfolders" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </ToggleButton>
+                </StackPanel>
+
+                <Grid Grid.Column="1" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="16" VerticalAlignment="Center">
+                    <Rectangle Grid.Column="0" Width="1" Fill="{DynamicResource BorderSubtle}" Height="16" VerticalAlignment="Center" />
+                    <Border Grid.Column="1" Classes="search-shell">
+                        <Grid ColumnDefinitions="Auto,*" VerticalAlignment="Stretch">
+                    <TextBox Grid.Column="1"
+                             Name="SearchTextBox"
+                             Text="{Binding SearchText, Mode=TwoWay}"
+                             PlaceholderText="Search (use - to exclude, &quot;&quot; for exact)..."
+                             VerticalAlignment="Center"
+                             HorizontalAlignment="Stretch"
+                             Classes="search-box"
+                             Height="28"
+                             AutomationProperties.Name="Search">
+                        <TextBox.Resources>
+                            <SolidColorBrush x:Key="TextBoxBackground">Transparent</SolidColorBrush>
+                            <SolidColorBrush x:Key="TextBoxBackgroundPointerOver">Transparent</SolidColorBrush>
+                            <SolidColorBrush x:Key="TextBoxBackgroundFocused">Transparent</SolidColorBrush>
+                            <SolidColorBrush x:Key="TextBoxBorderBrush">Transparent</SolidColorBrush>
+                            <SolidColorBrush x:Key="TextBoxBorderBrushPointerOver">Transparent</SolidColorBrush>
+                            <SolidColorBrush x:Key="TextBoxBorderBrushFocused">Transparent</SolidColorBrush>
+                            <SolidColorBrush x:Key="TextControlBackground">Transparent</SolidColorBrush>
+                            <SolidColorBrush x:Key="TextControlBackgroundPointerOver">Transparent</SolidColorBrush>
+                            <SolidColorBrush x:Key="TextControlBackgroundFocused">Transparent</SolidColorBrush>
+                            <SolidColorBrush x:Key="TextControlBorderBrush">Transparent</SolidColorBrush>
+                            <SolidColorBrush x:Key="TextControlBorderBrushPointerOver">Transparent</SolidColorBrush>
+                            <SolidColorBrush x:Key="TextControlBorderBrushFocused">Transparent</SolidColorBrush>
+                        </TextBox.Resources>
+                        <TextBox.InnerRightContent>
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,4,0">
+                                <Button Classes="clear-search-btn"
+                                        Content="×"
+                                        IsVisible="{Binding HasSearchText}"
+                                        Click="ClearSearchButton_Click"
+                                        Focusable="False" />
+                                <Button Name="SearchHelpButton"
+                                        Classes="search-help-btn"
+                                        Content="?"
+                                        Focusable="False"
+                                        Click="SearchHelpButton_Click"
+                                        ToolTip.Tip="Show search options" />
+                            </StackPanel>
+                        </TextBox.InnerRightContent>
+                    </TextBox>
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="4,0,0,0">
+                        <ComboBox SelectedIndex="{Binding SearchScopeIndex, Mode=TwoWay}"
+                                  Classes="search-scope-combo"
+                                  VerticalAlignment="Center"
+                                  AutomationProperties.Name="Search scope">
+                            <ComboBox.Resources>
+                                <SolidColorBrush x:Key="ComboBoxBackground">Transparent</SolidColorBrush>
+                                <SolidColorBrush x:Key="ComboBoxBackgroundPointerOver">Transparent</SolidColorBrush>
+                                <SolidColorBrush x:Key="ComboBoxBackgroundPressed">Transparent</SolidColorBrush>
+                                <SolidColorBrush x:Key="ComboBoxBorderBrush">Transparent</SolidColorBrush>
+                                <SolidColorBrush x:Key="ComboBoxBorderBrushPointerOver">Transparent</SolidColorBrush>
+                                <SolidColorBrush x:Key="ComboBoxBorderBrushPressed">Transparent</SolidColorBrush>
+                                <Thickness x:Key="ComboBoxBorderThemeThickness">0</Thickness>
+                            </ComboBox.Resources>
+                            <ComboBoxItem Content="All fields" />
+                            <ComboBoxItem Content="Positive" />
+                            <ComboBoxItem Content="Negative" />
+                            <ComboBoxItem Content="Filename" />
+                        </ComboBox>
+                        <Rectangle Width="1" Fill="{DynamicResource BorderSubtle}" Height="18" VerticalAlignment="Center" Margin="2,0,0,0" />
+                    </StackPanel>
+                    <primitives:Popup IsOpen="{Binding IsSearchHelpOpen, Mode=TwoWay}"
+                                      PlacementTarget="{Binding #SearchHelpButton}"
+                                      Placement="BottomEdgeAlignedRight"
+                                      PlacementConstraintAdjustment="SlideX,SlideY,FlipY"
+                                      IsLightDismissEnabled="True"
+                                      OverlayDismissEventPassThrough="True"
+                                      ShouldUseOverlayLayer="True"
+                                      VerticalOffset="6">
+                        <Border Padding="16"
+                                Background="{DynamicResource SurfaceCard}"
+                                BorderBrush="{DynamicResource BorderSubtle}"
+                                BorderThickness="1"
+                                CornerRadius="3">
+                            <StackPanel Spacing="10" MinWidth="360">
+                                <TextBlock Text="Search Options" FontWeight="SemiBold" FontSize="14" Foreground="{DynamicResource TextPrimary}" />
+                                <Separator Background="{DynamicResource BorderSubtle}" Height="1" Margin="0,2" />
+                                <StackPanel Spacing="6">
+                                    <TextBlock Text="• Separate terms with spaces, commas, or semicolons" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}" FontSize="12" />
+                                    <TextBlock Text="• Use -term to exclude (e.g., -watermark)" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}" FontSize="12" />
+                                    <TextBlock Text="• Use &quot;term&quot; for exact word/phrase (e.g., &quot;ass&quot; won't match &quot;grass&quot;)" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}" FontSize="12" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                    </primitives:Popup>
+                        </Grid>
+                    </Border>
+                    <Rectangle Grid.Column="2" Width="1" Fill="{DynamicResource BorderSubtle}" Height="16" VerticalAlignment="Center" />
+                </Grid>
+
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                    <TextBlock Text="⛶"
+                               Foreground="{DynamicResource TextMuted}"
+                               FontSize="12"
+                               VerticalAlignment="Center" />
+                    <Slider Width="120"
+                            Minimum="{Binding TileSizeMin}"
+                            Maximum="{Binding TileSizeMax}"
+                            Value="{Binding TileSize, Mode=TwoWay}"
+                            TickFrequency="{Binding TileSizeTick}"
+                            IsSnapToTickEnabled="True"
+                            AutomationProperties.Name="Tile size"
+                            VerticalAlignment="Center" />
+                    <TextBlock Text="{Binding TileSizeText}"
+                               Foreground="{DynamicResource TextSecondary}"
+                               FontFamily="{DynamicResource FontMono}"
+                               FontSize="11"
+                               FontWeight="Normal"
+                               VerticalAlignment="Center"
+                               Width="24"
+                               HorizontalAlignment="Right" />
+                </StackPanel>
+            </Grid>
+        </Grid>
+    </Border>
+</UserControl>

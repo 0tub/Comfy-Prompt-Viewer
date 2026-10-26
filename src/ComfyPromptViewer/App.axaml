@@ -46,6 +46,29 @@
             <Setter Property="BorderThickness" Value="{DynamicResource MenuFlyoutPresenterBorderThickness}" />
             <Setter Property="CornerRadius" Value="{DynamicResource MenuFlyoutPresenterCornerRadius}" />
             <Setter Property="Padding" Value="4" />
+            <!-- Pointer-placed popups keep the size of their first layout pass, which runs at scale 1.0. At
+                 fractional scaling, rounding then makes the content taller than the popup, so Fluent's menu
+                 ScrollViewer shows scroll arrows. Unrounded layout measures the same at any scale, and these
+                 menus never need to scroll. -->
+            <Setter Property="UseLayoutRounding" Value="False" />
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <Border Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            Padding="{TemplateBinding Padding}"
+                            MaxWidth="{TemplateBinding MaxWidth}"
+                            MinHeight="{TemplateBinding MinHeight}"
+                            HorizontalAlignment="{TemplateBinding HorizontalAlignment}"
+                            CornerRadius="{TemplateBinding CornerRadius}">
+                        <ItemsPresenter Name="PART_ItemsPresenter"
+                                        ItemsPanel="{TemplateBinding ItemsPanel}"
+                                        Margin="0,4"
+                                        KeyboardNavigation.TabNavigation="Continue"
+                                        Grid.IsSharedSizeScope="True" />
+                    </Border>
+                </ControlTemplate>
+            </Setter>
         </Style>
 
         <Style Selector="MenuItem">

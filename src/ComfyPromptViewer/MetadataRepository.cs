@@ -8,7 +8,10 @@ namespace ComfyPromptViewer;
 
 internal sealed class MetadataRepository : IDisposable
 {
-    private const int CurrentVersion = 2;
+    // Records from any other build are stale. The compiler derives the module version id from the compiled code, so a
+    // change to how metadata is read or extracted invalidates the cache without anyone remembering to bump a number.
+    // It also changes with unrelated code; one background re-read per folder after an update is cheap.
+    private static readonly string CurrentBuild = typeof(MetadataRepository).Module.ModuleVersionId.ToString("N");
     private const string CollectionName = "metadata";
     private readonly object _lock = new();
     private readonly string _databasePath;
@@ -50,6 +53,7 @@ internal sealed class MetadataRepository : IDisposable
         catch (Exception ex)
         {
             DebugLog.Write($"Failed to load metadata index for {path}: {ex.Message}");
+            ResetIfCorrupt(ex);
             return false;
         }
     }
@@ -120,6 +124,7 @@ internal sealed class MetadataRepository : IDisposable
         catch (Exception ex)
         {
             DebugLog.Write($"Failed to batch load metadata index: {ex.Message}");
+            ResetIfCorrupt(ex);
         }
 
         return entries;
@@ -143,7 +148,7 @@ internal sealed class MetadataRepository : IDisposable
         return new MetadataIndexEntry
         {
             Id = BuildKey(path, fingerprint.LastWriteTimeUtcTicks, fingerprint.FileLength),
-            Version = CurrentVersion,
+            Build = CurrentBuild,
             FolderPath = Path.GetDirectoryName(path) ?? "",
             SourcePath = path,
             LastWriteTimeUtcTicks = fingerprint.LastWriteTimeUtcTicks,
@@ -174,6 +179,7 @@ internal sealed class MetadataRepository : IDisposable
         catch (Exception ex)
         {
             DebugLog.Write($"Failed to save metadata index for {entry.SourcePath}: {ex.Message}");
+            ResetIfCorrupt(ex);
         }
     }
 
@@ -189,21 +195,24 @@ internal sealed class MetadataRepository : IDisposable
 
             lock (_lock)
             {
-                var collection = GetCollection();
-                foreach (var path in pathSet)
+                // One transaction: auto-committing each delete made a bulk delete hold the lock ~4x longer.
+                RunInTransactionLocked(collection =>
                 {
-                    var documents = collection.Query()
-                        .Where("SourcePath = @0", path)
-                        .ToList();
-
-                    foreach (var document in documents)
+                    foreach (var path in pathSet)
                     {
-                        if (document.TryGetValue("_id", out var id) && id.IsString)
+                        var documents = collection.Query()
+                            .Where("SourcePath = @0", path)
+                            .ToList();
+
+                        foreach (var document in documents)
                         {
-                            collection.Delete(id.AsString);
+                            if (document.TryGetValue("_id", out var id) && id.IsString)
+                            {
+                                collection.Delete(id.AsString);
+                            }
                         }
                     }
-                }
+                });
             }
         }
         catch (Exception ex)
@@ -212,7 +221,7 @@ internal sealed class MetadataRepository : IDisposable
         }
     }
 
-    public void PruneMissing(IEnumerable<string> currentPaths, bool includeSubfolders)
+    public void PruneMissing(IEnumerable<string> currentPaths, bool includeSubfolders, CancellationToken token = default)
     {
         try
         {
@@ -237,37 +246,57 @@ internal sealed class MetadataRepository : IDisposable
                 return;
             }
 
-            lock (_lock)
+            foreach (var folder in folderSet)
             {
-                var collection = GetCollection();
-                foreach (var folder in folderSet)
+                token.ThrowIfCancellationRequested();
+                List<BsonDocument> documents;
+                lock (_lock)
                 {
-                    var documents = collection.Query()
+                    // Read the folder index once. Offset paging would repeatedly walk its earlier rows.
+                    documents = GetCollection().Query()
                         .Where("FolderPath = @0", folder)
+                        .Select("{ _id: _id, SourcePath: SourcePath }")
                         .ToList();
+                }
 
-                    foreach (var document in documents)
+                for (var start = 0; start < documents.Count; start += 256)
+                {
+                    token.ThrowIfCancellationRequested();
+                    lock (_lock)
                     {
-                        if (!document.TryGetValue("SourcePath", out var sourcePath) ||
-                            !sourcePath.IsString ||
-                            currentSet.Contains(sourcePath.AsString))
+                        var batchStart = start;
+                        RunInTransactionLocked(collection =>
                         {
-                            continue;
-                        }
+                            var end = Math.Min(documents.Count, batchStart + 256);
+                            for (var index = batchStart; index < end; index++)
+                            {
+                                var document = documents[index];
+                                if (!document.TryGetValue("SourcePath", out var sourcePath) ||
+                                    !sourcePath.IsString || currentSet.Contains(sourcePath.AsString))
+                                {
+                                    continue;
+                                }
 
-                        if (!includeSubfolders &&
-                            !string.Equals(Path.GetDirectoryName(sourcePath.AsString), folder, StringComparison.OrdinalIgnoreCase))
-                        {
-                            continue;
-                        }
+                                if (!includeSubfolders &&
+                                    !string.Equals(Path.GetDirectoryName(sourcePath.AsString), folder, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    continue;
+                                }
 
-                        if (document.TryGetValue("_id", out var id) && id.IsString)
-                        {
-                            collection.Delete(id.AsString);
-                        }
+                                if (document.TryGetValue("_id", out var id) && id.IsString)
+                                {
+                                    collection.Delete(id.AsString);
+                                }
+                            }
+                        });
                     }
+                    // Release the repository between bounded batches so interactive reads can proceed.
+                    Thread.Yield();
                 }
             }
+        }
+        catch (OperationCanceledException)
+        {
         }
         catch (Exception ex)
         {
@@ -304,6 +333,26 @@ internal sealed class MetadataRepository : IDisposable
         }
     }
 
+    // A corrupt LiteDB index throws IndexOutOfRangeException on every query and Rebuild() can't repair it. The
+    // database is only a cache, so drop it and let the next scan refill it.
+    private void ResetIfCorrupt(Exception ex)
+    {
+        if (ex is not (IndexOutOfRangeException or LiteException { ErrorCode: not LiteException.LOCK_TIMEOUT }))
+        {
+            return;
+        }
+
+        try
+        {
+            Clear();
+            DebugLog.Write("Reset corrupt metadata index.");
+        }
+        catch
+        {
+            // Clear already logged the failure.
+        }
+    }
+
     private ILiteCollection<BsonDocument> GetCollection()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -317,7 +366,6 @@ internal sealed class MetadataRepository : IDisposable
         var collection = database.GetCollection(CollectionName);
         collection.EnsureIndex("SourcePath", "$.SourcePath");
         collection.EnsureIndex("FolderPath", "$.FolderPath");
-        collection.EnsureIndex("Version", "$.Version");
 
         _database = database;
         _collection = collection;
@@ -336,7 +384,7 @@ internal sealed class MetadataRepository : IDisposable
         return new BsonDocument
         {
             ["_id"] = entry.Id,
-            ["Version"] = entry.Version,
+            ["Build"] = entry.Build,
             ["FolderPath"] = entry.FolderPath,
             ["SourcePath"] = entry.SourcePath,
             ["LastWriteTimeUtcTicks"] = entry.LastWriteTimeUtcTicks,
@@ -365,7 +413,7 @@ internal sealed class MetadataRepository : IDisposable
         return new MetadataIndexEntry
         {
             Id = GetString(document, "_id"),
-            Version = GetInt32(document, "Version"),
+            Build = GetString(document, "Build"),
             FolderPath = GetString(document, "FolderPath"),
             SourcePath = GetString(document, "SourcePath"),
             LastWriteTimeUtcTicks = GetInt64(document, "LastWriteTimeUtcTicks"),
@@ -413,7 +461,7 @@ internal sealed class MetadataRepository : IDisposable
     private static bool IsCurrent(MetadataIndexEntry? entry, string path, long lastWriteTimeUtcTicks, long fileLength)
     {
         return entry is not null &&
-               entry.Version == CurrentVersion &&
+               entry.Build == CurrentBuild &&
                string.Equals(entry.SourcePath, path, StringComparison.OrdinalIgnoreCase) &&
                entry.LastWriteTimeUtcTicks == lastWriteTimeUtcTicks &&
                entry.FileLength == fileLength;
@@ -444,27 +492,37 @@ internal sealed class MetadataRepository : IDisposable
         {
             lock (_lock)
             {
-                var collection = GetCollection();
-                var database = _database!;
-                database.BeginTrans();
-                try
+                RunInTransactionLocked(collection =>
                 {
                     foreach (var entry in entries)
                     {
                         collection.Upsert(ToDocument(entry));
                     }
-                    database.Commit();
-                }
-                catch
-                {
-                    database.Rollback();
-                    throw;
-                }
+                });
             }
         }
         catch (Exception ex)
         {
             DebugLog.Write($"Failed to batch-save metadata index: {ex.Message}");
+            ResetIfCorrupt(ex);
+        }
+    }
+
+    // Caller holds _lock.
+    private void RunInTransactionLocked(Action<ILiteCollection<BsonDocument>> work)
+    {
+        var collection = GetCollection();
+        var database = _database!;
+        database.BeginTrans();
+        try
+        {
+            work(collection);
+            database.Commit();
+        }
+        catch
+        {
+            database.Rollback();
+            throw;
         }
     }
 
@@ -475,7 +533,7 @@ internal readonly record struct MetadataLookup(string Path, SourceFingerprint Fi
 internal sealed class MetadataIndexEntry
 {
     public string Id { get; set; } = "";
-    public int Version { get; set; } = 1;
+    public string Build { get; set; } = "";
     public string FolderPath { get; set; } = "";
     public string SourcePath { get; set; } = "";
     public long LastWriteTimeUtcTicks { get; set; }

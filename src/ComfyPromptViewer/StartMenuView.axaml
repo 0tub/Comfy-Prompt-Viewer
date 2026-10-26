@@ -1,0 +1,360 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:ComfyPromptViewer"
+             x:Class="ComfyPromptViewer.StartMenuView"
+             x:DataType="local:StartMenuViewModel">
+<Border Background="{DynamicResource SurfaceBase}">
+      <Panel>
+        <Grid RowDefinitions="Auto,Auto,*"
+              ColumnDefinitions="320,*"
+              RowSpacing="28"
+              ColumnSpacing="40"
+              MaxWidth="850"
+              HorizontalAlignment="Center"
+              VerticalAlignment="Center"
+              Margin="20">
+            <!-- Header -->
+            <StackPanel Grid.Row="0" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="16" HorizontalAlignment="Center" VerticalAlignment="Top">
+                    <Image Source="avares://ComfyPromptViewer/Assets/app.png"
+                           Width="56"
+                           Height="56"
+                           HorizontalAlignment="Left"
+                           VerticalAlignment="Center" />
+                    <StackPanel Spacing="6" VerticalAlignment="Center">
+                    <TextBlock Text="Comfy Prompt Viewer"
+                               Foreground="{DynamicResource TextPrimary}"
+                               FontFamily="{DynamicResource FontHeading}"
+                               FontSize="24"
+                               FontWeight="SemiBold" />
+                    <TextBlock Text="A fast, local-first metadata browser and gallery for image folders."
+                               Foreground="{DynamicResource TextMuted}"
+                               FontSize="14"
+                               TextWrapping="Wrap" />
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- Error Banner on Main Menu -->
+                <Border Grid.Row="1" Grid.ColumnSpan="2" IsVisible="{Binding IsErrorVisible}" Opacity="{Binding ErrorOpacity}" Background="{DynamicResource DangerSurface}" BorderBrush="{DynamicResource DangerBorder}" BorderThickness="1" CornerRadius="2" Padding="12,8">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                        <TextBlock Text="{Binding ErrorMessage}" Foreground="{DynamicResource DangerText}" FontSize="13" TextWrapping="Wrap" VerticalAlignment="Center" />
+                        <Button Grid.Column="1" Classes="close-btn" Command="{Binding DismissErrorCommand}" Width="20" Height="20" CornerRadius="2" Padding="0" VerticalAlignment="Center" AutomationProperties.Name="Dismiss error" ToolTip.Tip="Dismiss error">
+                            <Viewbox Width="10" Height="10">
+                                <Canvas Width="24" Height="24">
+                                    <Path Classes="close-icon" Data="{x:Static local:LineIcons.Close}" />
+                                </Canvas>
+                            </Viewbox>
+                        </Button>
+                    </Grid>
+                </Border>
+
+                <!-- The block is centred, so a left column that grew when Advanced Maintenance opened pushed the whole
+                     screen up. The column scrolls past this height instead, and the Recent column matches it. -->
+                <ScrollViewer Grid.Row="2" Grid.Column="0" MaxHeight="480" VerticalAlignment="Top"
+                              VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel Spacing="16" VerticalAlignment="Top" Margin="0,0,12,0">
+                    <TextBlock Text="Start"
+                               Foreground="{DynamicResource TextPrimary}"
+                               FontFamily="{DynamicResource FontHeading}"
+                               FontSize="18"
+                               FontWeight="Medium" />
+                    
+                    <StackPanel Spacing="8">
+                        <!-- Premium Open Folder Button -->
+                        <Button Classes="menu-action-btn" Click="OpenFolderButton_Click">
+                            <StackPanel Orientation="Horizontal" Spacing="12">
+                                <Viewbox Width="18" Height="18" HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False">
+                                    <Canvas Width="24" Height="24">
+                                        <Path Classes="line-icon" Data="{x:Static local:LineIcons.Folder}" />
+                                    </Canvas>
+                                </Viewbox>
+                                <TextBlock Text="Open Folder..." FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+                        
+                        <CheckBox Content="Include subfolders"
+                                  IsChecked="{Binding IncludeSubfolders, Mode=TwoWay}"
+                                  Margin="12,2,0,0"
+                                  FontSize="13"
+                                  Foreground="{DynamicResource TextSecondary}"
+                                  AutomationProperties.Name="Include subfolders" />
+                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10" Margin="12,4,0,0">
+                            <TextBlock Grid.Column="0"
+                                       Text="Theme"
+                                       Foreground="{DynamicResource TextSecondary}"
+                                       FontSize="13"
+                                       VerticalAlignment="Center" />
+                            <ComboBox Grid.Column="1"
+                                      SelectedIndex="{Binding ThemeIndex, Mode=TwoWay}"
+                                      Width="190"
+                                      Height="30"
+                                      FontSize="12"
+                                      VerticalAlignment="Center"
+                                      AutomationProperties.Name="Theme mode">
+                                <ComboBoxItem>
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <Grid Width="34" Height="12" ColumnDefinitions="*,*,*" VerticalAlignment="Center">
+                                            <Border Grid.Column="0" Background="#17120D" CornerRadius="2,0,0,2" />
+                                            <Border Grid.Column="1" Background="#272016" />
+                                            <Border Grid.Column="2" Background="#8B3A2E" CornerRadius="0,2,2,0" />
+                                        </Grid>
+                                        <TextBlock Text="Brown" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </ComboBoxItem>
+                                <ComboBoxItem>
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <Grid Width="34" Height="12" ColumnDefinitions="*,*,*" VerticalAlignment="Center">
+                                            <Border Grid.Column="0" Background="#111315" CornerRadius="2,0,0,2" />
+                                            <Border Grid.Column="1" Background="#202326" />
+                                            <Border Grid.Column="2" Background="#6E7681" CornerRadius="0,2,2,0" />
+                                        </Grid>
+                                        <TextBlock Text="Dark Gray" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </ComboBoxItem>
+                                <ComboBoxItem>
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <Grid Width="34" Height="12" ColumnDefinitions="*,*,*" VerticalAlignment="Center">
+                                            <Border Grid.Column="0" Background="#0D1320" CornerRadius="2,0,0,2" />
+                                            <Border Grid.Column="1" Background="#182236" />
+                                            <Border Grid.Column="2" Background="#3D6EA8" CornerRadius="0,2,2,0" />
+                                        </Grid>
+                                        <TextBlock Text="Dark Blue" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </ComboBoxItem>
+                                <ComboBoxItem>
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <Grid Width="34" Height="12" ColumnDefinitions="*,*,*" VerticalAlignment="Center">
+                                            <Border Grid.Column="0" Background="#0D1712" CornerRadius="2,0,0,2" />
+                                            <Border Grid.Column="1" Background="#18251D" />
+                                            <Border Grid.Column="2" Background="#4F7D5E" CornerRadius="0,2,2,0" />
+                                        </Grid>
+                                        <TextBlock Text="Dark Green" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </ComboBoxItem>
+                                <ComboBoxItem>
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <Grid Width="34" Height="12" ColumnDefinitions="*,*,*" VerticalAlignment="Center">
+                                            <Border Grid.Column="0" Background="#17111B" CornerRadius="2,0,0,2" />
+                                            <Border Grid.Column="1" Background="#251B2B" />
+                                            <Border Grid.Column="2" Background="#7B4F8C" CornerRadius="0,2,2,0" />
+                                        </Grid>
+                                        <TextBlock Text="Plum" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </ComboBoxItem>
+                            </ComboBox>
+                        </Grid>
+                    </StackPanel>
+
+                    <!-- Collapsible Advanced Section -->
+                    <StackPanel Spacing="6" Margin="0,12,0,0">
+                        <ToggleButton Classes="advanced-toggle"
+                                      IsChecked="{Binding IsAdvancedOpen, Mode=TwoWay}">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Viewbox Width="18" Height="18" HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False">
+                                    <Canvas Width="24" Height="24">
+                                        <Path Classes="line-icon" Data="{x:Static local:LineIcons.Settings}" />
+                                    </Canvas>
+                                </Viewbox>
+                                <TextBlock Text="Advanced Maintenance" FontSize="12.5" FontWeight="Medium" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </ToggleButton>
+                        
+                        <StackPanel Spacing="8" Margin="16,4,0,0" IsVisible="{Binding IsAdvancedOpen}">
+                            <CheckBox Content="Cache thumbnails in the background"
+                                      IsChecked="{Binding PrewarmThumbnails, Mode=TwoWay}"
+                                      FontSize="13"
+                                      Foreground="{DynamicResource TextSecondary}"
+                                      AutomationProperties.Name="Cache thumbnails in the background"
+                                      ToolTip.Tip="Cache every thumbnail once scanning finishes, so scrolling through the folder never waits for one to be built" />
+                            <CheckBox Content="Low-memory rendering (restart)"
+                                      IsChecked="{Binding SoftwareRendering, Mode=TwoWay}"
+                                      FontSize="13"
+                                      Foreground="{DynamicResource TextSecondary}"
+                                      AutomationProperties.Name="Low-memory rendering, applies after restart"
+                                      ToolTip.Tip="Render on the CPU instead of the GPU. Uses less memory but more CPU while scrolling. Takes effect the next time the app starts" />
+                            <Button Classes="menu-maintenance-btn"
+                                    Command="{Binding ClearAllCachesCommand}"
+                                    IsEnabled="{Binding IsMaintenanceEnabled}"
+                                    ToolTip.Tip="Clear the thumbnail cache for every folder">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Viewbox Width="18" Height="18" HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False">
+                                        <Canvas Width="24" Height="24">
+                                            <Path Classes="line-icon" Data="{x:Static local:LineIcons.Trash}" />
+                                        </Canvas>
+                                    </Viewbox>
+                                    <TextBlock Text="Clear All Thumbnail Caches" FontSize="13" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Button>
+                            <Button Classes="menu-maintenance-btn"
+                                    Click="ThumbnailCacheLocationButton_Click"
+                                    IsEnabled="{Binding IsMaintenanceEnabled}"
+                                    ToolTip.Tip="{Binding ThumbnailCacheRoot}">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Viewbox Width="18" Height="18" HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False">
+                                        <Canvas Width="24" Height="24">
+                                            <Path Classes="line-icon" Data="{x:Static local:LineIcons.Folder}" />
+                                        </Canvas>
+                                    </Viewbox>
+                                    <TextBlock Text="Thumbnail Cache Location" FontSize="13" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Button>
+                            <Button Classes="menu-maintenance-btn" Command="{Binding ClearMetadataCacheCommand}" ToolTip.Tip="Clear parsed metadata cache">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Viewbox Width="18" Height="18" HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False">
+                                        <Canvas Width="24" Height="24">
+                                            <Path Classes="line-icon" Data="{x:Static local:LineIcons.Database}" />
+                                        </Canvas>
+                                    </Viewbox>
+                                    <TextBlock Text="Clear Metadata Cache" FontSize="13" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Button>
+                            <Button Classes="menu-maintenance-btn" Command="{Binding OpenAppDataCommand}" ToolTip.Tip="Open application preferences and logs folder">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Viewbox Width="18" Height="18" HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False">
+                                        <Canvas Width="24" Height="24">
+                                            <Path Classes="line-icon" Data="{x:Static local:LineIcons.Folder}" />
+                                        </Canvas>
+                                    </Viewbox>
+                                    <TextBlock Text="Open App Data Folder" FontSize="13" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Button>
+                            <TextBlock Text="{Binding AdvancedStatus.Text}"
+                                       Foreground="{DynamicResource TextAccent}"
+                                       FontSize="12"
+                                       TextWrapping="Wrap"
+                                       IsVisible="{Binding AdvancedStatus.IsVisible}"
+                                       Opacity="{Binding AdvancedStatus.Opacity}">
+                                <TextBlock.Transitions>
+                                    <Transitions>
+                                        <DoubleTransition Property="Opacity" Duration="0:0:0.12" Easing="CubicEaseOut" />
+                                    </Transitions>
+                                </TextBlock.Transitions>
+                            </TextBlock>
+                        </StackPanel>
+                    </StackPanel>
+                </StackPanel>
+
+                </ScrollViewer>
+
+            <!-- Right Column: Recent -->
+            <Grid Grid.Row="2" Grid.Column="1" RowDefinitions="Auto,*" Height="480" VerticalAlignment="Top">
+                <TextBlock Grid.Row="0"
+                           Text="Recent"
+                           Foreground="{DynamicResource TextPrimary}"
+                           FontFamily="{DynamicResource FontHeading}"
+                           FontSize="18"
+                           FontWeight="Medium"
+                           Margin="0,0,0,16" />
+                
+                <!-- List of recent folders -->
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                    <!-- Right margin keeps the overlay scrollbar off the cards. -->
+                    <ItemsControl ItemsSource="{Binding RecentFolders}" Margin="0,0,12,0">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Spacing="6" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="local:RecentFolderViewModel">
+                                <Border Classes="recent-item"
+                                        Classes.missing="{Binding IsMissing}"
+                                        Padding="12,8,8,8"
+                                        Cursor="Hand"
+                                        Focusable="True"
+                                        AutomationProperties.Name="{Binding OpenAutomationName}"
+                                        PointerPressed="RecentRow_PointerPressed"
+                                        KeyDown="RecentRow_KeyDown">
+                                    <Grid ColumnDefinitions="*,Auto,Auto,Auto" RowDefinitions="Auto,Auto">
+                                        <TextBlock Text="{Binding DisplayName}"
+                                                   FontSize="13.5"
+                                                   FontWeight="Medium"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   Foreground="{DynamicResource TextPrimary}" />
+                                        <TextBlock Grid.Column="1"
+                                                   Text="{Binding MetaText}"
+                                                   FontSize="10.5"
+                                                   Margin="12,0,0,0"
+                                                   VerticalAlignment="Center"
+                                                   Foreground="{DynamicResource TextAccent}" />
+                                        <!-- The full path is the second line, so it needs no tooltip. -->
+                                        <TextBlock Grid.Row="1"
+                                                   Grid.ColumnSpan="2"
+                                                   Text="{Binding Path}"
+                                                   FontSize="10.5"
+                                                   Margin="0,2,0,0"
+                                                   TextTrimming="PrefixCharacterEllipsis"
+                                                   Foreground="{DynamicResource TextMuted}"
+                                                   FontFamily="{DynamicResource FontMono}" />
+                                        <Button Grid.Column="2"
+                                                Grid.RowSpan="2"
+                                                Classes="close-btn recent-action"
+                                                Classes.pinned="{Binding IsPinned}"
+                                                Command="{Binding TogglePinCommand}"
+                                                AutomationProperties.Name="{Binding PinAutomationName}"
+                                                ToolTip.Tip="{Binding PinToolTip}"
+                                                VerticalAlignment="Center"
+                                                HorizontalContentAlignment="Center"
+                                                VerticalContentAlignment="Center"
+                                                Width="26"
+                                                Height="26"
+                                                CornerRadius="2"
+                                                Padding="0"
+                                                Cursor="Arrow"
+                                                Margin="4,0,0,0">
+                                            <Viewbox Width="14" Height="14" IsHitTestVisible="False">
+                                                <Canvas Width="24" Height="24">
+                                                    <Path Classes="line-icon" Data="{x:Static local:LineIcons.Pin}" />
+                                                </Canvas>
+                                            </Viewbox>
+                                        </Button>
+                                        <Button Grid.Column="3"
+                                                Grid.RowSpan="2"
+                                                Classes="close-btn recent-action"
+                                                Command="{Binding RemoveCommand}"
+                                                AutomationProperties.Name="{Binding RemoveAutomationName}"
+                                                ToolTip.Tip="Remove from Recent"
+                                                VerticalAlignment="Center"
+                                                HorizontalContentAlignment="Center"
+                                                VerticalContentAlignment="Center"
+                                                Width="26"
+                                                Height="26"
+                                                CornerRadius="2"
+                                                Padding="0"
+                                                Cursor="Arrow"
+                                                Margin="4,0,0,0">
+                                            <Viewbox Width="10" Height="10" IsHitTestVisible="False">
+                                                <Canvas Width="24" Height="24">
+                                                    <Path Classes="close-icon" Data="{x:Static local:LineIcons.Close}" />
+                                                </Canvas>
+                                            </Viewbox>
+                                        </Button>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+                
+                <!-- Empty recent folders state -->
+                <TextBlock Grid.Row="1"
+                           Text="No recent folders"
+                           Foreground="{DynamicResource TextMuted}"
+                           FontSize="14"
+                           FontStyle="Italic"
+                           VerticalAlignment="Top"
+                           Margin="0,8,0,0"
+                           IsVisible="{Binding !HasRecentFolders}" />
+            </Grid>
+        </Grid>
+
+        <Button Classes="menu-corner-btn"
+                Click="AboutButton_Click"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Bottom"
+                Margin="0,0,14,10"
+                Content="About &amp; Licenses"
+                AutomationProperties.Name="About and licenses"
+                ToolTip.Tip="Version and open-source license notices" />
+      </Panel>
+    </Border>
+</UserControl>

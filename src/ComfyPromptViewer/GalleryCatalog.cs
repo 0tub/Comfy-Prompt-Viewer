@@ -206,6 +206,14 @@ internal sealed class GalleryCatalog
         return _entries.IndexOf(target);
     }
 
+    // O(log n) for a sorted catalog, so the viewport can report its position on every scroll pass.
+    public int IndexOf(ImageItem item, Comparison<GalleryEntry> comparison)
+    {
+        return _entriesByPath.TryGetValue(item.Path, out var entry) && ReferenceEquals(entry.Item, item)
+            ? FindEntryIndex(entry, comparison)
+            : -1;
+    }
+
     public void Sort(Comparison<GalleryEntry> comparison)
     {
         _entries.Sort(comparison);

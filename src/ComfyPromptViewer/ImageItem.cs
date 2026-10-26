@@ -26,6 +26,7 @@ public sealed class ImageItem : INotifyPropertyChanged
     private const double MaxThumbnailRenderScaling = 4.0;
 
     private Bitmap? _preview;
+    private int _previewWidth;
     private Bitmap? _selectedPreview;
     private bool _selectedPreviewUnavailable;
     private int _width;
@@ -57,6 +58,7 @@ public sealed class ImageItem : INotifyPropertyChanged
     private Task? _selectedPreviewLoadTask;
     private string? _creationDateText;
     private bool _hasLoggedThumbnailError;
+    private bool _needsVlc;
 
     internal ImageItem(
         string path,
@@ -141,6 +143,9 @@ public sealed class ImageItem : INotifyPropertyChanged
         }
     }
 
+    // The decode width drifts from the one Preview was built at when the tile size or DPI crosses a bucket.
+    internal bool IsPreviewStale => Preview is not null && _previewWidth != GetThumbnailDecodeWidth();
+
     public bool IsLoading => Preview == null;
     public double ThumbnailOpacity => Preview is null ? 0 : 1;
 
@@ -162,6 +167,15 @@ public sealed class ImageItem : INotifyPropertyChanged
     {
         get => _selectedPreviewUnavailable;
         private set => SetField(ref _selectedPreviewUnavailable, value);
+    }
+
+    public bool IsVideo => VideoPlayback.IsVideo(Path);
+
+    // Set only when the thumbnail failed because VLC is missing, not for a video that is merely corrupt.
+    public bool NeedsVlc
+    {
+        get => _needsVlc;
+        private set => SetField(ref _needsVlc, value);
     }
 
     public string Prompt
@@ -550,7 +564,7 @@ public sealed class ImageItem : INotifyPropertyChanged
         Func<bool>? isCurrent = null,
         Func<bool>? isStillWanted = null)
     {
-        if (Preview is not null || token.IsCancellationRequested || isCurrent?.Invoke() == false)
+        if ((Preview is not null && !IsPreviewStale) || token.IsCancellationRequested || isCurrent?.Invoke() == false)
         {
             if (Preview is not null)
             {
@@ -558,6 +572,8 @@ public sealed class ImageItem : INotifyPropertyChanged
             }
             return;
         }
+
+        var decodeWidth = GetThumbnailDecodeWidth();
 
         try
         {
@@ -591,12 +607,8 @@ public sealed class ImageItem : INotifyPropertyChanged
                     return null;
                 }
 
-                var decoded = _thumbnailService.DecodeThumbnail(Path, GetThumbnailDecodeWidth());
-                if (isCurrent?.Invoke() != false && isStillWanted?.Invoke() != false)
-                {
-                    _thumbnailService.TryQueueCacheWrite(this, cacheKey);
-                }
-                return decoded;
+                return _thumbnailService.DecodeThumbnailForCache(this, cacheKey, GetThumbnailDecodeWidth(),
+                    () => !token.IsCancellationRequested && isCurrent?.Invoke() != false && isStillWanted?.Invoke() != false);
             }, token);
 
             await Dispatcher.UIThread.InvokeAsync(() =>
@@ -612,14 +624,18 @@ public sealed class ImageItem : INotifyPropertyChanged
                     return;
                 }
 
-                if (Preview is not null)
+                if (Preview is not null && !IsPreviewStale)
                 {
                     bitmap.Dispose();
                     _decodedImageCache.Touch(this);
                     return;
                 }
 
+                // Swap first so the tile never binds a disposed bitmap; the old one stays visible until now.
+                var stale = Preview;
                 Preview = bitmap;
+                _previewWidth = decodeWidth;
+                stale?.Dispose();
                 _decodedImageCache.Touch(this);
             });
         }
@@ -628,6 +644,11 @@ public sealed class ImageItem : INotifyPropertyChanged
         }
         catch (Exception ex)
         {
+            if (IsVideo && VideoPlayback.IsKnownUnavailable)
+            {
+                Dispatcher.UIThread.Post(() => NeedsVlc = true);
+            }
+
             if (!_hasLoggedThumbnailError)
             {
                 _hasLoggedThumbnailError = true;

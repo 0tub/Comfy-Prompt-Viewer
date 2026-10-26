@@ -166,19 +166,19 @@ internal static class ThemeManager
         {
             ThemeMode.DarkGray => new ThemePalette(
                 "#111315", "#202326", "#171A1D", "#1D2023", "#24282C", "#343A40", "#434B52",
-                "#6E7681", "#464D55", "#F1F4F6", "#C4CCD4", "#828B95", "#A8B2BD", "#69737D"),
+                "#6E7681", "#464D55", "#F1F4F6", "#CFD6DD", "#9AA4AE", "#A8B2BD", "#9AA4AE"),
             ThemeMode.DarkBlue => new ThemePalette(
                 "#0D1320", "#182236", "#111A2B", "#162033", "#1B2940", "#2A3A56", "#394D70",
-                "#3D6EA8", "#344A68", "#EEF5FF", "#B9CBE2", "#7186A0", "#7EA7D8", "#5E7188"),
+                "#3D6EA8", "#344A68", "#EEF5FF", "#C7D6EA", "#94A8C1", "#7EA7D8", "#94A8C1"),
             ThemeMode.DarkGreen => new ThemePalette(
                 "#0D1712", "#18251D", "#111D16", "#16231B", "#1C2B22", "#2C3E32", "#3B5142",
-                "#4F7D5E", "#3A4E40", "#EFF7F0", "#BFD3C3", "#758B7A", "#83B88E", "#617467"),
+                "#4F7D5E", "#3A4E40", "#EFF7F0", "#CDDED0", "#9AAE9E", "#83B88E", "#9AAE9E"),
             ThemeMode.Plum => new ThemePalette(
                 "#17111B", "#251B2B", "#1C1421", "#231928", "#2B2032", "#3B2D45", "#4D3A5A",
-                "#7B4F8C", "#4A3855", "#F5EDF7", "#CFB9D7", "#8B7594", "#B985C8", "#735F7B"),
+                "#7B4F8C", "#4A3855", "#F5EDF7", "#DDCCE3", "#AD97B6", "#B985C8", "#AD97B6"),
             _ => new ThemePalette(
                 "#17120D", "#272016", "#1C1610", "#261E16", "#2C2318", "#3A2E22", "#4A3A2A",
-                "#8B3A2E", "#4A3D30", "#F5EDE0", "#C4AE92", "#8C7660", "#D4795A", "#74604E")
+                "#8B3A2E", "#4A3D30", "#F5EDE0", "#D7C4AA", "#B29C83", "#D4795A", "#B29C83")
         };
     }
 

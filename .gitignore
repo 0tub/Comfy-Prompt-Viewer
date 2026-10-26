@@ -43,3 +43,5 @@ scratch/
 .gemini/
 AGENTS.md
 /.claude
+rust/target/
+rust-prototype/target/

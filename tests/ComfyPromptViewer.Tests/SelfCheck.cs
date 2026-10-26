@@ -4,7 +4,9 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
@@ -35,18 +37,26 @@ public class SelfCheck
         CheckSearchResultGenerations();
         CheckSearchIndexMaintenance();
         CheckMetadataLoadOnlyRemovesMatches();
+        CheckValueSearchAndHighlights();
+        CheckPrewarmOrder();
         CheckParallelSearchFiltering();
         CheckGalleryScrollAnchoring();
         CheckGalleryItemReconciliation();
         CheckGalleryInsertionDiff();
+        CheckGallerySelection();
         CheckGalleryCatalog();
         CheckSortedInsertion();
         CheckThemeModes();
         CheckPromptExtraction();
         CheckPromptExtractionHeuristics();
+        CheckEditorMetadataIsNotAPrompt();
+        CheckPromptLinkWalk();
         CheckPngMetadataRead();
         CheckPngMetadataLimit();
+        CheckPngTextAfterImageData();
         CheckMetadataIndexRoundTrip();
+        CheckComfyWebPExif();
+        CheckMp4Metadata();
         CheckMetadataBatchSave();
         CheckMetadataBatchLoad();
         CheckMetadataIndexCleanup();
@@ -62,12 +72,21 @@ public class SelfCheck
         CheckJpegThumbnailEncoding();
         CheckLongPathJpegThumbnailEncoding();
         CheckThumbnailPackRoundTrip();
+        CheckPreviewZoomPan();
+        CheckSidebarViewModel();
+        CheckStartMenuViewModel();
+        CheckHeaderViewModel();
+        CheckCountText();
+        CheckViewportScheduler();
+        CheckGalleryViewModel();
         CheckThumbnailFolderScopeIdentity();
         await CheckFolderThumbnailCacheIsolation();
+        await CheckFolderSession();
         CheckThumbnailCacheBudget();
         CheckThumbnailDecodeWidths();
         CheckSidebarWidthClamping();
         CheckWindowPlacementRoundTrip();
+        CheckRecentFolders();
     }
 
     private void CheckSidebarWidthClamping()
@@ -90,6 +109,66 @@ public class SelfCheck
             "Expected the sidebar maximum width to bound an absurd stored value.");
     }
 
+    private void CheckRecentFolders()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"cpv-recent-{Guid.NewGuid():N}");
+        try
+        {
+            var store = new UserPreferencesStore(directory);
+
+            // Lines written before pinning existed have three fields and must still load, unpinned.
+            Directory.CreateDirectory(directory);
+            File.WriteAllLines(Path.Combine(directory, "recent-folders.txt"), ["/old/a|5|638000000000000000"]);
+            var legacy = store.LoadRecentFolders();
+            Check(legacy.Count == 1 && legacy[0].ImageCount == 5 && !legacy[0].IsPinned,
+                "Expected a legacy recent-folder line to load unpinned.");
+
+            store.SetRecentFolderPinned("/old/a", true);
+            var total = UserPreferencesStore.MaxUnpinnedRecentFolders + 5;
+            for (var index = 0; index < total; index++)
+            {
+                store.AddRecentFolder($"/f/{index}", index);
+            }
+
+            var recent = store.LoadRecentFolders();
+            Check(recent.Exists(folder => folder.Path == "/old/a" && folder.IsPinned),
+                "Expected a pinned folder to survive any number of newer opens.");
+            Check(recent.FindAll(folder => !folder.IsPinned).Count == UserPreferencesStore.MaxUnpinnedRecentFolders,
+                "Expected unpinned history to be capped.");
+            Check(recent[0].Path == $"/f/{total - 1}" && !recent.Exists(folder => folder.Path == "/f/0"),
+                "Expected the cap to drop the oldest unpinned folders.");
+
+            store.AddRecentFolder("/old/a", 9);
+            var reopened = store.LoadRecentFolders();
+            Check(reopened[0].Path == "/old/a" && reopened[0].IsPinned && reopened[0].ImageCount == 9,
+                "Expected reopening a pinned folder to keep it pinned and refresh it.");
+
+            store.SetRecentFolderPinned("/old/a", false);
+            Check(!store.LoadRecentFolders()[0].IsPinned, "Expected unpinning to persist.");
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+            catch (Exception ex)
+            {
+                DebugLog.Write($"Failed to clean up recent-folder self-check directory: {ex.Message}");
+            }
+        }
+
+        var sep = Path.DirectorySeparatorChar;
+        var names = StartMenuViewModel.BuildRecentFolderDisplayNames([
+            $"{sep}home{sep}ComfyUI{sep}output{sep}",
+            $"{sep}home{sep}ComfyUI-linux{sep}output",
+            $"{sep}mnt{sep}meesh"
+        ]);
+        Check(names[0] == $"ComfyUI{sep}output" && names[1] == $"ComfyUI-linux{sep}output",
+            "Expected colliding recent-folder names to gain their parent folder.");
+        Check(names[2] == "meesh", "Expected a unique recent-folder name to stay bare.");
+    }
+
     private void CheckWindowPlacementRoundTrip()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"cpv-placement-{Guid.NewGuid():N}");
@@ -110,6 +189,19 @@ public class SelfCheck
 
             File.WriteAllText(Path.Combine(directory, "window-placement.txt"), "garbage|not|a|placement|x");
             Check(store.LoadWindowPlacement() is null, "Expected an unparseable placement to be ignored.");
+
+            File.WriteAllText(Path.Combine(directory, "window-placement.txt"), "Infinity|800|0|0|False");
+            Check(store.LoadWindowPlacement() is null, "Expected an infinite window width to be ignored, not applied.");
+            File.WriteAllText(Path.Combine(directory, "tile-size.txt"), "NaN");
+            Check(store.LoadTileSize(120, 80, 320) == 120, "Expected a non-finite tile size to fall back to the default.");
+            File.WriteAllText(Path.Combine(directory, "sidebar-width.txt"), "Infinity");
+            Check(store.LoadSidebarWidth(380, 260, 560) == 380, "Expected a non-finite sidebar width to fall back to the default.");
+
+            store.SaveSidebarWidth(420);
+            store.AddRecentFolder("/pics/atomic", 3);
+            Check(Directory.GetFiles(directory, "*.tmp").Length == 0 && store.LoadSidebarWidth(380, 260, 560) == 420 &&
+                  store.LoadRecentFolders().Exists(folder => folder.Path == "/pics/atomic"),
+                "Expected saves to leave no temporary file behind and to replace the old contents.");
         }
         finally
         {
@@ -276,17 +368,17 @@ public class SelfCheck
     private void CheckSortedInsertion()
     {
         int[] values = [1, 3, 3, 5];
-        Check(MainWindow.FindSortedInsertIndex(values, 0, static (left, right) => left.CompareTo(right)) == 0,
+        Check(GalleryListSync.FindSortedInsertIndex(values, 0, static (left, right) => left.CompareTo(right)) == 0,
             "Expected sorted insertion before the first item.");
-        Check(MainWindow.FindSortedInsertIndex(values, 3, static (left, right) => left.CompareTo(right)) == 3,
+        Check(GalleryListSync.FindSortedInsertIndex(values, 3, static (left, right) => left.CompareTo(right)) == 3,
             "Expected sorted insertion after equivalent items.");
-        Check(MainWindow.FindSortedInsertIndex(values, 6, static (left, right) => left.CompareTo(right)) == values.Length,
+        Check(GalleryListSync.FindSortedInsertIndex(values, 6, static (left, right) => left.CompareTo(right)) == values.Length,
             "Expected sorted insertion after the last item.");
     }
 
     private void CheckGalleryScrollAnchoring()
     {
-        var offset = MainWindow.CalculateAnchoredGalleryOffset(
+        var offset = GalleryListSync.CalculateAnchoredGalleryOffset(
             oldIndex: 20,
             newIndex: 24,
             columns: 4,
@@ -296,7 +388,7 @@ public class SelfCheck
 
         Check(offset == 836, "Expected a new row above the viewport to preserve the visible gallery row.");
 
-        offset = MainWindow.CalculateAnchoredGalleryOffset(
+        offset = GalleryListSync.CalculateAnchoredGalleryOffset(
             oldIndex: 20,
             newIndex: -1,
             columns: 4,
@@ -314,11 +406,11 @@ public class SelfCheck
         var c = CreateImageItem(Path.Combine(Path.GetTempPath(), "gallery-c.png"));
         var added = CreateImageItem(Path.Combine(Path.GetTempPath(), "gallery-added.png"));
 
-        Check(MainWindow.CanSynchronizeGalleryItemsIncrementally([a, b, c], [added, a, b, c], maximumChanges: 2),
+        Check(GalleryListSync.CanSynchronizeGalleryItemsIncrementally([a, b, c], [added, a, b, c], maximumChanges: 2),
             "Expected a small watcher insertion to retain the existing gallery order.");
-        Check(!MainWindow.CanSynchronizeGalleryItemsIncrementally([a, b, c], [c, b, a], maximumChanges: 2),
+        Check(!GalleryListSync.CanSynchronizeGalleryItemsIncrementally([a, b, c], [c, b, a], maximumChanges: 2),
             "Expected a reorder to use a gallery reset instead of per-item moves.");
-        Check(!MainWindow.CanSynchronizeGalleryItemsIncrementally([a, b, c], [added, a, b, c], maximumChanges: 0),
+        Check(!GalleryListSync.CanSynchronizeGalleryItemsIncrementally([a, b, c], [added, a, b, c], maximumChanges: 0),
             "Expected the incremental gallery change limit to be enforced.");
     }
 
@@ -331,11 +423,11 @@ public class SelfCheck
         var c = CreateImageItem(Path.Combine(Path.GetTempPath(), "insert-c.png"));
         var first = CreateImageItem(Path.Combine(Path.GetTempPath(), "insert-first.png"));
         var middle = CreateImageItem(Path.Combine(Path.GetTempPath(), "insert-middle.png"));
-        var insertions = new List<MainWindow.GalleryInsertion>();
+        var insertions = new List<GalleryListSync.GalleryInsertion>();
 
         bool Apply(List<ImageItem> current, IReadOnlyList<ImageItem> target, int maximumInsertions)
         {
-            if (!MainWindow.TryFindGalleryInsertions(current, target, maximumInsertions, insertions))
+            if (!GalleryListSync.TryFindGalleryInsertions(current, target, maximumInsertions, insertions))
             {
                 return false;
             }
@@ -356,16 +448,66 @@ public class SelfCheck
               ReferenceEquals(i3, b) && ReferenceEquals(i4, c),
             "Expected applied insertions to reproduce the target sequence exactly.");
 
-        Check(!MainWindow.TryFindGalleryInsertions([a, b, c], [a, c], 4, insertions),
+        Check(!GalleryListSync.TryFindGalleryInsertions([a, b, c], [a, c], 4, insertions),
             "Expected a removal to fall back to the general gallery sync path.");
-        Check(!MainWindow.TryFindGalleryInsertions([a, b, c], [c, b, a], 4, insertions),
+        Check(!GalleryListSync.TryFindGalleryInsertions([a, b, c], [c, b, a], 4, insertions),
             "Expected a reorder to fall back to the general gallery sync path.");
-        Check(!MainWindow.TryFindGalleryInsertions([a, b, c], [a, b, c], 4, insertions),
+        Check(!GalleryListSync.TryFindGalleryInsertions([a, b, c], [a, b, c], 4, insertions),
             "Expected an unchanged sequence to report no insertions.");
-        Check(!MainWindow.TryFindGalleryInsertions([a, b, c], [first, middle, a, b, c], 1, insertions),
+        Check(!GalleryListSync.TryFindGalleryInsertions([a, b, c], [first, middle, a, b, c], 1, insertions),
             "Expected the insertion limit to be enforced.");
-        Check(!MainWindow.TryFindGalleryInsertions([a, b, c], [first, a, b, middle], 4, insertions),
+        Check(!GalleryListSync.TryFindGalleryInsertions([a, b, c], [first, a, b, middle], 4, insertions),
             "Expected an insertion paired with a removal to fall back to the general gallery sync path.");
+    }
+
+    private void CheckGallerySelection()
+    {
+        var items = new[]
+        {
+            CreateImageItem("sel-0.png"),
+            CreateImageItem("sel-1.png"),
+            CreateImageItem("sel-2.png"),
+            CreateImageItem("sel-3.png")
+        };
+        var selection = new GallerySelection();
+
+        selection.SelectOnly(items[1]);
+        Check(selection.Count == 1 && items[1].IsMarkedSelected && selection.Anchor == items[1],
+            "SelectOnly should select and anchor one item.");
+
+        Check(selection.SelectRange(items, items[3]), "Range from a listed anchor should apply.");
+        Check(selection.Count == 3 && !items[0].IsMarkedSelected && items[2].IsMarkedSelected &&
+              selection.Anchor == items[1],
+            "Range should cover anchor..item inclusive and keep the anchor.");
+
+        Check(selection.SelectRange(items, items[0]) && selection.Count == 2 && !items[3].IsMarkedSelected,
+            "A second range should re-extend from the same anchor and unmark the old range.");
+
+        Check(!selection.Toggle(items[0]) && !items[0].IsMarkedSelected && selection.Anchor == items[0],
+            "Toggling a selected item should unselect it and move the anchor.");
+        Check(selection.Toggle(items[3]) && items[3].IsMarkedSelected, "Toggling an unselected item should select it.");
+        Check(selection.FirstIn(items) == items[1], "FirstIn should follow the given order.");
+        var inOrder = selection.InOrder(new[] { items[3], items[2], items[1], items[0] });
+        Check(inOrder.Length == 2 && inOrder[0] == items[3] && inOrder[1] == items[1],
+            "InOrder should follow the given order, not hash order.");
+
+        var replacement = CreateImageItem("sel-3.png");
+        selection.Replace(items[3], replacement);
+        Check(!items[3].IsMarkedSelected && replacement.IsMarkedSelected && selection.Anchor == replacement,
+            "Replace should carry membership, the mark, and the anchor to the replacement.");
+
+        selection.Remove(replacement);
+        Check(!replacement.IsMarkedSelected && selection.Anchor is null && selection.Count == 1,
+            "Remove should unmark and drop the anchor.");
+        Check(!selection.SelectRange(items, items[2]) && selection.Count == 1,
+            "A range without an anchor should change nothing.");
+
+        selection.Add(items[0]);
+        Check(selection.Anchor is null, "Add should not move the anchor.");
+
+        selection.Clear();
+        Check(selection.Count == 0 && selection.Anchor is null && !items[0].IsMarkedSelected && !items[1].IsMarkedSelected,
+            "Clear should unmark everything and drop the anchor.");
     }
 
     private void CheckGalleryCatalog()
@@ -515,6 +657,97 @@ public class SelfCheck
         Check(MatchCount(excludeCatalog, "-watermark", SearchScope.All) == 0,
             "Expected loaded metadata to newly satisfy a negative term and drop the item.");
         excludeCatalog.Clear();
+    }
+
+    // Clicking a sidebar value must find the image it came from, and only images that share that value.
+    private void CheckValueSearchAndHighlights()
+    {
+        var catalog = new GalleryCatalog();
+        MetadataIndexEntry Entry(ImageItem item, string model, string sampler, string seed, string lora) => new()
+        {
+            SourcePath = item.Path,
+            Prompt = "green cat, sharp teeth",
+            Model = model,
+            Sampler = sampler,
+            Seed = seed,
+            Lora = lora
+        };
+
+        var source = CreateImageItem(Path.Combine(Path.GetTempPath(), "value-source.png"));
+        var other = CreateImageItem(Path.Combine(Path.GetTempPath(), "value-other.png"));
+        foreach (var (item, entry) in new[]
+                 {
+                     (source, Entry(source, "anima-base-v1.0.safetensors", "euler", "846874715736056",
+                         "bagelcollie3 (1.00), my lora (0.50)")),
+                     (other, Entry(other, "anima-base-v1.0-pruned.safetensors", "euler_ancestral", "12",
+                         "bagelcollie3_v2 (0.80)"))
+                 })
+        {
+            catalog.Add(new GalleryEntry(item.Path, default, item));
+            item.ApplyMetadataEntry(entry);
+            catalog.MarkMetadataLoaded(item);
+        }
+
+        int Count(string value, bool exact) =>
+            MatchCount(catalog, SearchEngine.BuildValueQuery(value, exact)!, SearchScope.All);
+
+        Check(Count("anima-base-v1.0.safetensors", exact: true) == 1,
+            "Expected a clicked model to match only the exact model.");
+        Check(Count("euler", exact: true) == 1, "Expected a clicked sampler not to match a longer sampler name.");
+        Check(Count("846874715736056", exact: true) == 1, "Expected a clicked seed to match its image.");
+
+        var loras = PromptExtractor.SplitLoraEntries("bagelcollie3 (1.00), my lora (0.50), plain");
+        Check(loras.Count == 3 &&
+              loras[0] == ("bagelcollie3 (1.00)", "bagelcollie3") &&
+              loras[1] == ("my lora (0.50)", "my lora") &&
+              loras[2] == ("plain", "plain"),
+            "Expected LoRA entries to split and drop their strengths.");
+        Check(Count("my lora", exact: false) == 1, "Expected a LoRA name with a space to match through the settings column.");
+        Check(Count("bagelcollie3", exact: false) == 2,
+            "A LoRA click is a substring term, so it also finds versioned variants of the name.");
+        Check(SearchEngine.BuildValueQuery("-dash", exact: false) == "dash",
+            "Expected a leading dash not to turn a LoRA click into an exclusion.");
+        Check(SearchEngine.BuildValueQuery("  ", exact: true) is null, "Expected an empty value to build no query.");
+        Check(SearchEngine.AppendQueryTerm("", "\"euler\"") == "\"euler\"", "Expected a click into an empty search to set it.");
+        Check(SearchEngine.AppendQueryTerm("green cat  ", "\"euler\"") == "green cat \"euler\"",
+            "Expected a click to add to what is already typed.");
+        Check(SearchEngine.AppendQueryTerm("cat \"EULER\"", "\"euler\"") == "cat \"EULER\"",
+            "Expected a term already in the search not to be added twice.");
+        Check(SearchEngine.AppendQueryTerm("\"bagelcollie3\"", "bagelcollie3") == "\"bagelcollie3\" bagelcollie3",
+            "An exact term and a plain term match differently, so both are kept.");
+        Check(GalleryView.GetWholeColumnWidth(1100, 146) == 1022 && GalleryView.GetWholeColumnWidth(100, 146) == 146,
+            "Expected the gallery width to snap to whole columns, never below one.");
+        catalog.Clear();
+
+        SearchEngine.ParseQuery("cat \"teeth\" -dog", out var positive, out _);
+        var ranges = SearchEngine.FindMatchRanges("green cat, sharp teeth, catalog", positive);
+        Check(ranges.Count == 3 && ranges[0] == (6, 3) && ranges[1] == (17, 5) && ranges[2] == (24, 3),
+            "Expected plain terms to highlight every occurrence and exact terms only whole words.");
+
+        SearchEngine.ParseQuery("cat catalog", out var overlapping, out _);
+        var merged = SearchEngine.FindMatchRanges("catalog", overlapping);
+        Check(merged.Count == 1 && merged[0] == (0, 7), "Expected overlapping highlights to merge.");
+    }
+
+    private void CheckPrewarmOrder()
+    {
+        var order = new PrewarmOrder([0, 10, 20, 30, 40, 50]);
+        // Scrolling down from 25: 30 (5 ahead) wins, then 20 (5 behind, weighted to 10) beats 40 (15 ahead),
+        // then 40 beats 10 (15 behind, weighted to 30).
+        var taken = new List<int>();
+        for (var index = order.Take(25, 1); index >= 0; index = order.Take(25, 1))
+        {
+            taken.Add(index);
+        }
+
+        Check(taken.Count == 6 && taken[0] == 3 && taken[1] == 2 && taken[2] == 4,
+            "Expected prewarm to start next to the viewport and favor the scroll direction.");
+
+        var moved = new PrewarmOrder([0, 10, 20, 30, 40, 50]);
+        moved.Take(0, 1);
+        Check(moved.Take(50, 1) == 5 && moved.Take(50, 1) == 4,
+            "Expected prewarm to re-center when the viewport moves.");
+        Check(moved.Remaining == 3, "Expected every candidate to be handed out once.");
     }
 
     private void CheckThemeModes()
@@ -751,6 +984,37 @@ public class SelfCheck
         }
     }
 
+    // The reader stops at the first IDAT once it has text, so it must still walk to the end when it has none.
+    private void CheckPngTextAfterImageData()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}.png");
+        try
+        {
+            using (var stream = File.Create(path))
+            {
+                stream.Write([137, 80, 78, 71, 13, 10, 26, 10]);
+                Span<byte> ihdr = stackalloc byte[13];
+                BinaryPrimitives.WriteInt32BigEndian(ihdr[..4], 1);
+                BinaryPrimitives.WriteInt32BigEndian(ihdr.Slice(4, 4), 1);
+                ihdr[8] = 8;
+                ihdr[9] = 2;
+                WriteChunk(stream, "IHDR", ihdr);
+                WriteChunk(stream, "IDAT", [0]);
+                WriteChunk(stream, "IDAT", [0]);
+                WriteChunk(stream, "tEXt", Encoding.UTF8.GetBytes("parameters\0late prompt"));
+                WriteChunk(stream, "IEND", []);
+            }
+
+            var result = ImageFileReader.Read(path);
+            Check(result.TextMetadata.TryGetValue("parameters", out var parameters) && parameters == "late prompt",
+                "Expected PNG text after IDAT to be read when no text precedes it.");
+        }
+        finally
+        {
+            DeleteFileQuietly(path);
+        }
+    }
+
     private void CheckMetadataIndexRoundTrip()
     {
         var path = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}.png");
@@ -769,12 +1033,289 @@ public class SelfCheck
                     fingerprint with { FileLength = fingerprint.FileLength + 1 },
                     out _),
                 "Expected a changed source fingerprint to miss metadata cache.");
+
+            // A record written by another build of the app is stale, however well its file fingerprint matches.
+            var otherBuild = repository.CreateEntry(path, fingerprint, ImageFileReader.Read(path), new ExtractedPromptMetadata());
+            otherBuild.Build = "someotherbuild";
+            repository.Save(otherBuild);
+            Check(!repository.TryLoad(path, fingerprint, out _), "Expected a record from another build to miss metadata cache.");
         }
         finally
         {
             DeleteFileQuietly(path);
             DeleteDirectoryQuietly(databaseDirectory);
         }
+    }
+
+    // Same layout ComfyUI's SaveAnimatedWEBP writes: prompt in Model (0x0110), workflow in Make (0x010F).
+    // Text reached through more than one link used to fall to the longest-string guess, which picked model files.
+    private static void CheckPromptLinkWalk()
+    {
+        Dictionary<string, string> Prompt(string json) => new(StringComparer.OrdinalIgnoreCase) { ["prompt"] = json };
+
+        // Flux: SamplerCustomAdvanced > CFGGuider > FluxGuidance > CLIPTextEncode, settings on separate nodes, and
+        // a zeroed-out negative.
+        var flux = PromptExtractor.ExtractAll(Prompt("""
+            {
+              "12": {"class_type":"UNETLoader","inputs":{"unet_name":"flux1-dev-fp8.safetensors"}},
+              "6": {"class_type":"CLIPTextEncode","inputs":{"text":"a lighthouse at dusk","clip":["11",0]}},
+              "26": {"class_type":"FluxGuidance","inputs":{"guidance":3.5,"conditioning":["6",0]}},
+              "30": {"class_type":"ConditioningZeroOut","inputs":{"conditioning":["6",0]}},
+              "22": {"class_type":"CFGGuider","inputs":{"model":["12",0],"positive":["26",0],"negative":["30",0],"cfg":1}},
+              "16": {"class_type":"KSamplerSelect","inputs":{"sampler_name":"euler"}},
+              "25": {"class_type":"RandomNoise","inputs":{"noise_seed":42}},
+              "17": {"class_type":"BasicScheduler","inputs":{"scheduler":"simple","steps":20,"denoise":1,"model":["12",0]}},
+              "13": {"class_type":"SamplerCustomAdvanced","inputs":{"guider":["22",0],"noise":["25",0],"sampler":["16",0],"sigmas":["17",0],"latent_image":["27",0]}}
+            }
+            """));
+        Check(flux.Prompt == "a lighthouse at dusk" && flux.NegativePrompt == "",
+            $"Expected the Flux prompt through guider and guidance nodes, got '{flux.Prompt}' / '{flux.NegativePrompt}'.");
+        Check(flux.GenerationSettings is { Model: "flux1-dev-fp8.safetensors", Sampler: "euler", Seed: "42" } &&
+              flux.GenerationSettings.Settings == "Steps 20, CFG 1, Scheduler simple, Denoise 1",
+            $"Expected Flux settings from the nodes feeding the sampler, got '{flux.GenerationSettings.Settings}'.");
+
+        // A refine pass wired to one conditioning on both sides, and steps fed by a primitive node.
+        var refine = PromptExtractor.ExtractAll(Prompt("""
+            {
+              "20": {"class_type":"PrimitiveInt","inputs":{"value":8}},
+              "9": {"class_type":"BasicScheduler","inputs":{"scheduler":"beta","steps":["20",0],"model":["6",0]}},
+              "4": {"class_type":"CustomVideoConditioning","inputs":{"prompt":"a wolf waves","clip":["3",0]}},
+              "16": {"class_type":"BasicGuider","inputs":{"model":["6",0],"conditioning":["4",0]}},
+              "14": {"class_type":"SamplerCustomAdvanced","inputs":{"guider":["16",0],"sigmas":["9",0],"latent_image":["4",1]}},
+              "30": {"class_type":"AudioRefineSampler","inputs":{"steps":6,"positive":["4",0],"negative":["4",0],"latent":["14",0]}}
+            }
+            """));
+        Check(refine.Prompt == "a wolf waves" && refine.NegativePrompt == "",
+            $"Expected a negative wired to the positive's conditioning to be dropped, got '{refine.NegativePrompt}'.");
+        Check(refine.GenerationSettings.Settings == "Steps 8, Scheduler beta",
+            $"Expected steps from the primitive node feeding the scheduler, got '{refine.GenerationSettings.Settings}'.");
+
+        var stringNode = PromptExtractor.ExtractAll(Prompt("""
+            {
+              "4": {"class_type":"CheckpointLoaderSimple","inputs":{"ckpt_name":"realisticVision.safetensors"}},
+              "20": {"class_type":"PrimitiveStringMultiline","inputs":{"value":"a cozy cabin in the woods"}},
+              "6": {"class_type":"CLIPTextEncode","inputs":{"text":["20",0],"clip":["4",1]}},
+              "7": {"class_type":"CLIPTextEncode","inputs":{"text":"bad hands","clip":["4",1]}},
+              "3": {"class_type":"KSampler","inputs":{"positive":["6",0],"negative":["7",0],"model":["4",0],"seed":1,"steps":20,"sampler_name":"euler"}}
+            }
+            """));
+        Check(stringNode.Prompt == "a cozy cabin in the woods" && stringNode.NegativePrompt == "bad hands",
+            $"Expected text from the string node feeding the encoder, got '{stringNode.Prompt}'.");
+
+        var noNegativeInfotext = PromptExtractor.ExtractAll(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["parameters"] = "a cat in a hat\nSteps: 20, Sampler: Euler a, CFG scale: 7, Seed: 1"
+        });
+        Check(noNegativeInfotext.Prompt == "a cat in a hat" && noNegativeInfotext.GenerationSettings.Seed == "1",
+            $"Expected the settings line kept out of a prompt without a negative, got '{noNegativeInfotext.Prompt}'.");
+
+        var workflow = PromptExtractor.ExtractAll(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["workflow"] = """
+            {"nodes":[
+              {"id":1,"type":"LoraLoaderModelOnly","properties":{"cnr_id":"comfy-core","Node name for S&R":"LoraLoaderModelOnly"},"widgets_values":["some-style.safetensors",1]},
+              {"id":3,"type":"CLIPTextEncode","properties":{"cnr_id":"comfy-core"},"widgets_values":["a quiet path"]}
+            ]}
+            """
+        });
+        Check(workflow.Prompt == "a quiet path",
+            $"Expected workflow node properties and file names not to be taken as the prompt, got '{workflow.Prompt}'.");
+    }
+
+    // Editors and screenshot tools write text chunks too; the longest of them used to be shown as the prompt.
+    private static void CheckEditorMetadataIsNotAPrompt()
+    {
+        Dictionary<string, string> Text(params (string Key, string Value)[] entries)
+        {
+            var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (key, value) in entries)
+            {
+                metadata[key] = value;
+            }
+
+            return metadata;
+        }
+
+        var editor = PromptExtractor.ExtractAll(Text(
+            ("Comment", "Created with GIMP"),
+            ("Software", "gnome-screenshot"),
+            ("Author", "someone"),
+            ("Creation Time", "Sun 28 Sep 2026 12:00:00 PM EDT"),
+            ("date:create", "2026-09-28T12:00:00+00:00"),
+            ("XML:com.adobe.xmp", "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF /></x:xmpmeta>")));
+        Check(editor.Prompt == "" && editor.GenerationSettings.Tool == "",
+            "Expected editor and screenshot text chunks not to be taken as a prompt.");
+
+        var easyDiffusion = PromptExtractor.ExtractAll(Text(
+            ("prompt", "a castle on a hill, oil painting"),
+            ("negative_prompt", "blurry"),
+            ("seed", "42")));
+        Check(easyDiffusion.Prompt == "a castle on a hill, oil painting",
+            "Expected a plain-text prompt key to be used as the prompt.");
+        Check(easyDiffusion.GenerationSettings.Tool != "ComfyUI",
+            "Expected a plain-text prompt key not to be labeled ComfyUI.");
+
+        var novelAi = PromptExtractor.ExtractAll(Text(
+            ("Title", "AI generated image"),
+            ("Description", "1girl, cherry blossoms"),
+            ("Software", "NovelAI"),
+            ("Comment", """{"prompt": "1girl, cherry blossoms", "uc": "lowres"}""")));
+        Check(novelAi.Prompt == "1girl, cherry blossoms", "Expected NovelAI's Description to be used as the prompt.");
+    }
+
+    private static void CheckComfyWebPExif()
+    {
+        const string prompt = """{"1":{"class_type":"CLIPTextEncode","inputs":{"text":"fox in snow"}},"2":{"class_type":"CLIPTextEncode","inputs":{"text":"blurry"}},"3":{"class_type":"KSampler","inputs":{"positive":["1",0],"negative":["2",0],"steps":20}}}""";
+        var comfy = ImageFileReader.ReadWebP(new MemoryStream(ExtendedWebPHeader(
+            (0x010F, """workflow:{"nodes":[]}"""),
+            (0x0110, "prompt:" + prompt))));
+        Check(comfy.TextMetadata.TryGetValue("prompt", out var promptJson) && promptJson == prompt,
+            "Expected the ComfyUI prompt to be read from EXIF Model.");
+        Check(comfy.TextMetadata.TryGetValue("workflow", out var workflowJson) && workflowJson == """{"nodes":[]}""",
+            "Expected the ComfyUI workflow to be read from EXIF Make.");
+        var extracted = PromptExtractor.ExtractAll(comfy.TextMetadata);
+        Check(extracted.Prompt == "fox in snow" && extracted.NegativePrompt == "blurry",
+            "Expected prompts to be extracted from ComfyUI WebP EXIF.");
+
+        var camera = ImageFileReader.ReadWebP(new MemoryStream(ExtendedWebPHeader(
+            (0x010F, "Canon"),
+            (0x0110, "Canon EOS R5: {not comfy}"))));
+        Check(camera.TextMetadata.Count == 0, "Expected ordinary camera Make/Model EXIF to be ignored.");
+    }
+
+    // Layout ffmpeg writes for ComfyUI video savers with `movflags use_metadata_tags`, moov after mdat.
+    private static void CheckMp4Metadata()
+    {
+        const string prompt = """{"1":{"class_type":"CLIPTextEncode","inputs":{"text":"waves at night"}}}""";
+        var tkhd = new byte[84];
+        BinaryPrimitives.WriteUInt32BigEndian(tkhd.AsSpan(76), 832u << 16);
+        BinaryPrimitives.WriteUInt32BigEndian(tkhd.AsSpan(80), 480u << 16);
+        var videoHandler = new byte[24];
+        "vide"u8.CopyTo(videoHandler.AsSpan(8));
+        var soundHandler = new byte[24];
+        "soun"u8.CopyTo(soundHandler.AsSpan(8));
+
+        byte[] Key(string name) => [.. BigEndian((uint)(8 + name.Length)), .. "mdta"u8, .. Encoding.UTF8.GetBytes(name)];
+        byte[] Item(uint index, string value) =>
+            Mp4Box(index, Mp4Box("data", [0, 0, 0, 1, 0, 0, 0, 0, .. Encoding.UTF8.GetBytes(value)]));
+
+        var file = new MemoryStream();
+        file.Write(Mp4Box("ftyp", "isom"u8.ToArray()));
+        file.Write(Mp4Box("mdat", new byte[4096]));
+        file.Write(Mp4Box("moov",
+            // An audio track first, so its (zero) size must not be taken for the frame size.
+            Mp4Box("trak", Mp4Box("tkhd", new byte[84]), Mp4Box("mdia", Mp4Box("hdlr", soundHandler))),
+            Mp4Box("trak", Mp4Box("tkhd", tkhd), Mp4Box("mdia", Mp4Box("hdlr", videoHandler))),
+            Mp4Box("udta", Mp4Box("meta", [0, 0, 0, 0],
+                Mp4Box("hdlr", new byte[25]),
+                Mp4Box("keys", [0, 0, 0, 0, .. BigEndian(3), .. Key("prompt"), .. Key("workflow"), .. Key("encoder")]),
+                Mp4Box("ilst", Item(1, prompt), Item(2, """{"nodes":[]}"""), Item(3, "Lavf62.12.103"))))));
+        file.Position = 0;
+
+        var result = Mp4MetadataReader.Read(file);
+        Check(result is { Width: 832, Height: 480 }, "Expected the MP4 video track size.");
+        Check(result.TextMetadata.TryGetValue("prompt", out var promptJson) && promptJson == prompt,
+            "Expected the MP4 prompt metadata key.");
+        Check(result.TextMetadata.TryGetValue("workflow", out var workflowJson) && workflowJson == """{"nodes":[]}""",
+            "Expected the MP4 workflow metadata key.");
+        Check(PromptExtractor.ExtractAll(result.TextMetadata).Prompt == "waves at night",
+            "Expected prompts to be extracted from MP4 metadata.");
+        Check(!result.TextMetadata.ContainsKey("encoder"), "Expected plain MP4 tags such as the encoder to be ignored.");
+
+        // Older VideoHelperSuite: one iTunes-style comment, no keys box, the prompt graph as JSON text inside it.
+        var comment = JsonSerializer.Serialize(new Dictionary<string, object> { ["prompt"] = prompt, ["workflow"] = new { nodes = Array.Empty<int>() } });
+        var commentFile = new MemoryStream();
+        commentFile.Write(Mp4Box("ftyp", "isom"u8.ToArray()));
+        commentFile.Write(Mp4Box("moov",
+            Mp4Box("trak", Mp4Box("tkhd", tkhd), Mp4Box("mdia", Mp4Box("hdlr", videoHandler))),
+            Mp4Box("udta", Mp4Box("meta", [0, 0, 0, 0],
+                Mp4Box("hdlr", new byte[25]),
+                Mp4Box("ilst", Mp4Box(0xA9636D74, Mp4Box("data", [0, 0, 0, 1, 0, 0, 0, 0, .. Encoding.UTF8.GetBytes(comment)])))))));
+        commentFile.Position = 0;
+        var commentResult = Mp4MetadataReader.Read(commentFile);
+        Check(commentResult.TextMetadata.TryGetValue("prompt", out var unpacked) && unpacked == prompt &&
+              commentResult.TextMetadata.TryGetValue("workflow", out var unpackedWorkflow) && unpackedWorkflow == """{"nodes":[]}""",
+            "Expected the prompt and workflow unpacked from an MP4 comment.");
+        Check(PromptExtractor.ExtractAll(commentResult.TextMetadata).Prompt == "waves at night",
+            "Expected prompts to be extracted from an MP4 comment.");
+    }
+
+    private static byte[] BigEndian(uint value)
+    {
+        var bytes = new byte[4];
+        BinaryPrimitives.WriteUInt32BigEndian(bytes, value);
+        return bytes;
+    }
+
+    // A box's payload is its own fields followed by child boxes, so both are just concatenated parts.
+    private static byte[] Mp4Box(string type, params byte[][] parts) =>
+        Mp4Box(BinaryPrimitives.ReadUInt32BigEndian(Encoding.ASCII.GetBytes(type)), parts);
+
+    private static byte[] Mp4Box(uint type, params byte[][] parts)
+    {
+        var payload = new List<byte>();
+        foreach (var part in parts)
+        {
+            payload.AddRange(part);
+        }
+
+        return [.. BigEndian((uint)(8 + payload.Count)), .. BigEndian(type), .. payload];
+    }
+
+    private static byte[] ExtendedWebPHeader(params (ushort Tag, string Text)[] exifAscii)
+    {
+        using var stream = new MemoryStream();
+        var exif = exifAscii.Length == 0 ? [] : BuildAsciiExif(exifAscii);
+        var exifChunkLength = exif.Length == 0 ? 0 : 8 + exif.Length + (exif.Length & 1);
+        stream.Write("RIFF"u8);
+        stream.Write(BitConverter.GetBytes(4 + 8 + 10 + exifChunkLength));
+        stream.Write("WEBPVP8X"u8);
+        stream.Write(BitConverter.GetBytes(10));
+        // Flags, 3 reserved bytes, then 24-bit width-1 and height-1.
+        stream.Write([(byte)(exif.Length > 0 ? 0x08 : 0), 0, 0, 0, 63, 0, 0, 31, 0, 0]);
+        if (exif.Length > 0)
+        {
+            stream.Write("EXIF"u8);
+            stream.Write(BitConverter.GetBytes(exif.Length));
+            stream.Write(exif);
+            if ((exif.Length & 1) != 0)
+            {
+                stream.WriteByte(0);
+            }
+        }
+
+        return stream.ToArray();
+    }
+
+    // Little-endian TIFF with one IFD of ASCII entries, values stored after the IFD.
+    private static byte[] BuildAsciiExif((ushort Tag, string Text)[] entries)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        writer.Write("II"u8);
+        writer.Write((ushort)42);
+        writer.Write(8u);
+        writer.Write((ushort)entries.Length);
+        var valueOffset = 8 + 2 + entries.Length * 12 + 4;
+        var values = new List<byte[]>();
+        foreach (var (tag, text) in entries)
+        {
+            var bytes = Encoding.ASCII.GetBytes(text + "\0");
+            writer.Write(tag);
+            writer.Write((ushort)2);
+            writer.Write((uint)bytes.Length);
+            writer.Write((uint)valueOffset);
+            valueOffset += bytes.Length;
+            values.Add(bytes);
+        }
+
+        writer.Write(0u);
+        foreach (var bytes in values)
+        {
+            writer.Write(bytes);
+        }
+
+        return stream.ToArray();
     }
 
     // A batched lookup must return only rows whose fingerprint still matches, paired to the right path.
@@ -1179,8 +1720,8 @@ public class SelfCheck
             "Expected the warm ahead cap to bound warm prefetch.");
 
         // The lookahead budget has to follow the scroll direction, not straddle it.
-        var down = MainWindow.GetAheadRowWindow(1);
-        var up = MainWindow.GetAheadRowWindow(-1);
+        var down = ViewportScheduler.GetAheadRowWindow(1);
+        var up = ViewportScheduler.GetAheadRowWindow(-1);
         Check(down.RowsBelow > down.RowsAbove, "Expected scrolling down to prefetch mostly below.");
         Check(up.RowsAbove > up.RowsBelow, "Expected scrolling up to prefetch mostly above.");
         Check(down.RowsAbove > 0 && up.RowsBelow > 0,
@@ -1228,6 +1769,486 @@ public class SelfCheck
 
     // One pack file replaced thousands of small JPEGs, so the round trip, the key's dependence on source
     // version and width, and instant clearing are all load-bearing.
+    private async Task CheckFolderSession()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cpv-session-{Guid.NewGuid():N}");
+        var photos = Path.Combine(root, "photos");
+        var empty = Path.Combine(root, "empty");
+        var nested = Path.Combine(root, "nested", "deep");
+        Directory.CreateDirectory(photos);
+        Directory.CreateDirectory(empty);
+        Directory.CreateDirectory(nested);
+        File.WriteAllBytes(Path.Combine(photos, "b.png"), [1, 2, 3]);
+        File.WriteAllBytes(Path.Combine(photos, "a.png"), [1, 2, 3]);
+        File.WriteAllBytes(Path.Combine(photos, "c.jpg"), [1, 2, 3]);
+        File.WriteAllBytes(Path.Combine(nested, "x.png"), [1, 2, 3]);
+
+        string? selected = null;
+        var preferences = new UserPreferencesStore(Path.Combine(root, "prefs"));
+        var session = new FolderSession(
+            preferences,
+            ItemThumbnailService,
+            new ThumbnailLoadCoordinator(ItemDecodedImageCache),
+            ItemDecodedImageCache,
+            ItemMetadataRepository,
+            ItemMetadataService,
+            new MetadataScanCoordinator(ItemMetadataRepository),
+            static () => ("", SearchScope.All),
+            () => selected)
+        {
+            TileSize = 120,
+            SortMode = SortMode.Name
+        };
+
+        var log = new List<string>();
+        string? failure = null;
+        session.Clearing += () => log.Add("clearing");
+        session.FolderOpening += _ => log.Add("opening");
+        session.FolderScanned += count => log.Add($"scanned:{count}");
+        session.FolderShown += () => log.Add("shown");
+        session.FilterApplied += (items, reset) => log.Add($"filtered:{items.Count}:{reset}");
+        session.CatalogLoaded += picked => log.Add($"loaded:{picked}");
+        session.Closed += () => log.Add("closed");
+        session.LoadFailed += message => failure = message;
+
+        try
+        {
+            await session.OpenFolderAsync(photos);
+            Check(string.Join(",", log) == "clearing,opening,scanned:3,shown,filtered:3:True,loaded:",
+                "Expected opening a folder to clear, announce, scan, show, filter and finish in that order.");
+            Check(session.CurrentFolderPath == photos && session.Catalog.Count == 3 && session.CacheScope is not null,
+                "Expected the opened folder to fill the catalog and own a thumbnail cache scope.");
+            Check(session.Catalog.Items.Select(item => item.FileName).SequenceEqual(["a.png", "b.png", "c.jpg"]),
+                "Expected the catalog to follow the session's sort mode.");
+            Check(preferences.LoadLastFolderPath() == photos && preferences.LoadRecentFolders()[0].ImageCount == 3,
+                "Expected a loaded folder to be remembered as the last and most recent one.");
+
+            selected = Path.Combine(photos, "b.png");
+            log.Clear();
+            await session.OpenFolderAsync(photos);
+            Check(log[^1] == $"loaded:{selected}",
+                "Expected a reload to hand back the selected path so the window can select it again.");
+
+            log.Clear();
+            await session.OpenFolderAsync(empty);
+            Check(failure!.StartsWith("No PNG, JPG, or WebP images found", StringComparison.Ordinal) &&
+                  log.Contains("closed") && !log.Contains("shown") &&
+                  session.CurrentFolderPath is null && session.Catalog.Count == 0,
+                "Expected an empty folder to fail, close the session and leave nothing loaded.");
+
+            await session.OpenFolderAsync(Path.Combine(root, "nested"));
+            Check(failure.Contains("Include subfolders", StringComparison.Ordinal),
+                "Expected a folder whose images are all nested to suggest turning on Include subfolders.");
+
+            var changes = 0;
+            session.IncludeSubfoldersChanged += () => changes++;
+            Check(await session.SetIncludeSubfoldersAsync(true) && session.IncludeSubfolders && changes == 1,
+                "Expected turning subfolders on to be accepted and announced.");
+            await session.OpenFolderAsync(Path.Combine(root, "nested"));
+            Check(session.Catalog.Count == 1 && session.Catalog.Items[0].FileName == "x.png",
+                "Expected Include subfolders to find the nested image.");
+            string? message = null;
+            session.Message += text => message = text;
+            Check(!await session.SetIncludeSubfoldersAsync(false) && session.IncludeSubfolders &&
+                  message == "No top-level images; kept subfolders on",
+                "Expected turning subfolders off to be refused when it would leave the folder empty.");
+
+            session.Close();
+            Check(log[^1] == "closed" && session.Catalog.Count == 0 && session.CurrentFolderPath is null,
+                "Expected closing the session to empty the catalog.");
+        }
+        finally
+        {
+            session.Shutdown();
+            DeleteDirectoryQuietly(root);
+        }
+    }
+
+    private static string FormatCountForCheck(int filtered, bool scanning, int remaining, int selected) =>
+        HeaderViewModel.FormatCount(300, filtered, 120, scanning, scanning, remaining, 40, selected);
+
+    private void CheckCountText()
+    {
+        Check(HeaderViewModel.FormatCount(300, 300, 300, false, false, 0, 0, 0) == "300 images",
+            "Expected an unfiltered folder to read as a plain count.");
+        Check(FormatCountForCheck(12, false, 0, 0) == "12 of 300 images",
+            "Expected a filtered folder to read 'N of total'.");
+        Check(FormatCountForCheck(300, true, 0, 0) == "300 images (Scanning prompts 120/300)",
+            "Expected an active scan to show its progress.");
+        Check(FormatCountForCheck(300, false, 15, 0) == "300 images (Caching thumbnails 25/40)",
+            "Expected thumbnail caching to show how many are done once the scan is over.");
+        Check(FormatCountForCheck(300, true, 15, 0) == "300 images (Scanning prompts 120/300)",
+            "Expected the scan to take priority over caching progress.");
+        Check(FormatCountForCheck(12, false, 0, 3) == "12 of 300 images | 3 selected" &&
+              !FormatCountForCheck(12, false, 0, 1).Contains("selected", StringComparison.Ordinal),
+            "Expected a multi-selection to be counted, and a single one not to be.");
+    }
+
+    private void CheckGalleryViewModel()
+    {
+        var gallery = new GalleryViewModel();
+        var items = Enumerable.Range(0, 5)
+            .Select(index => CreateImageItem(Path.Combine(Path.GetTempPath(), $"selection-{index}.png")))
+            .ToList();
+        gallery.Items.AddRange(items);
+
+        var activeChanges = new List<(ImageItem? Previous, ImageItem? Current)>();
+        var selectionChanges = 0;
+        gallery.ActiveItemChanged += (previous, current) => activeChanges.Add((previous, current));
+        gallery.SelectionChanged += () => selectionChanges++;
+
+        gallery.SelectItem(items[1]);
+        Check(gallery.ActiveItem == items[1] && gallery.Selection.Count == 1 && items[1].IsSelected && items[1].IsMarkedSelected,
+            "Expected a click to select exactly that item and make it active.");
+        Check(activeChanges.Count == 1 && activeChanges[0] == (null, items[1]) && selectionChanges == 1,
+            "Expected a click to announce the active item and the selection once each.");
+        gallery.SelectItem(items[1]);
+        Check(activeChanges.Count == 1, "Expected selecting the active item again not to announce a change.");
+
+        gallery.SelectRange(items[3]);
+        Check(gallery.Selection.Count == 3 && gallery.Selection.Contains(items[2]) && gallery.ActiveItem == items[3],
+            "Expected Shift+click to select from the anchor to the clicked item and make it active.");
+        gallery.SelectRange(items[0]);
+        Check(gallery.Selection.Count == 2 && gallery.Selection.Contains(items[0]) && !gallery.Selection.Contains(items[3]),
+            "Expected a second Shift+click to extend from the same anchor, not from the last click.");
+
+        gallery.ToggleSelected(items[4]);
+        Check(gallery.Selection.Count == 3 && gallery.ActiveItem == items[4],
+            "Expected Ctrl+click on an unselected item to add it and make it active.");
+        gallery.ToggleSelected(items[4]);
+        Check(gallery.Selection.Count == 2 && !items[4].IsMarkedSelected && gallery.ActiveItem == items[0],
+            "Expected Ctrl+click on the active item to deselect it and fall back to the first selected item.");
+
+        gallery.AddToSelection(items[3]);
+        Check(gallery.Selection.Count == 3 && gallery.ActiveItem == items[3],
+            "Expected Ctrl+double-click to add an item and make it active.");
+
+        gallery.SelectItem(items[2]);
+        Check(gallery.MoveSelection(1) == 3 && gallery.ActiveItem == items[3] && gallery.Selection.Count == 1,
+            "Expected an arrow key to select the next item alone.");
+        Check(gallery.MoveSelection(100) == 4 && gallery.MoveSelection(-100) == 0,
+            "Expected arrow keys to stop at the ends of the list.");
+        gallery.SelectItem(null);
+        Check(gallery.MoveSelection(-1) == 4, "Expected Left or Up with nothing selected to start from the last item.");
+        gallery.SelectItem(null);
+        Check(gallery.MoveSelection(1) == 0, "Expected Right or Down with nothing selected to start from the first item.");
+        Check(gallery.SelectByIndex(99) == -1 && gallery.SelectByIndex(-1) == -1 && gallery.ActiveItem == items[0],
+            "Expected an out-of-range index to change nothing.");
+        Check(new GalleryViewModel().MoveSelection(1) == -1, "Expected an empty list to have nowhere to move.");
+
+        gallery.SelectItem(items[1]);
+        gallery.ToggleSelected(items[2]);
+        Check(gallery.ActiveItem == items[2], "Expected the toggled item to be the active one.");
+        gallery.Remove(items[2], new HashSet<string> { items[2].Path });
+        Check(gallery.ActiveItem == items[1] && !gallery.Selection.Contains(items[2]),
+            "Expected removing the active item to fall back to another selected item that is staying.");
+        gallery.Remove(items[1], new HashSet<string> { items[1].Path });
+        Check(gallery.ActiveItem is null && gallery.Selection.Count == 0,
+            "Expected removing the last selected item to leave nothing active.");
+
+        gallery.SelectItem(items[0]);
+        var replacement = CreateImageItem(items[0].Path);
+        gallery.Replace(items[0], replacement);
+        Check(gallery.ActiveItem == replacement && gallery.Selection.Contains(replacement) && !gallery.Selection.Contains(items[0]),
+            "Expected a replaced file to carry the selection and the active image over to its new item.");
+
+        gallery.ClearSelection();
+        Check(gallery.Selection.Count == 0 && !replacement.IsMarkedSelected,
+            "Expected clearing the selection to unmark its items.");
+    }
+
+    private void CheckViewportScheduler()
+    {
+        var items = new List<ImageItem>();
+        for (var index = 0; index < 30; index++)
+        {
+            items.Add(CreateImageItem(Path.Combine(Path.GetTempPath(), $"viewport-{index}.png")));
+        }
+
+        static List<int> IndexesOf(IReadOnlyList<ImageItem> all, IReadOnlyList<ImageItem> chosen) =>
+            chosen.Select(item => ((List<ImageItem>)all).IndexOf(item)).ToList();
+
+        var scheduler = new ViewportScheduler();
+        var (first, last) = scheduler.Plan(items, firstVisibleRow: 2, visibleRowCount: 3, columnCount: 5, 120, 1.0);
+        Check(first == 10 && last == 24 && IndexesOf(items, scheduler.Visible).SequenceEqual(Enumerable.Range(10, 15)),
+            "Expected the visible window to be the rows on screen, from the first column of the first row.");
+        Check(scheduler.Direction == 1 &&
+              IndexesOf(items, scheduler.Ahead).SequenceEqual(Enumerable.Range(25, 5).Concat(Enumerable.Range(5, 5)).Concat(Enumerable.Range(0, 5))),
+            "Expected the first pass to prefetch below, then the rows above it from nearest to farthest.");
+
+        scheduler.Plan(items, firstVisibleRow: 1, visibleRowCount: 3, columnCount: 5, 120, 1.0);
+        Check(scheduler.Direction == -1 &&
+              IndexesOf(items, scheduler.Ahead).SequenceEqual(Enumerable.Range(0, 5).Concat(Enumerable.Range(20, 10))),
+            "Expected scrolling up to flip the lean and prefetch above first.");
+
+        scheduler.Plan(items, firstVisibleRow: 1, visibleRowCount: 3, columnCount: 5, 120, 1.0);
+        Check(scheduler.Direction == -1, "Expected an unchanged scroll position to keep the last direction.");
+
+        var (tailFirst, tailLast) = scheduler.Plan(items, firstVisibleRow: 5, visibleRowCount: 4, columnCount: 5, 120, 1.0);
+        Check(tailFirst == 25 && tailLast == 29 && scheduler.Visible.Count == 5 && scheduler.Direction == 1,
+            "Expected the visible window to stop at the last item rather than run past the list.");
+
+        scheduler.Reset();
+        Check(scheduler.Visible.Count == 0 && scheduler.Ahead.Count == 0 && scheduler.Direction == 1,
+            "Expected a reset to forget the old folder's window and direction.");
+        scheduler.Plan(items, firstVisibleRow: 0, visibleRowCount: 2, columnCount: 5, 120, 1.0);
+        Check(scheduler.Direction == 1 && scheduler.Ahead.Count > 0,
+            "Expected the first plan after a reset to start downward.");
+    }
+
+    private void CheckHeaderViewModel()
+    {
+        var maintenance = new CacheMaintenance(
+            ItemThumbnailService,
+            new ThumbnailLoadCoordinator(ItemDecodedImageCache),
+            ItemDecodedImageCache,
+            ItemMetadataRepository,
+            static () => { });
+        var header = new HeaderViewModel(maintenance, 120);
+
+        Check(header.SortMode == SortMode.NewestFirst && header.SearchScope == SearchScope.All && !header.HasSearchText,
+            "Expected a new header to sort newest first, search all fields, and show no search text.");
+        Check(header.TileSizeText == "120" && header.IsClearCacheEnabled && !header.IsCopyPathVisible,
+            "Expected a new header to show the saved tile size with no folder open.");
+
+        var sorts = new List<SortMode>();
+        header.SortChanged += sorts.Add;
+        header.SortIndex = 2;
+        header.SortIndex = 2;
+        header.SortIndex = -1;
+        Check(sorts.Count == 1 && sorts[0] == SortMode.Name && header.SortMode == SortMode.Name,
+            "Expected a sort change to be reported once, and an unselected combo to be ignored.");
+
+        var filters = 0;
+        header.FilterRequested += () => filters++;
+        header.SearchScopeIndex = (int)SearchScope.Filename;
+        Check(filters == 1 && header.SearchScope == SearchScope.Filename,
+            "Expected changing the search scope to filter at once, without the typing debounce.");
+        header.SearchScopeIndex = 42;
+        Check(header.SearchScope == SearchScope.All,
+            "Expected an unknown scope index to fall back to all fields.");
+
+        var edits = 0;
+        header.SearchEdited += () => edits++;
+        header.SearchText = "red";
+        header.SearchText = "red";
+        Check(edits == 1 && header.HasSearchText,
+            "Expected an edit to the search text to be announced once, and to show the clear button.");
+        header.ResetSearch();
+        Check(!header.HasSearchText && header.SearchScope == SearchScope.All,
+            "Expected resetting the search for a new folder to clear the text and widen the scope.");
+
+        var sizes = new List<double>();
+        header.TileSizeChanged += sizes.Add;
+        header.TileSize = 200;
+        header.SyncTileSize(160);
+        Check(sizes.Count == 1 && sizes[0] == 200 && header.TileSize == 160 && header.TileSizeText == "160",
+            "Expected a dragged tile size to be reported, and a clamp the window settled on to be shown without being reported.");
+
+        var includeRequests = new List<bool>();
+        header.IncludeSubfoldersRequested += includeRequests.Add;
+        header.IncludeSubfolders = true;
+        header.SyncIncludeSubfolders(false);
+        Check(includeRequests.Count == 1 && includeRequests[0] && !header.IncludeSubfolders,
+            "Expected the subfolders toggle to be a request that the window can put back.");
+
+        header.SetFolder("output", "/a/b/output");
+        header.SetCountText("12 images");
+        Check(header.FolderTitle == "output" && header.FolderPath == "/a/b/output" && header.IsCopyPathVisible &&
+              header.CountText == "12 images",
+            "Expected an opened folder to show its name, path and count.");
+    }
+
+    private void CheckStartMenuViewModel()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"cpv-startmenu-{Guid.NewGuid():N}");
+        try
+        {
+            var store = new UserPreferencesStore(directory);
+            store.AddRecentFolder("/pics/one", 5);
+            store.AddRecentFolder("/pics/two", 1);
+
+            var appliedThemes = new List<ThemeMode>();
+            var maintenance = new CacheMaintenance(
+                ItemThumbnailService,
+                new ThumbnailLoadCoordinator(ItemDecodedImageCache),
+                ItemDecodedImageCache,
+                ItemMetadataRepository,
+                static () => { });
+            var menu = new StartMenuViewModel(store, maintenance, appliedThemes.Add);
+
+            menu.RefreshRecentFolders();
+            Check(menu.HasRecentFolders && menu.RecentFolders.Count == 2 && menu.RecentFolders[0].DisplayName == "two",
+                "Expected the recent list to show the newest folder first, named by its leaf.");
+            Check(menu.RecentFolders[0].MetaText.StartsWith("1 image ", StringComparison.Ordinal) &&
+                  menu.RecentFolders[1].MetaText.StartsWith("5 images ", StringComparison.Ordinal),
+                "Expected the image count to be singular for one image and plural otherwise.");
+
+            menu.RecentFolders[1].TogglePinCommand.Execute(null);
+            Check(menu.RecentFolders[0].Path == "/pics/one" && menu.RecentFolders[0].IsPinned,
+                "Expected pinning a folder to move it to the top of the list.");
+            menu.RecentFolders[0].RemoveCommand.Execute(null);
+            Check(menu.RecentFolders.Count == 1 && menu.RecentFolders[0].Path == "/pics/two",
+                "Expected removing a recent folder to drop it from the list and the saved preferences.");
+
+            string? requested = null;
+            menu.FolderOpenRequested += path => requested = path;
+            menu.RecentFolders[0].Open();
+            Check(requested == "/pics/two", "Expected opening a recent row to request that folder from the host.");
+
+            menu.ThemeIndex = (int)ThemeMode.DarkBlue;
+            menu.ThemeIndex = 99;
+            menu.ThemeIndex = -1;
+            Check(appliedThemes.Count == 1 && appliedThemes[0] == ThemeMode.DarkBlue &&
+                  store.LoadThemeMode() == ThemeMode.DarkBlue,
+                "Expected a theme change to apply and persist once, and out-of-range indexes to be ignored.");
+
+            bool? prewarm = null;
+            menu.PrewarmThumbnailsChanged += enabled => prewarm = enabled;
+            menu.PrewarmThumbnails = false;
+            Check(prewarm == false && !store.LoadPrewarmThumbnails() &&
+                  menu.AdvancedStatus.Text == "Background thumbnail caching off.",
+                "Expected switching background caching off to persist, tell the host, and confirm in the status line.");
+
+            var includeRequests = new List<bool>();
+            menu.IncludeSubfoldersRequested += includeRequests.Add;
+            menu.IncludeSubfolders = true;
+            menu.SyncIncludeSubfolders(false);
+            Check(includeRequests.Count == 1 && includeRequests[0] && !menu.IncludeSubfolders,
+                "Expected the user's toggle to be a request, and the host's sync to set the value without one.");
+
+            menu.ShowError("Could not open");
+            Check(menu.IsErrorVisible && menu.ErrorMessage == "Could not open",
+                "Expected an error to show its message in the banner.");
+            menu.Open();
+            Check(!menu.IsErrorVisible, "Expected returning to the start screen to clear a stale error.");
+
+            menu.IsAdvancedOpen = true;
+            menu.AdvancedStatus.Show("Metadata cache cleared.");
+            menu.IsAdvancedOpen = false;
+            Check(!menu.AdvancedStatus.IsVisible && menu.AdvancedStatus.Text == "",
+                "Expected collapsing the maintenance panel to clear its status line.");
+        }
+        finally
+        {
+            DeleteDirectoryQuietly(directory);
+        }
+    }
+
+    private void CheckSidebarViewModel()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "sidebar-viewmodel-selfcheck.png");
+        var shortItem = CreateImageItem(path);
+        shortItem.ApplyMetadataEntry(new MetadataIndexEntry
+        {
+            SourcePath = path,
+            Prompt = "sunlit red portrait",
+            NegativePrompt = "blurry",
+            Lora = "cosmos_predict_lora (1.00)"
+        });
+        var longItem = CreateImageItem(path + ".long.png");
+        longItem.ApplyMetadataEntry(new MetadataIndexEntry
+        {
+            SourcePath = longItem.Path,
+            Prompt = new string('a', 600),
+            NegativePrompt = string.Join('\n', new string[8].Select(_ => "bad"))
+        });
+
+        var sidebar = new SidebarViewModel();
+        Check(sidebar.IsEmpty && !sidebar.HasItem && sidebar.Title == "Metadata",
+            "Expected a new sidebar to show its empty state.");
+
+        sidebar.Show(shortItem, "red", SearchScope.All);
+        Check(sidebar.HasItem && !sidebar.IsEmpty && sidebar.Title == shortItem.FileName,
+            "Expected showing an image to leave the empty state and title it by file name.");
+        Check(sidebar.HasPrompt && sidebar.IsNegativeSectionVisible && sidebar.HasLora && !sidebar.IsPromptLong,
+            "Expected the short image's prompt, negative prompt and LoRA to show without a collapse.");
+        Check(double.IsPositiveInfinity(sidebar.PromptMaxHeight) && !sidebar.IsNegativeOpen,
+            "Expected a short prompt to be uncapped and the negative prompt to start collapsed.");
+        Check(sidebar.PromptTerms.Count == 1 && sidebar.NegativeTerms.Count == 1,
+            "Expected the search terms to reach both prompts under the All scope.");
+
+        var textEvents = 0;
+        sidebar.PromptTextsChanged += _ => textEvents++;
+        sidebar.RefreshHighlights("red", SearchScope.All);
+        Check(textEvents == 0, "Expected an unchanged query not to rebuild the prompt runs and wipe a selection.");
+        sidebar.RefreshHighlights("red", SearchScope.PositivePrompt);
+        Check(textEvents == 1 && sidebar.PromptTerms.Count == 1 && sidebar.NegativeTerms.Count == 0,
+            "Expected narrowing the scope to rebuild the runs and drop the negative highlights.");
+
+        sidebar.ToggleNegativeOpenCommand.Execute(null);
+        Check(sidebar.IsNegativeOpen && sidebar.NegativeArrow == "▾" && sidebar.SettingsMargin.Top == 20,
+            "Expected opening the negative prompt to flip the arrow and push the settings card down.");
+
+        sidebar.Show(longItem, "", SearchScope.All);
+        Check(!sidebar.IsNegativeOpen && sidebar.NegativeArrow == "▸" && sidebar.SettingsMargin.Top == 8,
+            "Expected showing another image to collapse the negative prompt again.");
+        Check(sidebar.IsPromptLong && sidebar.IsPromptCollapsed && sidebar.PromptMaxHeight == SidebarViewModel.CollapsedPromptMaxHeight,
+            "Expected a 600-character prompt to start collapsed at the capped height.");
+        sidebar.TogglePromptExpandedCommand.Execute(null);
+        Check(sidebar.IsPromptExpanded && !sidebar.IsPromptCollapsed && sidebar.PromptExpandLabel == "Show less" &&
+              double.IsPositiveInfinity(sidebar.PromptMaxHeight),
+            "Expected expanding a long prompt to lift the cap and relabel the toggle.");
+        Check(sidebar.IsNegativeLong, "Expected a negative prompt of eight lines to count as long.");
+
+        sidebar.Show(shortItem, "", SearchScope.All);
+        Check(!sidebar.IsPromptExpanded, "Expected a new image's prompt to start unexpanded.");
+
+        sidebar.Clear();
+        Check(sidebar.IsEmpty && sidebar.Title == "Metadata" && !sidebar.HasPrompt && sidebar.IsHeaderDescVisible,
+            "Expected clearing the sidebar to return to its empty state.");
+    }
+
+    private void CheckPreviewZoomPan()
+    {
+        var image = new Avalonia.PixelSize(2000, 1000);
+        var viewport = new Avalonia.Size(500, 500);
+        var zoom = new PreviewZoomPan();
+
+        Check(PreviewZoomPan.TryGetFitScale(image, viewport, out var fit) && Math.Abs(fit - 0.25) < 1e-9,
+            "Expected a 2000x1000 image to fit a 500x500 viewport at 25%.");
+        Check(!PreviewZoomPan.TryGetFitScale(image, null, out _),
+            "Expected no fit scale without a viewport.");
+        Check(zoom.DescribeZoom(image, viewport, 2000) == "Fit 25%",
+            "Expected a fitted preview to read 'Fit 25%'.");
+        Check(zoom.DescribeZoom(image, viewport, 5000) == "Fit 10%",
+            "Expected zoom text to be relative to the source's pixels, not the decoded preview's.");
+
+        // Content smaller than the viewport is centered whatever the pan was.
+        zoom.PanX = 300;
+        zoom.PanY = -300;
+        zoom.ClampPan(zoom.GetContentSize(image, viewport), viewport);
+        Check(Math.Abs(zoom.PanX) < 1e-9 && Math.Abs(zoom.PanY - 125) < 1e-9,
+            "Expected a fitted image to be centered on the axis it does not fill.");
+
+        // Content larger than the viewport can only pan inside its own edges.
+        zoom.Zoom = 1.0;
+        zoom.PanX = 100;
+        zoom.PanY = -5000;
+        zoom.ClampPan(zoom.GetContentSize(image, viewport), viewport);
+        Check(zoom.PanX == 0 && zoom.PanY == -500,
+            "Expected a zoomed pan to clamp to the image edges.");
+
+        // Zooming about a point keeps the image point under it fixed.
+        zoom.Zoom = 1.0;
+        zoom.PanX = -400;
+        zoom.PanY = -100;
+        var cursor = new Avalonia.Point(250, 250);
+        var anchor = zoom.CaptureAnchor(cursor, image, viewport)!.Value;
+        zoom.Zoom = 2.0;
+        var zoomedContent = zoom.GetContentSize(image, viewport);
+        zoom.RestoreAnchor(anchor, zoomedContent);
+        Check(Math.Abs((cursor.X - zoom.PanX) / zoomedContent.Width - anchor.XRatio) < 1e-9 &&
+              Math.Abs((cursor.Y - zoom.PanY) / zoomedContent.Height - anchor.YRatio) < 1e-9,
+            "Expected an anchored zoom to keep the point under the cursor in place.");
+
+        Check(PreviewZoomPan.GetMinimumZoom(image, viewport) == 0.25 &&
+              PreviewZoomPan.GetMinimumZoom(null, viewport) == PreviewZoomPan.MinZoom,
+            "Expected the minimum zoom to be the fit scale, or the floor without an image.");
+        Check(PreviewZoomPan.NextWheelZoom(1.0, 1) > 1.0 && PreviewZoomPan.NextWheelZoom(1.0, 99) == Math.Pow(PreviewZoomPan.WheelZoomFactor, 3),
+            "Expected wheel zoom to step by the factor and cap a single event at three notches.");
+    }
+
     private void CheckThumbnailPackRoundTrip()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-pack-{Guid.NewGuid():N}");
@@ -1256,6 +2277,13 @@ public class SelfCheck
             Check(!pack.Contains(key), "Expected removing a thumbnail pack entry to drop it.");
             Check(pack.TryRead(other, out var stillThere) && stillThere.AsSpan().SequenceEqual(second),
                 "Expected removing one entry to leave neighbouring payloads readable.");
+
+            // FileShare alone does not exclude a second writer on Linux/macOS; the writer lock file has to.
+            using (var secondInstance = new ThumbnailPack(directory))
+            {
+                Check(!secondInstance.CanWrite && pack.CanWrite,
+                    "Expected a second pack on the same folder to open read-only while the first holds the writer.");
+            }
 
             pack.Dispose();
 
@@ -1339,7 +2367,7 @@ public class SelfCheck
         var appData = Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-folders-{Guid.NewGuid():N}");
         var folderA = Path.Combine(appData, "source-a");
         var folderB = Path.Combine(appData, "source-b");
-        var service = new ThumbnailService(appData);
+        var service = new ThumbnailService(Path.Combine(appData, "thumbnails"));
         try
         {
             // The same source path in two scopes produces the same key; only the scope separates them.

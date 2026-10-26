@@ -10,6 +10,10 @@ projects (Skia, FreeType, libpng, libjpeg-turbo, libwebp, zlib, ICU and others).
 notices are reproduced verbatim in
 [third-party/SkiaSharp-HarfBuzzSharp-THIRD-PARTY-NOTICES.txt](third-party/SkiaSharp-HarfBuzzSharp-THIRD-PARTY-NOTICES.txt).
 
+The .NET 10.0.11 runtime pack carries a further set of upstream notices. They are
+reproduced verbatim in
+[third-party/DotNet-Runtime-THIRD-PARTY-NOTICES.txt](third-party/DotNet-Runtime-THIRD-PARTY-NOTICES.txt).
+
 ## Contents
 
 - [Bundled Fonts](#bundled-fonts) — Fraunces, Geist Mono, Noto Sans (SIL OFL 1.1)
@@ -17,6 +21,7 @@ notices are reproduced verbatim in
 - [SkiaSharp and HarfBuzzSharp](#skiasharp-and-harfbuzzsharp) (MIT, plus bundled native components)
 - [ANGLE](#angle) (BSD-3-Clause)
 - [LiteDB](#litedb) (MIT)
+- [LibVLCSharp](#libvlcsharp) (LGPL-2.1-or-later)
 - [Other MIT Components](#other-mit-components)
 - [.NET Runtime](#net-runtime) (MIT)
 
@@ -97,18 +102,18 @@ THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
 
 ## Avalonia
 
-Avalonia 12.0.4
+Avalonia 12.1.4
 Avalonia.Controls.ItemsRepeater 12.0.0
-Avalonia.Desktop 12.0.4
-Avalonia.Themes.Fluent 12.0.4
-Avalonia.Skia 12.0.4
-Avalonia.HarfBuzz 12.0.4
-Avalonia.Win32 12.0.4
-Avalonia.X11 12.0.4
-Avalonia.Native 12.0.4
-Avalonia.FreeDesktop 12.0.4
-Avalonia.FreeDesktop.AtSpi 12.0.4
-Avalonia.Remote.Protocol 12.0.4
+Avalonia.Desktop 12.1.4
+Avalonia.Themes.Fluent 12.1.4
+Avalonia.Skia 12.1.4
+Avalonia.HarfBuzz 12.1.4
+Avalonia.Win32 12.1.4
+Avalonia.X11 12.1.4
+Avalonia.Native 12.1.4
+Avalonia.FreeDesktop 12.1.4
+Avalonia.FreeDesktop.AtSpi 12.1.4
+Avalonia.Remote.Protocol 12.1.4
 Avalonia.BuildServices 11.3.2
 
 Copyright 2013-2026 © The AvaloniaUI Project
@@ -260,14 +265,28 @@ SOFTWARE.
 
 ---
 
+## LibVLCSharp
+
+LibVLCSharp 3.10.1
+Copyright (c) VideoLAN and LibVLCSharp authors
+License: GNU Lesser General Public License v2.1 or later
+Source: https://code.videolan.org/videolan/LibVLCSharp
+
+LibVLCSharp is used unmodified. The self-contained build embeds its managed assembly in the single-file
+executable; to use a modified LibVLCSharp, build ComfyPromptViewer from source against it. libvlc itself is
+not distributed with ComfyPromptViewer: it is loaded from the user's own VLC installation, which carries its
+own license (LGPL-2.1-or-later for libvlc). Full license text: https://www.gnu.org/licenses/old-licenses/lgpl-2.1.txt
+
+---
+
 ## Other MIT Components
 
 The following components are each licensed under the MIT License, reproduced once below.
 
 | Component | Copyright | Source |
 | --- | --- | --- |
-| MicroCom.Runtime 0.11.4 | Copyright 2021 © Nikita Tsukanov | https://github.com/kekekeks/MicroCom |
-| Tmds.DBus.Protocol 0.92.0 | Copyright © Tom Deseyn | https://github.com/tmds/Tmds.DBus |
+| MicroCom.Runtime 0.11.6 | Copyright 2021 © Nikita Tsukanov | https://github.com/kekekeks/MicroCom |
+| Tmds.DBus.Protocol 0.94.1 | Copyright © Tom Deseyn | https://github.com/tmds/Tmds.DBus |
 | Microsoft.Extensions.DependencyInjection.Abstractions 8.0.0 | © Microsoft Corporation. All rights reserved. | https://github.com/dotnet/runtime |
 | Microsoft.Extensions.Logging.Abstractions 8.0.0 | © Microsoft Corporation. All rights reserved. | https://github.com/dotnet/runtime |
 | Microsoft.IO.RecyclableMemoryStream 3.0.1 | © Microsoft Corporation. All rights reserved. | https://github.com/microsoft/Microsoft.IO.RecyclableMemoryStream |
@@ -298,7 +317,9 @@ SOFTWARE.
 
 ## .NET Runtime
 
-Packaged builds are self-contained and embed the .NET 10 runtime.
+Packaged builds are self-contained and embed the .NET 10.0.11 runtime. The runtime
+pack's additional notices are reproduced verbatim in
+[third-party/DotNet-Runtime-THIRD-PARTY-NOTICES.txt](third-party/DotNet-Runtime-THIRD-PARTY-NOTICES.txt).
 
 Copyright (c) .NET Foundation and Contributors
 License: MIT

@@ -15,12 +15,17 @@ public static class ImageFileReader
     private const int MaxTotalTextMetadataBytes = 4 * 1024 * 1024;
     private const ushort ExifIfdPointerTag = 0x8769;
     private const ushort UserCommentTag = 0x9286;
+    // ComfyUI's WebP saver writes "prompt:{json}" to Model (0x0110) and "workflow:{json}" plus any other
+    // extra_pnginfo keys to Make (0x010F) and counting down.
+    private const ushort ComfyExifFirstTag = 0x0100;
+    private const ushort ComfyExifLastTag = 0x0110;
     private static readonly Encoding StrictUtf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
     private static ReadOnlySpan<byte> PngSignature => [137, 80, 78, 71, 13, 10, 26, 10];
     private static ReadOnlySpan<byte> PngHeaderChunk => "IHDR"u8;
     private static ReadOnlySpan<byte> PngTextChunk => "tEXt"u8;
     private static ReadOnlySpan<byte> PngInternationalTextChunk => "iTXt"u8;
     private static ReadOnlySpan<byte> PngCompressedTextChunk => "zTXt"u8;
+    private static ReadOnlySpan<byte> PngImageDataChunk => "IDAT"u8;
     private static ReadOnlySpan<byte> PngEndChunk => "IEND"u8;
 
     public static bool IsSupportedImage(string path)
@@ -41,7 +46,8 @@ public static class ImageFileReader
         return ext.Equals(".png", StringComparison.OrdinalIgnoreCase) ||
                ext.Equals(".jpg", StringComparison.OrdinalIgnoreCase) ||
                ext.Equals(".jpeg", StringComparison.OrdinalIgnoreCase) ||
-               ext.Equals(".webp", StringComparison.OrdinalIgnoreCase);
+               ext.Equals(".webp", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".mp4", StringComparison.OrdinalIgnoreCase);
     }
 
     public static ImageReadResult Read(string path)
@@ -75,6 +81,11 @@ public static class ImageFileReader
         if (ext.Equals(".webp", StringComparison.OrdinalIgnoreCase))
         {
             return ReadWebP(stream);
+        }
+
+        if (ext.Equals(".mp4", StringComparison.OrdinalIgnoreCase))
+        {
+            return Mp4MetadataReader.Read(stream);
         }
 
         throw new InvalidDataException("Unsupported image type.");
@@ -153,9 +164,10 @@ public static class ImageFileReader
                 {
                     ReadInternationalTextChunk(data, metadata, ref metadataBytes);
                 }
-                catch (MetadataLimitExceededException)
+                catch (Exception ex) when (ex is MetadataLimitExceededException or InvalidDataException)
                 {
-                    // Keep other valid metadata searchable when one text chunk exceeds the safety budget.
+                    // Keep other valid metadata searchable when one text chunk exceeds the safety budget or
+                    // has a corrupt compressed payload.
                 }
             }
             else if (typeBytes.SequenceEqual(PngCompressedTextChunk))
@@ -172,10 +184,18 @@ public static class ImageFileReader
                 {
                     ReadCompressedTextChunk(data, metadata, ref metadataBytes);
                 }
-                catch (MetadataLimitExceededException)
+                catch (Exception ex) when (ex is MetadataLimitExceededException or InvalidDataException)
                 {
-                    // Keep other valid metadata searchable when one text chunk exceeds the safety budget.
+                    // Keep other valid metadata searchable when one text chunk exceeds the safety budget or
+                    // has a corrupt compressed payload.
                 }
+            }
+            // Generators write text before the image data, which is split into dozens of chunks; seeking past
+            // them all was ~5x the cost of the whole read. Text after IDAT is legal, so a file with none before
+            // it is still walked to the end.
+            else if (metadata.Count > 0 && typeBytes.SequenceEqual(PngImageDataChunk))
+            {
+                return new ImageReadResult(width, height, metadata);
             }
             else if (typeBytes.SequenceEqual(PngEndChunk))
             {
@@ -561,7 +581,33 @@ public static class ImageFileReader
             {
                 StoreMetadataText(metadata, "UserComment", DecodeExifUserComment(value));
             }
+            else if (tag is >= ComfyExifFirstTag and <= ComfyExifLastTag && type is 1 or 2 or 7)
+            {
+                StoreComfyExifText(metadata, value);
+            }
         }
+    }
+
+    // Only "key:{json}" or "key:[json]" is taken, so an ordinary camera Make/Model string is ignored.
+    private static void StoreComfyExifText(Dictionary<string, string> metadata, ReadOnlySpan<byte> value)
+    {
+        var text = TrimMetadataText(Encoding.UTF8.GetString(value));
+        var colon = text.IndexOf(':');
+        if (colon <= 0 || colon + 1 >= text.Length || text[colon + 1] is not ('{' or '['))
+        {
+            return;
+        }
+
+        var key = text[..colon];
+        foreach (var c in key)
+        {
+            if (!char.IsAsciiLetterOrDigit(c) && c != '_')
+            {
+                return;
+            }
+        }
+
+        metadata.TryAdd(key, text[(colon + 1)..]);
     }
 
     private static bool TryReadExifEntryUInt(

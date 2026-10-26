@@ -14,6 +14,7 @@ internal sealed class FolderChangeMonitor : IDisposable
     private readonly Timer _timer;
     private readonly Action<FolderChangeBatch> _batchReady;
     private readonly Action<Exception> _recoveryRequested;
+    private readonly bool _includeSubfolders;
     private readonly HashSet<string> _pendingAdded = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _pendingChanged = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _pendingDeleted = new(StringComparer.OrdinalIgnoreCase);
@@ -28,6 +29,7 @@ internal sealed class FolderChangeMonitor : IDisposable
         Action<FolderChangeBatch> batchReady,
         Action<Exception> recoveryRequested)
     {
+        _includeSubfolders = includeSubfolders;
         _batchReady = batchReady;
         _recoveryRequested = recoveryRequested;
         _timer = new Timer(OnTimerElapsed);
@@ -35,7 +37,7 @@ internal sealed class FolderChangeMonitor : IDisposable
         {
             _watcher = new FileSystemWatcher(folderPath)
             {
-                NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite,
+                NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite,
                 IncludeSubdirectories = includeSubfolders
             };
             _watcher.Created += OnCreated;
@@ -89,6 +91,14 @@ internal sealed class FolderChangeMonitor : IDisposable
 
     private void OnDeleted(object sender, FileSystemEventArgs e)
     {
+        // A deleted folder raises no events for the images it held, and it is gone so it cannot be told from a
+        // file; an extensionless name is the best signal left.
+        if (_includeSubfolders && !ImageFileReader.IsSupportedImage(e.FullPath) && Path.GetExtension(e.FullPath).Length == 0)
+        {
+            RequestRecovery(new IOException("A subfolder was removed."));
+            return;
+        }
+
         lock (_lock)
         {
             if (_disposed) return;
@@ -101,6 +111,12 @@ internal sealed class FolderChangeMonitor : IDisposable
 
     private void OnRenamed(object sender, RenamedEventArgs e)
     {
+        if (_includeSubfolders && Directory.Exists(e.FullPath))
+        {
+            RequestRecovery(new IOException("A subfolder was renamed."));
+            return;
+        }
+
         lock (_lock)
         {
             if (_disposed) return;
@@ -121,9 +137,11 @@ internal sealed class FolderChangeMonitor : IDisposable
         }
     }
 
-    private void OnError(object sender, ErrorEventArgs e)
+    private void OnError(object sender, ErrorEventArgs e) => RequestRecovery(e.GetException());
+
+    // Asks the owner to reload the folder, once per monitor.
+    private void RequestRecovery(Exception exception)
     {
-        var exception = e.GetException();
         lock (_lock)
         {
             if (_disposed || _recoveryQueued)

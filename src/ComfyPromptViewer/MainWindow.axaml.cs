@@ -11,14 +11,10 @@ namespace ComfyPromptViewer;
 
 public partial class MainWindow : Window
 {
-    private const double DefaultTileSize = 120;
-    private const double MinTileSize = 80;
-    private const double MaxTileSize = 320;
-    private const double TileSizeStep = 10;
-    private const double TileGap = 16;
-    private const double WheelScrollRowsPerNotch = 1.7;
-    private const double MinWheelScrollPixels = 180;
-    private const double MaxWheelViewportRatio = 0.58;
+    private const double DefaultTileSize = HeaderViewModel.DefaultTileSize;
+    private const double MinTileSize = HeaderViewModel.MinTileSize;
+    private const double MaxTileSize = HeaderViewModel.MaxTileSize;
+    private const double TileSizeStep = HeaderViewModel.TileSizeStep;
     // The sidebar width is dragged by the user and persisted; the ratio is only the ceiling that keeps a
     // narrow window from handing the whole client area to the sidebar.
     private const double MaxSidebarWidthWindowRatio = 0.45;
@@ -28,23 +24,7 @@ public partial class MainWindow : Window
     private const double SidebarPreviewHeightWindowRatio = 0.4;
     private const double MinSidebarPreviewHeight = 180;
     private const double MaxSidebarPreviewHeight = 350;
-    private const double CollapsedPositivePromptMaxHeight = 168;
-    private const int LongPositivePromptCharacterThreshold = 500;
-    private const int LongPositivePromptLineThreshold = 7;
-    private static readonly TimeSpan InitialMetadataScannerPollInterval = TimeSpan.FromMilliseconds(100);
-    private static readonly TimeSpan MetadataCountUpdateInterval = TimeSpan.FromMilliseconds(150);
     private static readonly TimeSpan TileSizeSaveInterval = TimeSpan.FromMilliseconds(250);
-    private static readonly TimeSpan TransientStatusDuration = TimeSpan.FromSeconds(2.5);
-    private static readonly TimeSpan TransientStatusFadeDuration = TimeSpan.FromMilliseconds(120);
-    private const int InitialMetadataScannerMaxPolls = 15;
-    // How long a metadata scan has to run before its progress is worth showing. Warm folders finish first.
-    private const long ScanProgressVisibleDelayMs = 250;
-    private const int MaxIncrementalGalleryChanges = 32;
-    private const int AheadRowsInScrollDirection = 8;
-    private const int AheadRowsAgainstScrollDirection = 2;
-    private const int PrewarmQueueHighWaterMark = 256;
-    private const int PrewarmProgressBatch = 32;
-    private static readonly TimeSpan PrewarmQueuePollInterval = TimeSpan.FromMilliseconds(250);
     private readonly GalleryViewModel _viewModel = new();
     private readonly UserPreferencesStore _preferences;
     private readonly DecodedImageCache _decodedImageCache;
@@ -53,53 +33,19 @@ public partial class MainWindow : Window
     private readonly MetadataRepository _metadataRepository;
     private readonly ImageMetadataService _metadataService;
     private readonly MetadataScanCoordinator _metadataScanner;
-    private readonly SessionGate _folderLoader = new();
-    private readonly GalleryCatalog _catalog = new();
-    private readonly HashSet<ImageItem> _selectedItems = [];
-    private readonly List<ImageItem> _visibleThumbnailScheduleItems = [];
-    private readonly List<ImageItem> _aheadThumbnailScheduleItems = [];
-    // Staleness lives in the two primitives from Staleness.cs. Folder-load, metadata-scan, and
-    // thumbnail-load staleness belong to their coordinators; these four are the UI-side gates. Do not add
-    // a bare int counter or a hand-managed CancellationTokenSource.
-    private readonly SessionGate _advancedMaintenanceStatusGate = new();
-    private readonly SessionGate _folderCacheStatusGate = new();
-    private readonly SessionGate _searchFilterGate = new();
-    private readonly GenerationGate _galleryScrollRestoreGate = new();
-    private readonly GenerationGate _galleryEmptyStateGate = new();
-    private DispatcherTimer? _searchDebounceTimer;
-    private DispatcherTimer? _metadataCountUpdateTimer;
     private DispatcherTimer? _tileSizeSaveTimer;
-    private ImageItem? _selectedItem;
-    private ImageItem? _sidebarPreviewOwner;
-    private ImageItem? _selectionAnchor;
     private TaskCompletionSource<bool>? _deleteConfirmationCompletion;
     private ImageItem? _queuedSelectedItemRefresh;
-    private SortMode _sortMode = SortMode.NewestFirst;
-    private ThemeMode _themeMode;
-    private string? _currentFolderPath;
+    // The folder the current search was typed for. Unlike _currentFolderPath it survives Back, so reopening
+    // the same folder keeps the search and only a different folder resets it.
+    private string? _searchFolderKey;
     // The thumbnail cache namespace for the open folder. Every ImageItem created while it is set - initial
     // load and watcher additions alike - captures it.
-    private ThumbnailFolderScope? _folderCacheScope;
-    private bool _includeSubfolders;
-    private bool _prewarmThumbnails;
-    private int _prewarmRemaining;
-    private int _prewarmTotal;
-    private long _metadataScanStartedAt;
     private double _targetTileSize;
-    private double _tileSize;
-    private double _tileItemExtent;
     // Physical pixels per DIP for the display this window is on. Feeds the thumbnail decode bucket, so a
     // 120 DIP tile on a 200% monitor decodes 240px instead of a soft 180.
     private double _renderScaling = 1.0;
-    private bool _isInitializing = true;
-    private bool _isViewportThumbnailScheduleQueued;
-    private bool _thumbnailCacheClearInProgress;
-    private int _lastPrefetchFirstVisibleRow = -1;
-    private int _prefetchDirection = 1;
-    private volatile bool _hasSearchQueryActive;
-    private SelectableTextBlock? _activeContextMenuPromptText;
-    private bool _isPositivePromptExpanded;
-    private bool _isNegativePromptExpanded;
+    // Where the viewport is, in catalog order, for the background prewarm pass to cache around.
     private bool _isSidebarSplitterDragging;
     // Maximizing does not change Width/Height back to the restored size, so the last known normal bounds
     // are tracked separately; saving the maximized bounds would unmaximize into a full-screen-sized window.
@@ -109,12 +55,9 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         _preferences = new UserPreferencesStore(AppPaths.LocalDataDirectory);
-        _themeMode = _preferences.LoadThemeMode();
-        _includeSubfolders = _preferences.LoadIncludeSubfolders();
-        _prewarmThumbnails = _preferences.LoadPrewarmThumbnails();
         _targetTileSize = _preferences.LoadTileSize(DefaultTileSize, MinTileSize, MaxTileSize);
         _decodedImageCache = new DecodedImageCache();
-        _thumbnailService = new ThumbnailService(AppPaths.LocalDataDirectory);
+        _thumbnailService = new ThumbnailService(AppPaths.ThumbnailCacheRoot(_preferences.LoadThumbnailCacheLocation()));
         _thumbnailLoads = new ThumbnailLoadCoordinator(_decodedImageCache);
         _metadataRepository = new MetadataRepository(AppPaths.LocalDataDirectory);
         _metadataService = new ImageMetadataService(_metadataRepository);
@@ -124,29 +67,16 @@ public partial class MainWindow : Window
         _thumbnailLoads.VisibleWorkDrained = _thumbnailService.ResumeDeferredWrites;
         _thumbnailService.SetCacheWritePause(() => _thumbnailLoads.HasVisibleWork);
 
-        GalleryScrollViewer.AddHandler(InputElement.PointerPressedEvent, GalleryScrollViewer_PointerPressed, RoutingStrategies.Bubble, true);
-        GalleryScrollViewer.AddHandler(InputElement.PointerMovedEvent, GalleryScrollViewer_PointerMoved, RoutingStrategies.Bubble, true);
-        GalleryScrollViewer.AddHandler(InputElement.PointerReleasedEvent, GalleryScrollViewer_PointerReleased, RoutingStrategies.Bubble, true);
-        GalleryScrollViewer.AddHandler(InputElement.PointerCaptureLostEvent, GalleryScrollViewer_PointerCaptureLost, RoutingStrategies.Bubble, true);
-        GalleryScrollViewer.AddHandler(InputElement.PointerWheelChangedEvent, GalleryScrollViewer_PointerWheelChanged, RoutingStrategies.Tunnel, true);
-        GalleryItems.AddHandler(Control.RequestBringIntoViewEvent, (_, e) => e.Handled = true, RoutingStrategies.Bubble, true);
-        GalleryItems.ElementPrepared += GalleryItems_ElementPrepared;
-        GalleryItems.ElementClearing += GalleryItems_ElementClearing;
+        InitializeLargePreview();
+        InitializeSidebar();
+        InitializeSession();
+        InitializeStartMenu();
+        InitializeHeader();
+        InitializeGallery();
 
-        _tileSize = _targetTileSize;
-        _tileItemExtent = _tileSize + TileGap;
-        TileSizeSlider.Minimum = MinTileSize;
-        TileSizeSlider.Maximum = MaxTileSize;
-        TileSizeSlider.TickFrequency = TileSizeStep;
-        TileSizeSlider.Value = _targetTileSize;
         SyncIncludeSubfoldersToggles();
-        PrewarmThumbnailsToggle.IsChecked = _prewarmThumbnails;
         ApplyTileLayout();
-        SortComboBox.SelectedIndex = (int)_sortMode;
-        SearchScopeComboBox.SelectedIndex = (int)SearchScope.All;
-        SearchHelpPopup.PlacementTarget = SearchHelpButton;
-        ThemeManager.Apply(_themeMode);
-        ThemeComboBox.SelectedIndex = (int)_themeMode;
+        ThemeManager.Apply(_preferences.LoadThemeMode());
 
         SetSidebarWidth(
             _preferences.LoadSidebarWidth(DefaultSidebarWidth, MinSidebarWidth, MaxSidebarWidth),
@@ -154,9 +84,10 @@ public partial class MainWindow : Window
         SidebarSplitter.DragStarted += SidebarSplitter_DragStarted;
         SidebarSplitter.DragCompleted += SidebarSplitter_DragCompleted;
 
-        _isInitializing = false;
         RestoreWindowPlacement();
         _renderScaling = GetCurrentRenderScaling();
+        _session.RenderScaling = _renderScaling;
+        Gallery.RenderScaling = _renderScaling;
         this.ScalingChanged += Window_ScalingChanged;
         this.SizeChanged += Window_SizeChanged;
         this.SizeChanged += Window_SizeChangedTrackPlacement;
@@ -255,7 +186,9 @@ public partial class MainWindow : Window
         }
 
         _renderScaling = scaling;
-        QueueViewportThumbnailSchedule(force: true);
+        _session.RenderScaling = scaling;
+        Gallery.RenderScaling = scaling;
+        Gallery.QueueViewportSchedule(force: true);
     }
 
     private void Window_SizeChangedTrackPlacement(object? sender, SizeChangedEventArgs e)
@@ -276,48 +209,20 @@ public partial class MainWindow : Window
             WindowState == WindowState.Maximized));
     }
 
-    private void ThemeComboBox_SelectionChanged(object? sender, SelectionChangedEventArgs e)
-    {
-        if (_isInitializing)
-        {
-            return;
-        }
-
-        var selectedIndex = ThemeComboBox.SelectedIndex;
-        if (selectedIndex < 0 || selectedIndex > (int)ThemeMode.Plum)
-        {
-            return;
-        }
-
-        _themeMode = (ThemeMode)selectedIndex;
-        ThemeManager.Apply(_themeMode);
-        _preferences.SaveThemeMode(_themeMode);
-    }
-
     protected override void OnClosed(EventArgs e)
     {
         SaveWindowPlacement();
         CompleteDeleteConfirmation(false);
-        StopAutoScroll();
-        StopLargePreviewPan(releaseCapture: true);
-        StopFolderWatcher();
-        _searchDebounceTimer?.Stop();
-        CancelSearchFilter();
+        Gallery.StopAutoScroll();
+        LargePreview.StopPan();
         if (_tileSizeSaveTimer?.IsEnabled == true)
         {
             _tileSizeSaveTimer.Stop();
             _preferences.SaveTileSize(_targetTileSize);
         }
-        _metadataScanner.Cancel();
-        _folderLoader.Cancel();
-        _advancedMaintenanceStatusGate.Cancel();
-        _folderCacheStatusGate.Cancel();
-        _thumbnailLoads.Clear();
-        _thumbnailService.ClearDeferredWrites();
-        _thumbnailService.SetCacheWritePause(null);
-        SelectItem(null);
-        ClearImageItems();
-        _decodedImageCache.ClearAndReleaseAll();
+        _startMenu.Close();
+        _header.Close();
+        _session.Shutdown();
         _thumbnailService.Dispose();
         _metadataRepository.Dispose();
         base.OnClosed(e);

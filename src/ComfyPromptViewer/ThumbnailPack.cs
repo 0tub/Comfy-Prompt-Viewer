@@ -1,6 +1,7 @@
 using System;
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
@@ -36,9 +37,11 @@ internal sealed class ThumbnailPack : IDisposable
     private readonly string _indexPath;
     private SafeFileHandle? _dataHandle;
     private SafeFileHandle? _indexHandle;
+    private SafeFileHandle? _writerLock;
     private long _dataLength;
     private long _indexLength;
-    private bool _canWrite;
+    private volatile bool _canWrite;
+    public bool CanWrite => _canWrite;
 
     public ThumbnailPack(string cacheDirectory)
     {
@@ -88,7 +91,13 @@ internal sealed class ThumbnailPack : IDisposable
 
             if (read != buffer.Length)
             {
-                Remove(key);
+                RemoveIfUnchanged(key, entry);
+                return false;
+            }
+
+            // Clear() truncates and reuses offsets, so bytes read through a stale entry can belong to another key.
+            if (!_entries.TryGetValue(key, out var current) || current != entry)
+            {
                 return false;
             }
 
@@ -98,7 +107,7 @@ internal sealed class ThumbnailPack : IDisposable
         catch (Exception ex)
         {
             DebugLog.Write($"Failed to read thumbnail pack entry at {entry.Offset}: {ex.Message}");
-            Remove(key);
+            RemoveIfUnchanged(key, entry);
             return false;
         }
     }
@@ -139,7 +148,24 @@ internal sealed class ThumbnailPack : IDisposable
 
     public void Remove(in ThumbnailKey key)
     {
-        if (!_entries.TryRemove(key, out _) || !_canWrite)
+        if (_entries.TryRemove(key, out _))
+        {
+            AppendTombstone(key);
+        }
+    }
+
+    // A failed read must not drop an entry that was rewritten after the read started.
+    private void RemoveIfUnchanged(in ThumbnailKey key, PackEntry entry)
+    {
+        if (_entries.TryRemove(new KeyValuePair<ThumbnailKey, PackEntry>(key, entry)))
+        {
+            AppendTombstone(key);
+        }
+    }
+
+    private void AppendTombstone(in ThumbnailKey key)
+    {
+        if (!_canWrite)
         {
             return;
         }
@@ -204,6 +230,13 @@ internal sealed class ThumbnailPack : IDisposable
     {
         try
         {
+            // FileShare.Read does not exclude a second writer on Linux/macOS, but FileShare.None does. Holding it on a
+            // separate file keeps the data and index files readable by a second instance.
+            _writerLock = File.OpenHandle(
+                Path.ChangeExtension(_dataPath, ".lock"),
+                FileMode.OpenOrCreate,
+                FileAccess.Write,
+                FileShare.None);
             _dataHandle = File.OpenHandle(
                 _dataPath,
                 FileMode.OpenOrCreate,
@@ -350,8 +383,10 @@ internal sealed class ThumbnailPack : IDisposable
     {
         _dataHandle?.Dispose();
         _indexHandle?.Dispose();
+        _writerLock?.Dispose();
         _dataHandle = null;
         _indexHandle = null;
+        _writerLock = null;
         _canWrite = false;
         _entries.Clear();
     }

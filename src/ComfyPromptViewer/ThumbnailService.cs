@@ -4,6 +4,8 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Media.Imaging;
+using Avalonia;
+using Avalonia.Platform;
 using SkiaSharp;
 
 namespace ComfyPromptViewer;
@@ -33,9 +35,9 @@ internal sealed class ThumbnailService : IDisposable
     private Func<bool>? _writesPaused;
     private bool _maintenancePaused;
 
-    public ThumbnailService(string appDataDirectory)
+    public ThumbnailService(string cacheRootDirectory)
     {
-        CacheRootDirectory = Path.Combine(appDataDirectory, "thumbnails");
+        CacheRootDirectory = cacheRootDirectory;
         FolderCacheRootDirectory = Path.Combine(CacheRootDirectory, FolderCacheDirectoryName);
 
         try
@@ -50,8 +52,8 @@ internal sealed class ThumbnailService : IDisposable
         DebugLog.Observe(Task.Run(RemoveLegacyCacheDirectories), "Legacy thumbnail cache cleanup");
     }
 
-    public string CacheRootDirectory { get; }
-    public string FolderCacheRootDirectory { get; }
+    public string CacheRootDirectory { get; private set; }
+    public string FolderCacheRootDirectory { get; private set; }
     public ThumbnailFolderScope? ActiveFolderScope => _activeScope;
     public SemaphoreSlim SelectedPreviewLoadLimiter { get; } = new(1);
 
@@ -69,7 +71,7 @@ internal sealed class ThumbnailService : IDisposable
 
     // Opens (or reuses) the cache scope for a folder and retires the previous one. Reopening the same
     // folder - a reload, or an Include subfolders toggle - keeps its pack rather than churning the handles.
-    public async Task<ThumbnailFolderScope> OpenFolderScopeAsync(string folderPath)
+    public async Task<ThumbnailFolderScope> OpenFolderScopeAsync(string folderPath, CancellationToken token = default)
     {
         var folderKey = ThumbnailFolderScope.NormalizeFolderPath(folderPath);
         await _maintenanceLock.WaitAsync();
@@ -82,9 +84,33 @@ internal sealed class ThumbnailService : IDisposable
             }
 
             await DrainAndDisposeAsync(DetachActiveScope());
-            var scope = new ThumbnailFolderScope(FolderCacheRootDirectory, folderPath);
+            var scope = await Task.Run(() => new ThumbnailFolderScope(FolderCacheRootDirectory, folderPath));
+            if (token.IsCancellationRequested)
+            {
+                scope.Retire();
+                scope.Dispose();
+                return scope;
+            }
             _activeScope = scope;
             return scope;
+        }
+        finally
+        {
+            _maintenanceLock.Release();
+        }
+    }
+
+    // Only offered on the start screen, where no folder scope is open, so the next folder opens its pack under
+    // the new root. The old root's caches stay where they are.
+    public async Task SetCacheRootAsync(string cacheRootDirectory)
+    {
+        await _maintenanceLock.WaitAsync();
+        try
+        {
+            var folderCacheRoot = Path.Combine(cacheRootDirectory, FolderCacheDirectoryName);
+            await Task.Run(() => Directory.CreateDirectory(folderCacheRoot));
+            CacheRootDirectory = cacheRootDirectory;
+            FolderCacheRootDirectory = folderCacheRoot;
         }
         finally
         {
@@ -172,22 +198,18 @@ internal sealed class ThumbnailService : IDisposable
         }
     }
 
-    public void RemoveCachedThumbnail(ThumbnailFolderScope? scope, in ThumbnailKey key)
-    {
-        scope?.Pack.Remove(key);
-    }
-
-    public Bitmap DecodeThumbnail(string sourcePath, int width)
-    {
-        using var stream = File.OpenRead(sourcePath);
-        return Bitmap.DecodeToWidth(stream, width, BitmapInterpolationMode.MediumQuality);
-    }
-
     public Bitmap DecodeSelectedPreview(string sourcePath, int knownSourceWidth = 0, int knownSourceHeight = 0)
     {
         var (sourceWidth, sourceHeight) = knownSourceWidth > 0 && knownSourceHeight > 0
             ? (knownSourceWidth, knownSourceHeight)
             : TryReadSourceSize(sourcePath);
+
+        if (VideoPlayback.IsVideo(sourcePath))
+        {
+            using var frame = VideoPlayback.DecodeFirstFrame(sourcePath);
+            return new Bitmap(PixelFormat.Bgra8888, AlphaFormat.Opaque,
+                frame.GetPixels(), new PixelSize(frame.Width, frame.Height), new Vector(96, 96), frame.RowBytes);
+        }
 
         var decodeWidth = GetPreviewDecodeWidth(sourceWidth, sourceHeight);
         using var stream = File.OpenRead(sourcePath);
@@ -228,11 +250,11 @@ internal sealed class ThumbnailService : IDisposable
         }
     }
 
-    public bool TryQueueCacheWrite(ImageItem item, in ThumbnailKey key)
+    public bool TryQueueCacheWrite(ImageItem item, in ThumbnailKey key, byte[]? payload = null)
     {
         // The item's own scope, not the active one: a folder swap must not be able to redirect leftover
         // work into the newly opened folder's pack.
-        if (item.CacheScope is not { IsRetired: false } scope || scope.Pack.Contains(key))
+        if (item.CacheScope is not { IsRetired: false } scope || !scope.Pack.CanWrite || scope.Pack.Contains(key))
         {
             return false;
         }
@@ -240,7 +262,9 @@ internal sealed class ThumbnailService : IDisposable
         var scopedKey = new ScopedThumbnailKey(scope, key);
         lock (_pendingWritesLock)
         {
-            if (_maintenancePaused || _failedWrites.Contains(scopedKey) || !_pendingWrites.Add(scopedKey))
+            // Bound retained encoded pixels to at most 16 MiB. If saturated, a later prewarm can retry.
+            if ((payload is not null && (payload.Length > 128 * 1024 || _deferredWrites.Count >= 128)) ||
+                _maintenancePaused || _failedWrites.Contains(scopedKey) || !_pendingWrites.Add(scopedKey))
             {
                 return false;
             }
@@ -249,7 +273,8 @@ internal sealed class ThumbnailService : IDisposable
                 item,
                 scope,
                 key,
-                item.GetThumbnailDecodeWidth()));
+                item.GetThumbnailDecodeWidth(),
+                payload));
         }
 
         StartWriter();
@@ -537,12 +562,15 @@ internal sealed class ThumbnailService : IDisposable
             {
                 // Re-checked here rather than at dequeue: the folder can swap while this write waits its
                 // turn, and a retired scope's pack is closing or already closed.
-                if (write.Scope.IsRetired || write.Scope.Pack.Contains(write.Key))
+                if (write.Scope.IsRetired || !write.Scope.Pack.CanWrite || write.Scope.Pack.Contains(write.Key))
                 {
                     return;
                 }
 
-                write.Scope.Pack.Write(write.Key, EncodeJpegThumbnail(write.Item.Path, write.ThumbnailWidth));
+                if (!write.Scope.Pack.Write(write.Key, write.Payload ?? EncodeJpegThumbnail(write.Item.Path, write.ThumbnailWidth)))
+                {
+                    RecordWriteFailure(write.Scope, write.Key);
+                }
             }
             catch (Exception ex)
             {
@@ -587,6 +615,57 @@ internal sealed class ThumbnailService : IDisposable
     // Bytes only; durability is the pack's problem, so no temp file or atomic move per thumbnail.
     internal static byte[] EncodeJpegThumbnail(string sourcePath, int thumbnailWidth)
     {
+        using var resized = DecodeResizedThumbnail(sourcePath, thumbnailWidth);
+        using var image = SKImage.FromBitmap(resized);
+        using var data = image.Encode(SKEncodedImageFormat.Jpeg, ThumbnailJpegQuality)
+            ?? throw new InvalidDataException($"Could not encode JPEG thumbnail for {sourcePath}.");
+        return data.ToArray();
+    }
+
+    // Display keeps the original resized pixels; only the disk payload uses lossy JPEG encoding.
+    public Bitmap DecodeThumbnailForCache(ImageItem item, in ThumbnailKey key, int width, Func<bool> canCache)
+    {
+        using var resized = DecodeResizedThumbnail(item.Path, width);
+        var bitmap = new Bitmap(PixelFormat.Bgra8888, AlphaFormat.Premul,
+            resized.GetPixels(), new PixelSize(resized.Width, resized.Height), new Vector(96, 96), resized.RowBytes);
+        try
+        {
+            if (canCache() && item.CacheScope is { IsRetired: false } scope && scope.Pack.CanWrite && !scope.Pack.Contains(key))
+            {
+                lock (_pendingWritesLock)
+                {
+                    if (_maintenancePaused || _deferredWrites.Count >= 128 ||
+                        _failedWrites.Contains(new ScopedThumbnailKey(scope, key)) ||
+                        _pendingWrites.Contains(new ScopedThumbnailKey(scope, key)))
+                    {
+                        return bitmap;
+                    }
+                }
+                using var image = SKImage.FromBitmap(resized);
+                using var data = image.Encode(SKEncodedImageFormat.Jpeg, ThumbnailJpegQuality);
+                if (data is not null && canCache())
+                {
+                    TryQueueCacheWrite(item, key, data.ToArray());
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            // Cache failure must not discard a successfully decoded display thumbnail.
+            DebugLog.Write($"Failed to encode displayed thumbnail for {item.Path}: {ex.Message}");
+        }
+        return bitmap;
+    }
+
+    private static SKBitmap DecodeResizedThumbnail(string sourcePath, int thumbnailWidth)
+    {
+        if (VideoPlayback.IsVideo(sourcePath))
+        {
+            using var frame = VideoPlayback.DecodeFirstFrame(sourcePath);
+            var frameWidth = Math.Min(frame.Width, thumbnailWidth);
+            return Resize(frame, frameWidth, Math.Max(1, (int)Math.Round(frame.Height * (frameWidth / (double)frame.Width))), sourcePath);
+        }
+
         using var codec = CreateCodec(sourcePath)
             ?? throw new InvalidDataException($"Could not open thumbnail source {sourcePath}.");
         var sourceInfo = codec.Info;
@@ -600,17 +679,20 @@ internal sealed class ThumbnailService : IDisposable
             SKAlphaType.Premul);
         using var decoded = SKBitmap.Decode(codec, decodedInfo)
             ?? throw new InvalidDataException($"Could not decode thumbnail source {sourcePath}.");
+        return Resize(decoded, width, height, sourcePath);
+    }
+
+    private static SKBitmap Resize(SKBitmap source, int width, int height, string sourcePath)
+    {
         var info = new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Premul);
-        using var resized = new SKBitmap(info);
-        if (!decoded.ScalePixels(resized, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None)))
+        var resized = new SKBitmap(info);
+        if (!source.ScalePixels(resized, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None)))
         {
+            resized.Dispose();
             throw new InvalidDataException($"Could not resize thumbnail source {sourcePath}.");
         }
 
-        using var image = SKImage.FromBitmap(resized);
-        using var data = image.Encode(SKEncodedImageFormat.Jpeg, ThumbnailJpegQuality)
-            ?? throw new InvalidDataException($"Could not encode JPEG thumbnail for {sourcePath}.");
-        return data.ToArray();
+        return resized;
     }
 
     // Never SKCodec.Create(path). That opens the file by name through Skia's native file stream, so it is
@@ -644,7 +726,8 @@ internal sealed class ThumbnailService : IDisposable
         ImageItem Item,
         ThumbnailFolderScope Scope,
         ThumbnailKey Key,
-        int ThumbnailWidth);
+        int ThumbnailWidth,
+        byte[]? Payload);
 
     // Deduplication has to be per folder now: the same source path can appear under two folder roots, and
     // the key deliberately does not know which cache it belongs to.

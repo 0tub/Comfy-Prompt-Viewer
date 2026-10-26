@@ -7,15 +7,20 @@ namespace ComfyPromptViewer;
 
 internal sealed class UserPreferencesStore
 {
+    // Pinned folders are never dropped; this caps only the unpinned history.
+    internal const int MaxUnpinnedRecentFolders = 25;
+
     private readonly string _appDataDirectory;
     private readonly string _tileSizePath;
     private readonly string _lastFolderPath;
     private readonly string _recentFoldersPath;
     private readonly string _includeSubfoldersPath;
     private readonly string _prewarmThumbnailsPath;
+    private readonly string _softwareRenderingPath;
     private readonly string _themeModePath;
     private readonly string _windowPlacementPath;
     private readonly string _sidebarWidthPath;
+    private readonly string _thumbnailCacheLocationPath;
 
     public UserPreferencesStore(string appDataDirectory)
     {
@@ -25,9 +30,11 @@ internal sealed class UserPreferencesStore
         _recentFoldersPath = Path.Combine(appDataDirectory, "recent-folders.txt");
         _includeSubfoldersPath = Path.Combine(appDataDirectory, "include-subfolders.txt");
         _prewarmThumbnailsPath = Path.Combine(appDataDirectory, "prewarm-thumbnails.txt");
+        _softwareRenderingPath = Path.Combine(appDataDirectory, "software-rendering.txt");
         _themeModePath = Path.Combine(appDataDirectory, "theme-mode.txt");
         _windowPlacementPath = Path.Combine(appDataDirectory, "window-placement.txt");
         _sidebarWidthPath = Path.Combine(appDataDirectory, "sidebar-width.txt");
+        _thumbnailCacheLocationPath = Path.Combine(appDataDirectory, "thumbnail-cache-location.txt");
     }
 
     public double LoadTileSize(double defaultValue, double minValue, double maxValue)
@@ -37,7 +44,8 @@ internal sealed class UserPreferencesStore
                 text,
                 NumberStyles.Float,
                 CultureInfo.InvariantCulture,
-                out var savedValue))
+                out var savedValue) &&
+            double.IsFinite(savedValue))
         {
             return Math.Clamp(savedValue, minValue, maxValue);
         }
@@ -58,6 +66,16 @@ internal sealed class UserPreferencesStore
     public void SaveLastFolderPath(string folderPath)
     {
         SavePreference(_lastFolderPath, folderPath, "last folder path");
+    }
+
+    public string? LoadThumbnailCacheLocation()
+    {
+        return TryReadPreference(_thumbnailCacheLocationPath, "thumbnail cache location", out var text) ? text : null;
+    }
+
+    public void SaveThumbnailCacheLocation(string location)
+    {
+        SavePreference(_thumbnailCacheLocationPath, location, "thumbnail cache location");
     }
 
     public List<RecentFolder> LoadRecentFolders()
@@ -97,6 +115,7 @@ internal sealed class UserPreferencesStore
                 {
                     try
                     {
+                        // Legacy line without a timestamp.
                         if (Directory.Exists(folder.Path))
                         {
                             folder.LastOpened = Directory.GetLastWriteTimeUtc(folder.Path);
@@ -107,6 +126,8 @@ internal sealed class UserPreferencesStore
                         DebugLog.Write($"Failed to read recent folder write time for {folder.Path}: {ex.Message}");
                     }
                 }
+
+                folder.IsPinned = parts.Length > 3 && parts[3] == "pinned";
 
                 if (list.TrueForAll(x => !string.Equals(x.Path, folder.Path, StringComparison.OrdinalIgnoreCase)))
                 {
@@ -129,9 +150,11 @@ internal sealed class UserPreferencesStore
             var lines = new List<string>(folders.Count);
             foreach (var f in folders)
             {
-                lines.Add($"{f.Path}|{f.ImageCount}|{f.LastOpened.Ticks}");
+                lines.Add(f.IsPinned
+                    ? $"{f.Path}|{f.ImageCount}|{f.LastOpened.Ticks}|pinned"
+                    : $"{f.Path}|{f.ImageCount}|{f.LastOpened.Ticks}");
             }
-            File.WriteAllLines(_recentFoldersPath, lines);
+            WriteAtomically(_recentFoldersPath, string.Join(Environment.NewLine, lines) + Environment.NewLine);
         }
         catch (Exception ex)
         {
@@ -142,18 +165,39 @@ internal sealed class UserPreferencesStore
     public void AddRecentFolder(string folderPath, int imageCount)
     {
         var list = LoadRecentFolders();
-        list.RemoveAll(x => string.Equals(x.Path, folderPath, StringComparison.OrdinalIgnoreCase));
+        var wasPinned = list.Exists(x => x.IsPinned && IsSamePath(x.Path, folderPath));
+        list.RemoveAll(x => IsSamePath(x.Path, folderPath));
         list.Insert(0, new RecentFolder
         {
             Path = folderPath,
             ImageCount = imageCount,
-            LastOpened = DateTime.UtcNow
+            LastOpened = DateTime.UtcNow,
+            IsPinned = wasPinned
         });
-        if (list.Count > 10)
-        {
-            list.RemoveRange(10, list.Count - 10);
-        }
+
+        // The list is most-recent-first, so the unpinned entries past the cap are the oldest ones.
+        var unpinnedSeen = 0;
+        list.RemoveAll(x => !x.IsPinned && ++unpinnedSeen > MaxUnpinnedRecentFolders);
         SaveRecentFolders(list);
+    }
+
+    public void SetRecentFolderPinned(string folderPath, bool isPinned)
+    {
+        var list = LoadRecentFolders();
+        foreach (var folder in list)
+        {
+            if (IsSamePath(folder.Path, folderPath))
+            {
+                folder.IsPinned = isPinned;
+            }
+        }
+
+        SaveRecentFolders(list);
+    }
+
+    private static bool IsSamePath(string left, string right)
+    {
+        return string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
     }
 
     public bool LoadIncludeSubfolders()
@@ -184,6 +228,22 @@ internal sealed class UserPreferencesStore
             _prewarmThumbnailsPath,
             prewarmThumbnails.ToString(CultureInfo.InvariantCulture),
             "prewarm-thumbnails setting");
+    }
+
+    // Read before the window exists (Program.BuildAvaloniaApp), so the toggle only takes effect on the next launch.
+    public bool LoadSoftwareRendering()
+    {
+        return TryReadPreference(_softwareRenderingPath, "software-rendering setting", out var text) &&
+               bool.TryParse(text, out var value) &&
+               value;
+    }
+
+    public void SaveSoftwareRendering(bool softwareRendering)
+    {
+        SavePreference(
+            _softwareRenderingPath,
+            softwareRendering.ToString(CultureInfo.InvariantCulture),
+            "software-rendering setting");
     }
 
     public ThemeMode LoadThemeMode()
@@ -223,7 +283,7 @@ internal sealed class UserPreferencesStore
             return null;
         }
 
-        if (double.IsNaN(width) || double.IsNaN(height) || width <= 0 || height <= 0)
+        if (!double.IsFinite(width) || !double.IsFinite(height) || width <= 0 || height <= 0)
         {
             return null;
         }
@@ -247,7 +307,7 @@ internal sealed class UserPreferencesStore
     {
         if (TryReadPreference(_sidebarWidthPath, "sidebar width", out var text) &&
             double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var savedValue) &&
-            !double.IsNaN(savedValue))
+            double.IsFinite(savedValue))
         {
             return Math.Clamp(savedValue, minValue, maxValue);
         }
@@ -258,6 +318,15 @@ internal sealed class UserPreferencesStore
     public void SaveSidebarWidth(double value)
     {
         SavePreference(_sidebarWidthPath, value.ToString(CultureInfo.InvariantCulture), "sidebar width");
+    }
+
+    // Written beside the target and moved over it, so a crash or a full disk mid-write leaves the old file
+    // rather than a truncated one: a half-written recent-folders file would lose every pin.
+    private static void WriteAtomically(string path, string contents)
+    {
+        var temporary = path + ".tmp";
+        File.WriteAllText(temporary, contents);
+        File.Move(temporary, path, overwrite: true);
     }
 
     private static bool TryReadPreference(string path, string label, out string text)
@@ -284,7 +353,7 @@ internal sealed class UserPreferencesStore
         try
         {
             Directory.CreateDirectory(_appDataDirectory);
-            File.WriteAllText(path, value);
+            WriteAtomically(path, value);
         }
         catch (Exception ex)
         {
@@ -314,4 +383,5 @@ public class RecentFolder
     public string Path { get; set; } = string.Empty;
     public int ImageCount { get; set; } = -1;
     public DateTime LastOpened { get; set; } = DateTime.MinValue;
+    public bool IsPinned { get; set; }
 }
