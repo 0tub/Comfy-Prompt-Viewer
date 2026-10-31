@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <Version>1.9.0</Version>
+    <Version>2.0.0</Version>
     <!-- Avalonia 12 ships net10.0 and net8.0 assets; net9.0 silently resolved the net8.0 ones. -->
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
