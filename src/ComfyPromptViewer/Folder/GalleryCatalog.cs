@@ -213,6 +213,28 @@ internal sealed class GalleryCatalog
         _items.Sort(comparison);
     }
 
+    // Takes an order computed elsewhere, which must hold exactly the catalog's current items. Returns false,
+    // changing nothing, when membership moved on in the meantime.
+    public bool TryReorder(ImageItem[] sorted)
+    {
+        if (sorted.Length != _items.Count)
+        {
+            return false;
+        }
+
+        foreach (var item in sorted)
+        {
+            if (!_itemsByPath.TryGetValue(item.Path, out var current) || !ReferenceEquals(current, item))
+            {
+                return false;
+            }
+        }
+
+        _items.Clear();
+        _items.AddRange(sorted);
+        return true;
+    }
+
     public int FindSortedInsertIndex(ImageItem entry, Comparison<ImageItem> comparison)
     {
         var low = 0;

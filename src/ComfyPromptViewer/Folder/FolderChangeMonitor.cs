@@ -38,7 +38,10 @@ internal sealed class FolderChangeMonitor : IDisposable
             _watcher = new FileSystemWatcher(folderPath)
             {
                 NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite,
-                IncludeSubdirectories = includeSubfolders
+                IncludeSubdirectories = includeSubfolders,
+                // The 8 KB default overflows on a burst of generator output, and an overflow costs a full
+                // folder reload. 64 KB is the most Windows allows for a network share.
+                InternalBufferSize = 64 * 1024
             };
             _watcher.Created += OnCreated;
             _watcher.Changed += OnChanged;

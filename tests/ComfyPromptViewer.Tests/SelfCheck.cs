@@ -543,6 +543,12 @@ public class SelfCheck
             catalog.TryGet(older.Path, out var bulkReplaced) && ReferenceEquals(bulkReplaced, bulkReplacement),
             "Expected a bulk replacement pass to swap the authoritative entry.");
 
+        var reversed = catalog.Items.Reverse().ToArray();
+        Check(catalog.TryReorder(reversed) && catalog.Items.SequenceEqual(reversed),
+            "Expected an order computed off the UI thread to be adopted when membership is unchanged.");
+        Check(!catalog.TryReorder([reversed[0]]) && catalog.Items.SequenceEqual(reversed),
+            "Expected a stale sorted snapshot to be refused without touching the catalog.");
+
         Check(catalog.LoadedMetadataCount == 0, "Expected an unscanned catalog to report no loaded metadata.");
         catalog.MarkMetadataLoaded(replacement);
         Check(catalog.LoadedMetadataCount == 1, "Expected a member metadata load to advance the loaded count.");

@@ -29,6 +29,7 @@ internal sealed class FolderSession
     private readonly ThumbnailPrewarmer _prewarmer;
     private readonly SessionGate _folderLoader = new();
     private readonly SessionGate _searchFilterGate = new();
+    private readonly GenerationGate _sortGate = new();
     private readonly GalleryCatalog _catalog = new();
     private FolderChangeMonitor? _folderChangeMonitor;
     private DispatcherTimer? _metadataCountUpdateTimer;
@@ -327,12 +328,42 @@ internal sealed class FolderSession
         }
     }
 
-    // Re-sorts the catalog and shows it from the top.
+    // Re-sorts the catalog and shows it from the top. The sort runs off the UI thread: a name sort compares
+    // culture-aware strings, which froze the window on a large folder. Until it lands the catalog stays in
+    // the order SortMode names, so file changes in the meantime still find their sorted positions.
     public void ApplySort(SortMode sortMode)
     {
-        SortMode = sortMode;
-        _catalog.Sort(CompareItems);
-        ApplyFilter(resetScroll: true);
+        var sort = _sortGate.Begin();
+        if (_catalog.Count == 0 || _folderLoader.CurrentToken is not { IsCancellationRequested: false } token)
+        {
+            // Nothing to reorder yet; a load in flight picks the new mode up before it fills the catalog.
+            SortMode = sortMode;
+            ApplyFilter(resetScroll: true);
+            return;
+        }
+
+        var loadGeneration = _folderLoader.Generation;
+        var sorted = _catalog.Items.ToArray();
+        DebugLog.Observe(Task.Run(() =>
+        {
+            Array.Sort(sorted, (left, right) => GallerySort.Compare(left, right, sortMode));
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (sort.IsStale || !_folderLoader.IsCurrent(loadGeneration))
+                {
+                    return;
+                }
+
+                SortMode = sortMode;
+                // A file change landed while sorting, so the snapshot is out of date; sort the real catalog.
+                if (!_catalog.TryReorder(sorted))
+                {
+                    _catalog.Sort(CompareItems);
+                }
+
+                ApplyFilter(resetScroll: true);
+            });
+        }, token), "Gallery sort");
     }
 
     private int CompareItems(ImageItem left, ImageItem right)
