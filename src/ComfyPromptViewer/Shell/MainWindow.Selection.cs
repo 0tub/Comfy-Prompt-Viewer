@@ -67,7 +67,7 @@ public partial class MainWindow
         {
             _thumbnailLoads.EnqueueVisible(current, token);
             DebugLog.Observe(_metadataScanner.EnsureLoadedAsync(current, token), "Selected metadata load for", current.Path);
-            _selectedPreviews.EnsureLoaded(current, token);
+            _thumbnailLoads.EnsureSelectedPreviewLoaded(current, token);
         }
 
         Sidebar.ViewModel.Show(current, _header.SearchText, _header.SearchScope);

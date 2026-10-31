@@ -9,6 +9,11 @@ namespace ComfyPromptViewer;
 // filtering the grid, resizing tiles) is the window's business.
 public sealed class HeaderViewModel : ObservableObject
 {
+    public const double DefaultTileSize = 120;
+    public const double MinTileSize = 80;
+    public const double MaxTileSize = 320;
+    public const double TileSizeStep = 10;
+
     private static readonly TimeSpan SearchDebounce = TimeSpan.FromMilliseconds(150);
 
     private readonly CacheMaintenance _maintenance;
@@ -57,9 +62,9 @@ public sealed class HeaderViewModel : ObservableObject
     public string CountText => _countText;
     public bool IsClearCacheEnabled => !_maintenance.IsBusy;
     public bool HasSearchText => _searchText.Length > 0;
-    public double TileSizeMin => TileSizeLimits.Min;
-    public double TileSizeMax => TileSizeLimits.Max;
-    public double TileSizeTick => TileSizeLimits.Step;
+    public double TileSizeMin => MinTileSize;
+    public double TileSizeMax => MaxTileSize;
+    public double TileSizeTick => TileSizeStep;
     public string TileSizeText => $"{_tileSize:0}";
 
     // The combo boxes list the enum members in declaration order, so an index is the enum value. The setters
@@ -157,7 +162,7 @@ public sealed class HeaderViewModel : ObservableObject
         get => _tileSize;
         set
         {
-            value = TileSizeLimits.Normalize(value);
+            value = NormalizeTileSize(value);
             if (Math.Abs(_tileSize - value) < 0.1)
             {
                 return;
@@ -189,6 +194,15 @@ public sealed class HeaderViewModel : ObservableObject
             _includeSubfolders = value;
             Raise(nameof(IncludeSubfolders));
         }
+    }
+
+    // Every tile size that arrives (saved file, slider) goes through this once, so nothing downstream
+    // re-clamps or re-rounds it.
+    internal static double NormalizeTileSize(double value)
+    {
+        return double.IsFinite(value)
+            ? Math.Clamp(Math.Round(value / TileSizeStep) * TileSizeStep, MinTileSize, MaxTileSize)
+            : DefaultTileSize;
     }
 
     // The count line: how many images, how far the prompt scan and thumbnail caching are, and how many are

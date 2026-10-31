@@ -26,6 +26,10 @@ public sealed class ThumbnailLoadCoordinator
     // Items whose load already failed once. The queue refills from the viewport on every scroll pass, so
     // without this a broken file writes the same log line forever.
     private readonly HashSet<ImageItem> _loggedFailures = new(ReferenceEqualityComparer.Instance);
+    // The larger sidebar/preview bitmap for the active image: one decode at a time, tracked per item on the
+    // UI thread so a reselect does not start a second one.
+    private readonly SemaphoreSlim _selectedPreviewLimiter = new(1);
+    private readonly Dictionary<ImageItem, Task> _selectedPreviewLoads = new(ReferenceEqualityComparer.Instance);
     private readonly LinkedList<ImageItem> _visibleQueue = new();
     private readonly LinkedList<ImageItem> _aheadQueue = new();
     private readonly Dictionary<ImageItem, QueuedThumbnail> _queuedItems = new();
@@ -371,6 +375,80 @@ public sealed class ThumbnailLoadCoordinator
             }
 
             LogFailureOnce(item, $"Failed to load thumbnail for {item.Path}: {ex.Message}");
+        }
+    }
+
+    // UI thread. Does nothing while a decode for this item is still running or its bitmap is already set.
+    public void EnsureSelectedPreviewLoaded(ImageItem item, CancellationToken token)
+    {
+        if (item.SelectedPreview is not null ||
+            _selectedPreviewLoads.GetValueOrDefault(item) is { IsCompleted: false })
+        {
+            return;
+        }
+
+        item.ResetSelectedPreviewUnavailable();
+        var load = LoadSelectedPreviewAsync(item, token);
+        _selectedPreviewLoads[item] = load;
+        DebugLog.Observe(load, "Selected preview load for", item.Path);
+    }
+
+    // A result for an image that is no longer selected is dropped.
+    private async Task LoadSelectedPreviewAsync(ImageItem item, CancellationToken token)
+    {
+        try
+        {
+            await _selectedPreviewLimiter.WaitAsync(token);
+            try
+            {
+                if (!item.IsSelected)
+                {
+                    return;
+                }
+
+                var metadata = item.Metadata;
+                var bitmap = await Task.Run(
+                    () => ThumbnailDecoder.DecodeSelectedPreview(item.Path, metadata.Width, metadata.Height),
+                    token);
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    if (token.IsCancellationRequested || !item.IsSelected || item.SelectedPreview is not null)
+                    {
+                        bitmap.Dispose();
+                        return;
+                    }
+
+                    item.SetSelectedPreview(bitmap);
+                });
+            }
+            finally
+            {
+                _selectedPreviewLimiter.Release();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            DebugLog.Write($"Failed to load selected preview for {item.Path}: {ex}");
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (item.IsSelected)
+                {
+                    item.MarkSelectedPreviewUnavailable();
+                }
+            });
+        }
+        finally
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (_selectedPreviewLoads.GetValueOrDefault(item) is { IsCompleted: true })
+                {
+                    _selectedPreviewLoads.Remove(item);
+                }
+            });
         }
     }
 

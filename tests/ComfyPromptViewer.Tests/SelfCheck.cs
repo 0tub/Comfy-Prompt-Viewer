@@ -91,20 +91,20 @@ public class SelfCheck
     private void CheckSidebarWidthClamping()
     {
         // A comfortable window leaves a dragged width exactly where the user put it.
-        Check(SidebarWidthLimits.FitToWindow(420, 1600) == 420,
+        Check(MainWindow.ComputeClampedSidebarWidth(420, 1600) == 420,
             "Expected a wide window to preserve the dragged sidebar width.");
 
         // Narrowing the window pulls the sidebar back rather than letting it eat the gallery.
-        var narrow = SidebarWidthLimits.FitToWindow(520, 900);
+        var narrow = MainWindow.ComputeClampedSidebarWidth(520, 900);
         Check(narrow < 520, "Expected a narrow window to shrink an oversized sidebar.");
         Check(narrow <= 900 * 0.45 + 0.001, "Expected the clamped sidebar to respect the window ratio ceiling.");
 
         // The floor wins over the ratio, so the sidebar never collapses to nothing on a tiny window.
-        Check(SidebarWidthLimits.FitToWindow(300, 200) == 260,
+        Check(MainWindow.ComputeClampedSidebarWidth(300, 200) == 260,
             "Expected the sidebar minimum width to win over the window ratio.");
 
         // The absolute maximum still applies on an ultrawide window.
-        Check(SidebarWidthLimits.FitToWindow(9000, 5000) == 560,
+        Check(MainWindow.ComputeClampedSidebarWidth(9000, 5000) == 560,
             "Expected the sidebar maximum width to bound an absurd stored value.");
     }
 

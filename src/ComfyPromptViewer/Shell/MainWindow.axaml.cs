@@ -8,6 +8,12 @@ namespace ComfyPromptViewer;
 
 public partial class MainWindow : Window
 {
+    // The sidebar width is dragged by the user and persisted; the ratio is only the ceiling that keeps a
+    // narrow window from handing the whole client area to the sidebar.
+    private const double MaxSidebarWidthWindowRatio = 0.45;
+    private const double DefaultSidebarWidth = 380;
+    private const double MinSidebarWidth = 260;
+    private const double MaxSidebarWidth = 560;
     private const double SidebarPreviewHeightWindowRatio = 0.4;
     private const double MinSidebarPreviewHeight = 180;
     private const double MaxSidebarPreviewHeight = 350;
@@ -18,7 +24,6 @@ public partial class MainWindow : Window
     private readonly ThumbnailService _thumbnailService;
     private readonly ThumbnailLoadCoordinator _thumbnailLoads;
     private readonly MetadataRepository _metadataRepository;
-    private readonly SelectedPreviewLoader _selectedPreviews = new();
     private readonly MetadataScanCoordinator _metadataScanner;
     private DispatcherTimer? _tileSizeSaveTimer;
     private TaskCompletionSource<bool>? _deleteConfirmationCompletion;
@@ -39,7 +44,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         _preferences = new UserPreferencesStore(AppPaths.LocalDataDirectory);
-        _targetTileSize = TileSizeLimits.Normalize(_preferences.LoadTileSize() ?? TileSizeLimits.Default);
+        _targetTileSize = HeaderViewModel.NormalizeTileSize(_preferences.LoadTileSize() ?? HeaderViewModel.DefaultTileSize);
         _decodedImageCache = new DecodedImageCache();
         _thumbnailService = new ThumbnailService(AppPaths.ThumbnailCacheRoot(_preferences.LoadThumbnailCacheLocation()));
         _thumbnailLoads = new ThumbnailLoadCoordinator(_thumbnailService, _decodedImageCache);
@@ -61,7 +66,7 @@ public partial class MainWindow : Window
         ApplyTileLayout();
         ThemeManager.Apply(_preferences.LoadThemeMode());
 
-        SetSidebarWidth(SidebarWidthLimits.Normalize(_preferences.LoadSidebarWidth() ?? SidebarWidthLimits.Default));
+        SetSidebarWidth(NormalizeSidebarWidth(_preferences.LoadSidebarWidth() ?? DefaultSidebarWidth));
         SidebarSplitter.DragStarted += SidebarSplitter_DragStarted;
         SidebarSplitter.DragCompleted += SidebarSplitter_DragCompleted;
 

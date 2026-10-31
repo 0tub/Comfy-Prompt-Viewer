@@ -5,9 +5,16 @@ namespace ComfyPromptViewer;
 
 // One image as the grid, sidebar and preview show it. It holds state only and does no I/O: metadata comes from
 // MetadataScanCoordinator, the tile bitmap from ThumbnailLoadCoordinator (its lifetime is DecodedImageCache's),
-// and the sidebar bitmap from SelectedPreviewLoader. Their setters are internal and called on the UI thread.
+// and the sidebar bitmap from ThumbnailLoadCoordinator.EnsureSelectedPreviewLoaded. Their setters are internal and called on the UI thread.
 public sealed class ImageItem : ObservableObject
 {
+    // Buckets are physical-pixel widths. The top two only come into play on HiDPI displays: a 320 DIP tile
+    // needs 640 real pixels at 200% scaling, and decoding 320 there is the blur this ladder exists to avoid.
+    private static readonly int[] ThumbnailWidthBuckets = [120, 180, 240, 320, 480, 640];
+    // Scaling above this decodes at the cap instead; past 320 DIP tiles on a 200% display the extra pixels
+    // cost more cache than they buy.
+    private const double MaxThumbnailRenderScaling = 4.0;
+
     private readonly object _thumbnailKeyLock = new();
     private Bitmap? _preview;
     private int _previewWidth;
@@ -132,7 +139,22 @@ public sealed class ImageItem : ObservableObject
         _renderScaling = renderScaling;
     }
 
-    internal int GetThumbnailDecodeWidth() => ThumbnailSizing.DecodeWidth(_tileSize, _renderScaling);
+    // The target is the tile's width in real device pixels, which is what the renderer actually samples. The
+    // ladder rounds that up, so a tile never decodes far wider than it draws and a tile-size or DPI change
+    // lands on a stable cache key instead of a new width per pixel.
+    internal int GetThumbnailDecodeWidth()
+    {
+        var targetWidth = (int)Math.Ceiling(_tileSize * Math.Clamp(_renderScaling, 1.0, MaxThumbnailRenderScaling));
+        foreach (var bucket in ThumbnailWidthBuckets)
+        {
+            if (targetWidth <= bucket)
+            {
+                return bucket;
+            }
+        }
+
+        return ThumbnailWidthBuckets[^1];
+    }
 
     // Memoized per width, so a scroll pass costs a comparison and a tile-size change invalidates it.
     internal ThumbnailKey GetThumbnailKey()

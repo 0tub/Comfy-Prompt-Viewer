@@ -17,7 +17,8 @@ namespace ComfyPromptViewer;
 // Window layout: the tile size setting, the sidebar width and splitter, and what a resize triggers.
 public partial class MainWindow
 {
-    // tileSize is already normalized: the header and the saved preference both go through TileSizeLimits.
+    // tileSize is already normalized: the header and the saved preference both go through
+    // HeaderViewModel.NormalizeTileSize.
     private void SetTileSize(double tileSize, bool persist)
     {
         var tileSizeChanged = Math.Abs(_targetTileSize - tileSize) > 0.1;
@@ -76,8 +77,8 @@ public partial class MainWindow
             return;
         }
 
-        var current = SidebarColumn.Width.IsAbsolute ? SidebarColumn.Width.Value : SidebarWidthLimits.Max;
-        var clamped = SidebarWidthLimits.FitToWindow(current, windowWidth);
+        var current = SidebarColumn.Width.IsAbsolute ? SidebarColumn.Width.Value : MaxSidebarWidth;
+        var clamped = ComputeClampedSidebarWidth(current, windowWidth);
 
         if (Math.Abs(clamped - current) > 0.5)
         {
@@ -85,7 +86,20 @@ public partial class MainWindow
         }
     }
 
-    // width is already within SidebarWidthLimits; the splitter's own MinWidth/MaxWidth bound a drag.
+    // The window ratio is a ceiling, never a target: a wide window leaves the dragged width alone, and only
+    // a window too narrow to keep the gallery usable pulls it back down.
+    internal static double ComputeClampedSidebarWidth(double currentWidth, double windowWidth)
+    {
+        var maxForWindow = Math.Max(MinSidebarWidth, windowWidth * MaxSidebarWidthWindowRatio);
+        return Math.Clamp(currentWidth, MinSidebarWidth, Math.Min(MaxSidebarWidth, maxForWindow));
+    }
+
+    private static double NormalizeSidebarWidth(double value)
+    {
+        return double.IsFinite(value) ? Math.Clamp(value, MinSidebarWidth, MaxSidebarWidth) : DefaultSidebarWidth;
+    }
+
+    // width is already normalized; the splitter's own MinWidth/MaxWidth bound a drag.
     private void SetSidebarWidth(double width)
     {
         SidebarColumn?.Width = new GridLength(width, GridUnitType.Pixel);
@@ -110,7 +124,7 @@ public partial class MainWindow
 
         if (SidebarColumn is { Width.IsAbsolute: true } column)
         {
-            _preferences.SaveSidebarWidth(SidebarWidthLimits.Normalize(column.Width.Value));
+            _preferences.SaveSidebarWidth(NormalizeSidebarWidth(column.Width.Value));
         }
     }
 
