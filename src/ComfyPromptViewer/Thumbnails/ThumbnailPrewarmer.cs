@@ -12,10 +12,12 @@ namespace ComfyPromptViewer;
 internal sealed class ThumbnailPrewarmer(ThumbnailService thumbnailService, SessionGate folderGate, bool enabled)
 {
     // Shallow on purpose: the queue is ordered by distance from the viewport when items enter it, so a
-    // deep queue would keep caching where the user was rather than where they are. One writer drains it.
+    // deep queue would keep caching where the user was rather than where they are.
     private const int QueueHighWaterMark = 32;
     private const int ProgressBatch = 32;
-    private static readonly TimeSpan QueuePollInterval = TimeSpan.FromMilliseconds(250);
+    // The parallel writers drain a full queue in about 100 ms, so a longer wait left them idle; at 250 ms
+    // this poll, not decoding, set the pace of a folder fill.
+    private static readonly TimeSpan QueuePollInterval = TimeSpan.FromMilliseconds(20);
 
     private volatile bool _enabled = enabled;
     private volatile int _focusIndex;

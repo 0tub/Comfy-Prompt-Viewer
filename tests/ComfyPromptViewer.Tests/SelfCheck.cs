@@ -1543,29 +1543,48 @@ public class SelfCheck
         return ThumbnailPack.CreateKey($"{Path.GetTempPath()}{label}-{Guid.NewGuid():N}.png", 1, 180);
     }
 
+    // Takes every write slot, as if that many writes were running, so queued work has to wait.
+    private static List<ThumbnailKey> HoldAllWriteSlots(string label)
+    {
+        var keys = new List<ThumbnailKey>();
+        for (var slot = 0; slot < ThumbnailService.MaxConcurrentWrites; slot++)
+        {
+            var key = NewThumbnailKey($"{label}-{slot}");
+            Check(ItemThumbnailService.TryBeginCacheWrite(ItemThumbnailScope, key), $"Expected thumbnail cache write slot {slot}.");
+            keys.Add(key);
+        }
+
+        return keys;
+    }
+
+    private static void ReleaseWriteSlots(List<ThumbnailKey> keys)
+    {
+        foreach (var key in keys)
+        {
+            ItemThumbnailService.EndCacheWrite(ItemThumbnailScope, key);
+        }
+    }
+
     private void CheckThumbnailCacheWriteBackpressure()
     {
-        var firstKey = NewThumbnailKey("backpressure-1");
-        var secondKey = NewThumbnailKey("backpressure-2");
-
-        Check(ItemThumbnailService.TryBeginCacheWrite(ItemThumbnailScope, firstKey), "Expected first thumbnail cache write slot.");
+        var held = HoldAllWriteSlots("backpressure");
         try
         {
-            Check(!ItemThumbnailService.TryBeginCacheWrite(ItemThumbnailScope, secondKey), "Expected busy thumbnail cache writer to reject queued writes.");
+            Check(!ItemThumbnailService.TryBeginCacheWrite(ItemThumbnailScope, NewThumbnailKey("backpressure-extra")),
+                "Expected a writer with every slot busy to reject another write.");
         }
         finally
         {
-            ItemThumbnailService.EndCacheWrite(ItemThumbnailScope, firstKey);
+            ReleaseWriteSlots(held);
         }
     }
 
     private void CheckDeferredThumbnailCacheWriteQueue()
     {
-        var activeKey = NewThumbnailKey("queue-active");
         var deferredKey = NewThumbnailKey("queue-deferred");
         var item = CreateImageItem(Path.Combine(Path.GetTempPath(), $"comfypromptviewer-selfcheck-{Guid.NewGuid():N}-missing.png"));
 
-        Check(ItemThumbnailService.TryBeginCacheWrite(ItemThumbnailScope, activeKey), "Expected active thumbnail cache write slot.");
+        var held = HoldAllWriteSlots("queue-active");
         try
         {
             var queuedBefore = ItemThumbnailService.PendingWriteCount;
@@ -1579,7 +1598,7 @@ public class SelfCheck
         }
         finally
         {
-            ItemThumbnailService.EndCacheWrite(ItemThumbnailScope, activeKey);
+            ReleaseWriteSlots(held);
         }
     }
 

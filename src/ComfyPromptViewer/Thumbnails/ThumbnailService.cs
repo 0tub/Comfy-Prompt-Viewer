@@ -18,7 +18,13 @@ internal sealed class ThumbnailService : IDisposable
     private const string FolderCacheDirectoryName = "folders";
     private const string PackFileName = "thumbnails.pack";
     private const string IndexFileName = "thumbnails.idx";
-    private readonly SemaphoreSlim _cacheWriteLimiter = new(1, 1);
+    // Each write decodes a full-size source (PNG has no scaled decode), so writes run on several cores. Only
+    // the pack append is one at a time, under the pack's own lock.
+    internal static readonly int MaxConcurrentWrites = Math.Clamp(Environment.ProcessorCount / 2, 1, 4);
+    private readonly SemaphoreSlim _cacheWriteLimiter = new(MaxConcurrentWrites, MaxConcurrentWrites);
+    // Lets only one caller at a time collect every write slot, so two drains cannot each hold some and wait
+    // on the other forever.
+    private readonly SemaphoreSlim _drainLock = new(1, 1);
     // Serializes scope swaps against clearing, so a pack handle is never disposed while a maintenance pass
     // is deleting the directory it lives in.
     private readonly SemaphoreSlim _maintenanceLock = new(1, 1);
@@ -423,11 +429,23 @@ internal sealed class ThumbnailService : IDisposable
         await WaitForInFlightWriteAsync();
     }
 
-    // The writer holds the limiter for exactly one write, so taking and returning it waits that write out.
+    // Each running write holds one slot, so holding every slot at once means none is running.
     private async Task WaitForInFlightWriteAsync()
     {
-        await _cacheWriteLimiter.WaitAsync();
-        _cacheWriteLimiter.Release();
+        await _drainLock.WaitAsync();
+        try
+        {
+            for (var slot = 0; slot < MaxConcurrentWrites; slot++)
+            {
+                await _cacheWriteLimiter.WaitAsync();
+            }
+
+            _cacheWriteLimiter.Release(MaxConcurrentWrites);
+        }
+        finally
+        {
+            _drainLock.Release();
+        }
     }
 
     private void DrainDeferredWritesLocked()
@@ -481,26 +499,33 @@ internal sealed class ThumbnailService : IDisposable
         scope?.Dispose();
     }
 
-    // Picks up the next deferred write unless writes are paused or one is already running.
+    // Fills every free write slot from the deferred queue, unless writes are paused.
     public void StartWriter()
+    {
+        while (TryStartWrite())
+        {
+        }
+    }
+
+    private bool TryStartWrite()
     {
         lock (_pendingWritesLock)
         {
             if (_maintenancePaused)
             {
-                return;
+                return false;
             }
         }
 
         if (ShouldPauseWrites() || !_cacheWriteLimiter.Wait(0))
         {
-            return;
+            return false;
         }
 
         if (!TryDequeue(out var write))
         {
             _cacheWriteLimiter.Release();
-            return;
+            return false;
         }
 
         DebugLog.Observe(Task.Run(() =>
@@ -531,6 +556,7 @@ internal sealed class ThumbnailService : IDisposable
                 EndCacheWrite(write.Scope, write.Key);
             }
         }), "Deferred thumbnail cache writer");
+        return true;
     }
 
     // Returns true only for the first failure of a given attempt, which is what keeps one broken file to one
