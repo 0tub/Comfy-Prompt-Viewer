@@ -10,9 +10,10 @@ public readonly record struct SearchTerm(string Text, bool IsExact)
     public string NormalizedText => SearchEngine.NormalizeSeparators(Text);
 }
 
-public static class SearchEngine
+public static partial class SearchEngine
 {
-    private static readonly Regex SearchQueryRegex = new(@"(-)?(?:""([^""]*)""|([^""\s,;]+))", RegexOptions.Compiled);
+    [GeneratedRegex(@"(-)?(?:""([^""]*)""|([^""\s,;]+))")]
+    private static partial Regex SearchQueryRegex { get; }
 
     public static void ParseQuery(string query, out List<SearchTerm> positiveTerms, out List<SearchTerm> negativeTerms)
     {

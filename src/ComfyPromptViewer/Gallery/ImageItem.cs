@@ -31,13 +31,14 @@ public sealed class ImageItem : ObservableObject
     private double _tileSize;
     private double _renderScaling = 1.0;
     private bool _needsVlc;
+    private readonly DateTime? _createdUtc;
 
     internal ImageItem(ImageFileEntry file, double tileSize, ThumbnailFolderScope? cacheScope)
     {
         Path = file.Path;
         FileName = System.IO.Path.GetFileName(file.Path);
         SourceFingerprint = file.Fingerprint;
-        CreationDateText = file.CreatedUtc?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "Unknown";
+        _createdUtc = file.CreatedUtc;
         _tileSize = tileSize;
         CacheScope = cacheScope;
     }
@@ -48,7 +49,8 @@ public sealed class ImageItem : ObservableObject
     public string Path { get; }
     public string FileName { get; }
     internal SourceFingerprint SourceFingerprint { get; }
-    public string CreationDateText { get; }
+    // Formatted on read: only the sidebar asks, and a string per image at folder open stalled the UI thread.
+    public string CreationDateText => _createdUtc?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "Unknown";
 
     // The folder cache this item reads and writes. Captured at construction so that when the folder swaps,
     // a decode still in flight resolves against its own (retired) pack rather than the new folder's.

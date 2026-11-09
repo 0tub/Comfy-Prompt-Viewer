@@ -11,7 +11,7 @@ namespace ComfyPromptViewer;
 // Turns one file's raw text metadata into its prompt, negative prompt, and generation settings. Sources in priority
 // order: Draw Things XMP, the ComfyUI prompt graph, the ComfyUI UI workflow, A1111-style `parameters` infotext, and
 // finally a bare prompt field. Each fills only what an earlier one left empty.
-public static class PromptExtractor
+public static partial class PromptExtractor
 {
     private const int MaxLinkDepth = 32;
     private static readonly string[] ModelInputKeys = ["ckpt_name", "unet_name", "model_name", "checkpoint", "model"];
@@ -24,8 +24,14 @@ public static class PromptExtractor
     // JPEG/WebP EXIF comments. Every other text field belongs to editors and screenshot tools (Software, Author,
     // dates, XMP), and taking the longest of those showed them as the prompt.
     private static readonly string[] FallbackPromptKeys = ["prompt", "Description", "UserComment"];
-    private static readonly Regex LoraStrengthSuffix = new(@"\s\(-?\d+(\.\d+)?\)$", RegexOptions.Compiled);
-    private static readonly Regex PromptEmbedding = new(@"embedding:([\p{L}\p{Nd}_.\-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    [GeneratedRegex(@"\s\(-?\d+(\.\d+)?\)$")]
+    private static partial Regex LoraStrengthSuffix { get; }
+    [GeneratedRegex(@"embedding:([\p{L}\p{Nd}_.\-]+)", RegexOptions.IgnoreCase)]
+    private static partial Regex PromptEmbedding { get; }
+    [GeneratedRegex("<lora:([^>]*)>", RegexOptions.IgnoreCase)]
+    private static partial Regex LoraTag { get; }
+    [GeneratedRegex("<hypernet:([^>]*)>", RegexOptions.IgnoreCase)]
+    private static partial Regex HypernetTag { get; }
     private static readonly Found Nothing = new("", "", null);
 
     private readonly record struct Found(string Prompt, string NegativePrompt, GenerationSettings? Settings);
@@ -724,11 +730,11 @@ public static class PromptExtractor
         }
 
         var loras = settings.Lora.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).ToList();
-        AddTagResources(prompt, "lora", loras);
+        AddTagResources(prompt, LoraTag, loras);
         settings.Lora = string.Join(", ", loras);
 
         var hypernets = new List<string>();
-        AddTagResources(prompt, "hypernet", hypernets);
+        AddTagResources(prompt, HypernetTag, hypernets);
         var embeddings = new List<string>();
         foreach (Match match in PromptEmbedding.Matches(prompt))
         {
@@ -739,9 +745,9 @@ public static class PromptExtractor
             JoinNonBlank(ResourceGroup("Hypernet", hypernets), ResourceGroup("Embedding", embeddings)));
     }
 
-    private static void AddTagResources(string prompt, string tag, List<string> target)
+    private static void AddTagResources(string prompt, Regex tag, List<string> target)
     {
-        foreach (Match match in Regex.Matches(prompt, $"<{tag}:([^>]*)>", RegexOptions.IgnoreCase))
+        foreach (Match match in tag.Matches(prompt))
         {
             var pieces = match.Groups[1].Value.Split(':', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
             if (pieces.Length > 0)
