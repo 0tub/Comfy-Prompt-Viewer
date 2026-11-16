@@ -26,6 +26,141 @@ public class SelfCheck
             .GetAwaiter()
             .GetResult();
 
+    // Input shapes from each pack's INPUT_TYPES: rgthree, Efficiency Nodes, Comfyroll, LoRA Manager, Easy-Use.
+    [Theory]
+    [InlineData("rgthree Power Lora Loader", """
+        {"1":{"class_type":"Power Lora Loader (rgthree)","inputs":{"model":["9",0],
+          "lora_1":{"on":true,"lora":"style-a.safetensors","strength":0.8,"strengthTwo":0.2},
+          "lora_2":{"on":false,"lora":"off.safetensors","strength":1},
+          "lora_3":{"on":true,"lora":"zero.safetensors","strength":0},"➕ Add Lora":""}}}
+        """, "style_a (0.80)")]
+    [InlineData("rgthree Lora Loader Stack", """
+        {"1":{"class_type":"Lora Loader Stack (rgthree)","inputs":{"model":["9",0],"clip":["9",1],
+          "lora_01":"stack-b.safetensors","strength_01":0.5,"lora_02":"None","strength_02":1,
+          "lora_03":"zero.safetensors","strength_03":0}}}
+        """, "stack_b (0.50)")]
+    [InlineData("Efficiency LoRA Stacker, simple", """
+        {"1":{"class_type":"LoRA Stacker","inputs":{"input_mode":"simple","lora_count":2,
+          "lora_name_1":"eff-a.safetensors","lora_wt_1":0.7,"model_str_1":1,"clip_str_1":1,
+          "lora_name_2":"eff-b.safetensors","lora_wt_2":0.3,"model_str_2":1,"clip_str_2":1,
+          "lora_name_3":"past-count.safetensors","lora_wt_3":1,"model_str_3":1,"clip_str_3":1}}}
+        """, "eff_a (0.70), eff_b (0.30)")]
+    [InlineData("Efficiency LoRA Stacker, advanced", """
+        {"1":{"class_type":"LoRA Stacker","inputs":{"input_mode":"advanced","lora_count":1,
+          "lora_name_1":"eff-a.safetensors","lora_wt_1":0.7,"model_str_1":0.9,"clip_str_1":0.4}}}
+        """, "eff_a (0.90)")]
+    [InlineData("Efficient Loader", """
+        {"1":{"class_type":"Efficient Loader","inputs":{"ckpt_name":"base.safetensors","vae_name":"Baked VAE","clip_skip":-1,
+          "lora_name":"loader-lora.safetensors","lora_model_strength":0.6,"lora_clip_strength":1,"positive":"a cat"}}}
+        """, "loader_lora (0.60)")]
+    [InlineData("Comfyroll CR LoRA Stack", """
+        {"1":{"class_type":"CR LoRA Stack","inputs":{
+          "switch_1":"On","lora_name_1":"cr-a.safetensors","model_weight_1":0.6,"clip_weight_1":1,
+          "switch_2":"Off","lora_name_2":"cr-off.safetensors","model_weight_2":1,"clip_weight_2":1,
+          "switch_3":"On","lora_name_3":"None","model_weight_3":1,"clip_weight_3":1}}}
+        """, "cr_a (0.60)")]
+    [InlineData("LoRA Manager, __value__ wrapper", """
+        {"1":{"class_type":"Lora Loader (LoraManager)","inputs":{"model":["9",0],"text":"<lora:lm-a:0.65>",
+          "loras":{"__value__":[{"name":"lm-a","strength":0.65,"clipStrength":1,"active":true},
+                                {"name":"lm-off","strength":1,"active":false}]}}}}
+        """, "lm_a (0.65)")]
+    [InlineData("LoRA Manager, bare list", """
+        {"1":{"class_type":"Lora Stacker (LoraManager)","inputs":{"text":"",
+          "loras":[{"name":"lm-b","strength":"0.5","active":true}]}}}
+        """, "lm_b (0.50)")]
+    [InlineData("Easy-Use loraStack, advanced", """
+        {"1":{"class_type":"easy loraStack","inputs":{"toggle":true,"mode":"advanced","num_loras":1,
+          "lora_1_name":"easy-a.safetensors","lora_1_strength":1,"lora_1_model_strength":0.45,"lora_1_clip_strength":1,
+          "lora_2_name":"past-count.safetensors","lora_2_strength":1,"lora_2_model_strength":1,"lora_2_clip_strength":1}}}
+        """, "easy_a (0.45)")]
+    [InlineData("Easy-Use loraStack, toggled off", """
+        {"1":{"class_type":"easy loraStack","inputs":{"toggle":false,"mode":"simple","num_loras":1,
+          "lora_1_name":"easy-a.safetensors","lora_1_strength":1}}}
+        """, "")]
+    public void ReadsLoraStackNodes(string node, string prompt, string expected)
+    {
+        var lora = PromptExtractor.ExtractAll(new Dictionary<string, string> { ["prompt"] = prompt }).GenerationSettings.Lora;
+        Assert.True(lora == expected, $"{node}: expected '{expected}', got '{lora}'.");
+    }
+
+    [Fact]
+    public void WorkflowLorasOnlyStandInForTheGraph()
+    {
+        // The workflow's positional widgets can't see CR's switch; the graph already dropped the switched-off slot.
+        var both = PromptExtractor.ExtractAll(new Dictionary<string, string>
+        {
+            ["prompt"] = """
+                {"1":{"class_type":"CR LoRA Stack","inputs":{"switch_1":"On","lora_name_1":"cr-a.safetensors","model_weight_1":0.6,
+                  "switch_2":"Off","lora_name_2":"cr-off.safetensors","model_weight_2":1}}}
+                """,
+            ["workflow"] = """
+                {"nodes":[{"id":1,"type":"CR LoRA Stack","mode":0,
+                  "widgets_values":["On","cr-a.safetensors",0.6,1,"Off","cr-off.safetensors",1,1]}]}
+                """
+        });
+        Assert.Equal("cr_a (0.60)", both.GenerationSettings.Lora);
+
+        var workflowOnly = PromptExtractor.ExtractAll(new Dictionary<string, string>
+        {
+            ["workflow"] = """
+                {"nodes":[{"id":1,"type":"Power Lora Loader (rgthree)","mode":0,"widgets_values":[{},{"type":"PowerLoraLoaderHeaderWidget"},
+                  {"on":true,"lora":"style-a.safetensors","strength":0.8},{"on":false,"lora":"off.safetensors","strength":1},{},""]}]}
+                """
+        });
+        Assert.Equal("style_a (0.80)", workflowOnly.GenerationSettings.Lora);
+    }
+
+    [Fact]
+    public void UnconnectedNodesAreIgnored()
+    {
+        var graph = PromptExtractor.ExtractAll(new Dictionary<string, string>
+        {
+            ["prompt"] = """
+                {"1":{"class_type":"CheckpointLoaderSimple","inputs":{"ckpt_name":"base.safetensors"}},
+                 "2":{"class_type":"LoraLoader","inputs":{"model":["1",0],"lora_name":"used.safetensors","strength_model":0.5}},
+                 "3":{"class_type":"LoraLoader","inputs":{"model":["1",0],"lora_name":"dangling.safetensors","strength_model":1}},
+                 "4":{"class_type":"CLIPTextEncode","inputs":{"text":"a fox"}},
+                 "5":{"class_type":"KSampler","inputs":{"model":["2",0],"positive":["4",0],"negative":["4",0],"steps":20}}}
+                """
+        });
+        Assert.Equal("used (0.50)", graph.GenerationSettings.Lora);
+
+        // Link 1 runs loader 2 -> sampler 3; loader 4 and the note feed nothing.
+        var workflow = PromptExtractor.ExtractAll(new Dictionary<string, string>
+        {
+            ["workflow"] = """
+                {"nodes":[
+                  {"id":2,"type":"LoraLoaderModelOnly","mode":0,"inputs":[{"name":"model","link":null}],
+                   "outputs":[{"name":"MODEL","links":[1]}],"widgets_values":["used.safetensors",0.5]},
+                  {"id":4,"type":"LoraLoaderModelOnly","mode":0,"inputs":[{"name":"model","link":null}],
+                   "outputs":[{"name":"MODEL","links":[]}],"widgets_values":["dangling.safetensors",1]},
+                  {"id":5,"type":"Note","mode":0,"widgets_values":["remember to try a lower cfg on the second pass"]},
+                  {"id":3,"type":"KSampler","mode":0,"inputs":[{"name":"model","link":1}],"outputs":[],"widgets_values":[1,"fixed",20,7,"euler","normal",1]}]}
+                """
+        });
+        Assert.Equal("used (0.50)", workflow.GenerationSettings.Lora);
+        Assert.Equal("", workflow.Prompt);
+    }
+
+    [Fact]
+    public void DedicatedSamplerNodeNamesTheSampler()
+    {
+        var settings = PromptExtractor.ExtractAll(new Dictionary<string, string>
+        {
+            ["prompt"] = """
+                {"3":{"class_type":"CLIPTextEncode","inputs":{"text":"a lighthouse at dusk"}},
+                 "5":{"class_type":"CFGGuider","inputs":{"positive":["3",0],"negative":["3",0],"cfg":1}},
+                 "6":{"class_type":"SamplerER_SDE","inputs":{"solver_type":"ER-SDE","max_stage":3,"eta":1,"s_noise":1}},
+                 "7":{"class_type":"BasicScheduler","inputs":{"scheduler":"power_shift","steps":10,"denoise":1}},
+                 "8":{"class_type":"RandomNoise","inputs":{"noise_seed":297439777503229}},
+                 "9":{"class_type":"SamplerCustomAdvanced","inputs":{"noise":["8",0],"guider":["5",0],"sampler":["6",0],"sigmas":["7",0]}}}
+                """
+        }).GenerationSettings;
+        Assert.Equal("ER_SDE", settings.Sampler);
+        Assert.Equal("297439777503229", settings.Seed);
+        Assert.Equal("Steps 10, CFG 1, Scheduler power_shift, Denoise 1", settings.Settings);
+    }
+
     // One ordered pass, not 38 independent facts: the checks share the static fixtures above, and several
     // hand the next one the state it expects (a held cache-write slot, a populated pack).
     [Fact]
@@ -838,7 +973,7 @@ public class SelfCheck
             {
                 ["prompt"] = """
                 {
-                  "1": {"class_type":"KSampler","inputs":{"steps":20}},
+                  "1": {"class_type":"KSampler","inputs":{"model":["2",0],"steps":20}},
                   "2": {"class_type":"ExampleLoraNode","inputs":{"lora_data":"[{\"name\":\"unused.safetensors\",\"strength\":1,\"enabled\":false},{\"name\":\"folder/example-style.safetensors\",\"strength\":0.75,\"enabled\":true}]" }}
                 }
                 """
@@ -896,10 +1031,10 @@ public class SelfCheck
             ["prompt"] = """
             {
               "0": {"class_type":"LoraLoader","inputs":{"lora_name":"early-style.safetensors","strength_model":0.4}},
-              "1": {"class_type":"KSampler","inputs":{"positive":["2",0],"negative":["3",0],"steps":20,"sampler_name":"euler"}},
+              "1": {"class_type":"KSampler","inputs":{"model":["9",0],"positive":["2",0],"negative":["3",0],"steps":20,"sampler_name":"euler"}},
               "2": {"class_type":"CLIPTextEncode","inputs":{"text":"a cat"}},
               "3": {"class_type":"CLIPTextEncode","inputs":{"text":"blurry"}},
-              "9": {"class_type":"LoraLoader","inputs":{"lora_name":"late-style.safetensors","strength_model":0.6}}
+              "9": {"class_type":"LoraLoader","inputs":{"model":["0",0],"lora_name":"late-style.safetensors","strength_model":0.6}}
             }
             """
         });

@@ -19,11 +19,15 @@ public static partial class PromptExtractor
     private static readonly string[] SamplerTypes = ["KSampler", "KSamplerAdvanced", "SamplerCustom", "SamplerCustomAdvanced"];
     // No "cfg": CFGGuider carries it along with positive/negative links, and is not a sampler.
     private static readonly string[] SamplerSettingKeys = ["sampler_name", "steps", "seed", "noise_seed"];
+    private static readonly string[] LoraToggleKeys = ["on", "active", "enabled", "toggle", "switch"];
+    private static readonly string[] LoraStrengthMarkers = ["strength", "weight", "wt", "_str"];
     private static readonly string[] ModelFileExtensions = [".safetensors", ".ckpt", ".pth", ".pt", ".bin"];
     // Where generators leave a bare prompt: Easy Diffusion (plain-text "prompt"), NovelAI ("Description"), and
     // JPEG/WebP EXIF comments. Every other text field belongs to editors and screenshot tools (Software, Author,
     // dates, XMP), and taking the longest of those showed them as the prompt.
     private static readonly string[] FallbackPromptKeys = ["prompt", "Description", "UserComment"];
+    [GeneratedRegex(@"\d+")]
+    private static partial Regex SlotNumber { get; }
     [GeneratedRegex(@"\s\(-?\d+(\.\d+)?\)$")]
     private static partial Regex LoraStrengthSuffix { get; }
     [GeneratedRegex(@"embedding:([\p{L}\p{Nd}_.\-]+)", RegexOptions.IgnoreCase)]
@@ -119,7 +123,9 @@ public static partial class PromptExtractor
         current.Sampler = FirstNonBlank(current.Sampler, settings.Sampler);
         current.Seed = FirstNonBlank(current.Seed, settings.Seed);
         current.Settings = CombineMetadataStrings(current.Settings, settings.Settings);
-        current.Lora = CombineMetadataStrings(current.Lora, settings.Lora);
+        // The prompt graph lists exactly the LoRAs that ran; the workflow's positional widgets can't tell a switched
+        // off stack slot from a live one, so its guesses only stand in when the graph found none.
+        current.Lora = FirstNonBlank(current.Lora, settings.Lora);
         current.Resources = CombineMetadataStrings(current.Resources, settings.Resources);
     }
 
@@ -175,10 +181,15 @@ public static partial class PromptExtractor
                 negative = "";
             }
 
+            var samplerIds = nodes.Where(node => IsSampler(node.Value)).Select(node => node.Key).ToList();
+            var used = Upstream(samplerIds, id => nodes.TryGetValue(id, out var node) ? LinkedIds(Child(node, "inputs")) : []);
             var loras = new List<string>();
-            foreach (var node in nodes.Values)
+            foreach (var (id, node) in nodes)
             {
-                AddComfyNodeLoras(node, loras);
+                if (samplerIds.Count == 0 || used.Contains(id))
+                {
+                    AddComfyNodeLoras(node, loras);
+                }
             }
 
             if (loras.Count > 0)
@@ -318,7 +329,7 @@ public static partial class PromptExtractor
         var settings = new GenerationSettings
         {
             Model = FindModel(nodes, sampler),
-            Sampler = values.GetValueOrDefault("sampler_name") ?? "",
+            Sampler = values.GetValueOrDefault("sampler_name") ?? SamplerNodeName(nodes, sampler),
             Seed = values.GetValueOrDefault("seed") ?? values.GetValueOrDefault("noise_seed") ?? "",
             Settings = JoinNonBlank(
                 FormatSetting("Steps", values.GetValueOrDefault("steps")),
@@ -328,6 +339,12 @@ public static partial class PromptExtractor
         };
         return settings.IsEmpty ? null : settings;
     }
+
+    // Dedicated sampler nodes (SamplerER_SDE, SamplerDPMPP_2M_SDE) have no sampler_name; their type is the name.
+    private static string SamplerNodeName(Dictionary<string, JsonElement> nodes, JsonElement sampler) =>
+        Linked(nodes, Child(sampler, "inputs"), "sampler") is { } node && Str(node, "class_type") is { Length: > 0 } type
+            ? type.StartsWith("Sampler", StringComparison.Ordinal) ? type["Sampler".Length..] : type
+            : "";
 
     // Follows only model links, so an upscale model loader elsewhere in the graph is never taken for the checkpoint.
     private static string FindModel(Dictionary<string, JsonElement> nodes, JsonElement sampler)
@@ -383,38 +400,152 @@ public static partial class PromptExtractor
         return labels.Concat(inputNames).Any(label => NegativeMarkers.Any(marker => label.Contains(marker, StringComparison.OrdinalIgnoreCase)));
     }
 
+    // Every LoRA pack shapes its inputs differently: core loaders (lora_name, strength_model), numbered slots
+    // (lora_01/strength_01, lora_name_1/lora_wt_1, lora_1_name/lora_1_strength, switch_1), rgthree's
+    // {on, lora, strength} objects, and LoRA Manager's [{name, strength, active}] lists, bare, under "__value__" or as
+    // a JSON string. So inputs are grouped into one entry per slot number or object, and read by what their names
+    // contain, not by node type: Efficient Loader carries a LoRA without "lora" in its type.
     private static void AddComfyNodeLoras(JsonElement node, List<string> loras)
     {
-        if (!Str(node, "class_type").Contains("lora", StringComparison.OrdinalIgnoreCase) &&
-            !Str(Child(node, "_meta"), "title").Contains("lora", StringComparison.OrdinalIgnoreCase))
+        if (Child(node, "inputs") is not { ValueKind: JsonValueKind.Object } inputs)
         {
             return;
         }
 
-        var inputs = Child(node, "inputs");
-        if (Str(inputs, "lora_data") is { Length: > 0 } loraData)
+        var slots = new SortedDictionary<int, Dictionary<string, JsonElement>>();
+        var entries = new List<Dictionary<string, JsonElement>>();
+        foreach (var input in inputs.EnumerateObject())
         {
-            try
+            var key = input.Name.ToLowerInvariant();
+            var value = ParseLoraJsonText(key, input.Value) ?? input.Value;
+            if (value.ValueKind is JsonValueKind.Object or JsonValueKind.Array)
             {
-                using var document = JsonDocument.Parse(loraData);
-                if (document.RootElement.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var item in document.RootElement.EnumerateArray())
-                    {
-                        if (Child(item, "enabled").ValueKind != JsonValueKind.False)
-                        {
-                            AddLora(loras, Str(item, "name"), Scalar(Child(item, "strength")));
-                        }
-                    }
-                }
+                CollectLoraEntries(key, value, entries);
+                continue;
             }
-            catch (JsonException)
+
+            var slot = SlotNumber.Match(key) is { Success: true } match ? int.Parse(match.Value, CultureInfo.InvariantCulture) : 0;
+            if (!slots.TryGetValue(slot, out var fields))
             {
+                slots[slot] = fields = [];
+            }
+
+            fields[SlotNumber.Replace(key, "")] = value;
+        }
+
+        // Slot 0 holds the node-wide inputs: an on/off toggle, the number of slots in use, and simple/advanced mode.
+        var shared = slots.GetValueOrDefault(0) ?? [];
+        if (IsSwitchedOff(shared))
+        {
+            return;
+        }
+
+        var count = shared.FirstOrDefault(field => field.Key.Contains("count") || field.Key.StartsWith("num")).Value is
+            { ValueKind: JsonValueKind.Number } countValue && countValue.TryGetInt32(out var slotCount) ? slotCount : int.MaxValue;
+        var simpleMode = shared.Any(field => field.Key.Contains("mode") && Scalar(field.Value) == "simple");
+        foreach (var (slot, fields) in slots.Where(slot => slot.Key <= count))
+        {
+            AddLoraEntry(fields, simpleMode, loras);
+        }
+
+        foreach (var fields in entries)
+        {
+            AddLoraEntry(fields, simpleMode, loras);
+        }
+    }
+
+    // LoRA Manager's older lora_data input is a JSON list in a string.
+    private static JsonElement? ParseLoraJsonText(string key, JsonElement value)
+    {
+        if (!key.Contains("lora") || value.ValueKind != JsonValueKind.String || value.GetString() is not ['[' or '{', ..] text)
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(text);
+            return document.RootElement.Clone();
+        }
+        catch (JsonException)
+        {
+            // A file name such as "[style] name.safetensors" is not JSON.
+            return null;
+        }
+    }
+
+    // Each object is one entry; nested lists and wrappers ("__value__") are walked. Field names keep the input name
+    // as a prefix ("lora_1.lora", "loras.name") so the "lora" in it marks which strings are LoRA names.
+    private static void CollectLoraEntries(string key, JsonElement value, List<Dictionary<string, JsonElement>> entries)
+    {
+        if (value.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in value.EnumerateArray())
+            {
+                CollectLoraEntries(key, item, entries);
+            }
+
+            return;
+        }
+
+        if (value.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        var fields = new Dictionary<string, JsonElement>();
+        foreach (var property in value.EnumerateObject())
+        {
+            if (property.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array)
+            {
+                CollectLoraEntries(key, property.Value, entries);
+            }
+            else
+            {
+                fields[$"{key}.{property.Name.ToLowerInvariant()}"] = property.Value;
             }
         }
 
-        AddLora(loras, Str(inputs, "lora_name"), Scalar(Child(inputs, "strength_model")));
+        if (fields.Count > 0)
+        {
+            entries.Add(fields);
+        }
     }
+
+    // Model strength: "simple" mode stacks use their one plain weight, others the model-specific one. Clip strengths
+    // (strength_clip, clip_str_1, clipStrength, rgthree's strengthTwo) are never shown.
+    private static void AddLoraEntry(Dictionary<string, JsonElement> fields, bool simpleMode, List<string> loras)
+    {
+        if (Scalar(fields.FirstOrDefault(field => IsLoraName(field.Key, field.Value)).Value) is not { } name ||
+            IsSwitchedOff(fields))
+        {
+            return;
+        }
+
+        var strengths = fields
+            .Where(field => LoraStrengthMarkers.Any(field.Key.Contains) && !field.Key.Contains("clip") && !field.Key.Contains("two"))
+            .Select(field => (field.Key, Value: Scalar(field.Value)))
+            .ToList();
+        var strength = strengths.FirstOrDefault(field => field.Key.Contains("model") != simpleMode).Value ??
+                       strengths.FirstOrDefault().Value;
+        if (double.TryParse(strength, NumberStyles.Float, CultureInfo.InvariantCulture, out var weight) && weight == 0)
+        {
+            return;
+        }
+
+        AddLora(loras, name, strength);
+    }
+
+    // Combo inputs always carry the file extension; LoRA Manager's "name" field is a bare name.
+    private static bool IsLoraName(string key, JsonElement value) =>
+        key.Contains("lora") && value.ValueKind == JsonValueKind.String && value.GetString() is { } name &&
+        !IsBlank(name) && !name.Equals("None", StringComparison.OrdinalIgnoreCase) &&
+        (IsModelFileName(name) || key.EndsWith(".name") || key.EndsWith(".lora"));
+
+    // rgthree "on", LoRA Manager "active", lora_data "enabled", Easy-Use "toggle", Comfyroll "switch_1": "Off".
+    private static bool IsSwitchedOff(Dictionary<string, JsonElement> fields) =>
+        fields.Any(field => LoraToggleKeys.Contains(field.Key[(field.Key.LastIndexOf('.') + 1)..].Trim('_')) &&
+                            Scalar(field.Value)?.ToLowerInvariant() is "false" or "off");
 
     // The UI workflow has no resolved links, so it only yields guesses: the longest widget text on each side, split
     // by negative markers, and the LoRA loaders that are not bypassed.
@@ -428,11 +559,35 @@ public static partial class PromptExtractor
                 return Nothing;
             }
 
+            // A node's outputs list the ids of the links leaving it; each input names the one link arriving.
+            var byId = nodes.EnumerateArray().ToDictionary(node => Child(node, "id").GetRawText());
+            var origins = new Dictionary<string, string>();
+            foreach (var (id, node) in byId)
+            {
+                foreach (var output in Elements(Child(node, "outputs")))
+                {
+                    foreach (var link in Elements(Child(output, "links")))
+                    {
+                        origins[link.GetRawText()] = id;
+                    }
+                }
+            }
+
+            var samplerIds = byId.Where(node => SamplerTypes.Contains(Str(node.Value, "type"), StringComparer.OrdinalIgnoreCase))
+                .Select(node => node.Key).ToList();
+            var used = Upstream(samplerIds, id => Elements(Child(byId[id], "inputs"))
+                .Select(input => Scalar(Child(input, "link")) is { } link ? origins.GetValueOrDefault(link) : null)
+                .OfType<string>());
             var positive = new List<string>();
             var negative = new List<string>();
             var loras = new List<string>();
-            foreach (var node in nodes.EnumerateArray())
+            foreach (var (id, node) in byId)
             {
+                if (samplerIds.Count > 0 && !used.Contains(id))
+                {
+                    continue;
+                }
+
                 AddWorkflowNodeLoras(node, loras);
                 if (!SamplerTypes.Contains(Str(node, "type"), StringComparer.OrdinalIgnoreCase))
                 {
@@ -471,7 +626,14 @@ public static partial class PromptExtractor
         var values = widgets.EnumerateArray().ToList();
         for (var index = 0; index < values.Count; index++)
         {
-            if (values[index].ValueKind == JsonValueKind.String && values[index].GetString() is { } name &&
+            // rgthree's Power Lora Loader keeps each slot as a {on, lora, strength} widget object.
+            if (values[index].ValueKind == JsonValueKind.Object)
+            {
+                var entries = new List<Dictionary<string, JsonElement>>();
+                CollectLoraEntries("lora", values[index], entries);
+                entries.ForEach(fields => AddLoraEntry(fields, simpleMode: false, loras));
+            }
+            else if (values[index].ValueKind == JsonValueKind.String && values[index].GetString() is { } name &&
                 (name.Contains("lora", StringComparison.OrdinalIgnoreCase) || IsModelFileName(name)))
             {
                 var strength = index + 1 < values.Count && values[index + 1].ValueKind == JsonValueKind.Number ? values[index + 1].GetRawText() : null;
@@ -860,6 +1022,28 @@ public static partial class PromptExtractor
                 _ => null
             }
             : null;
+
+    private static IEnumerable<string> LinkedIds(JsonElement inputs) =>
+        inputs.ValueKind == JsonValueKind.Object ? inputs.EnumerateObject().Select(input => LinkedId(input.Value)).OfType<string>() : [];
+
+    private static IEnumerable<JsonElement> Elements(JsonElement array) =>
+        array.ValueKind == JsonValueKind.Array ? array.EnumerateArray() : [];
+
+    // The start nodes and every node feeding them. Loaders and text left unconnected in a graph never ran.
+    private static HashSet<string> Upstream(IEnumerable<string> starts, Func<string, IEnumerable<string>> sources)
+    {
+        var seen = new HashSet<string>(starts, StringComparer.OrdinalIgnoreCase);
+        var queue = new Queue<string>(seen);
+        while (queue.TryDequeue(out var id))
+        {
+            foreach (var source in sources(id).Where(seen.Add))
+            {
+                queue.Enqueue(source);
+            }
+        }
+
+        return seen;
+    }
 
     private static JsonElement? Linked(Dictionary<string, JsonElement> nodes, JsonElement inputs, string name) =>
         LinkedId(Child(inputs, name)) is { } id && nodes.TryGetValue(id, out var node) ? node : null;
